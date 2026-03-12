@@ -1,0 +1,14 @@
+# systemd user unit: needs the session bus (D-Bus interface, MPRIS).
+# Install: see README "Linux service".
+[Unit]
+Description=Calvados AirPods daemon
+
+[Service]
+ExecStart=%h/.local/bin/calvados
+Restart=on-failure
+RestartSec=5
+# Decoded packets and decisions; add protocol::aacp_raw=trace for raw frames.
+Environment=RUST_LOG=calvados=debug,protocol=debug
+
+[Install]
+WantedBy=default.target

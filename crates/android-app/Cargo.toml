@@ -1,0 +1,54 @@
+[package]
+name = "android-app"
+version = "0.1.0"
+authors.workspace = true
+license.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+
+[package.metadata.android]
+# Permissions and components live in AndroidManifest.xml.
+manifest_override = "AndroidManifest.xml"
+use_aapt2 = true
+package = "dev.kroner.calvados"
+build_targets = ["aarch64-linux-android", "armv7-linux-androideabi"]
+java_sources = "src/java"
+# The notification's layouts and icons.
+resources = "res"
+# Debug info stays next to the APK (.dwarf): a 40 MB .so made installs slow.
+strip = "split"
+
+[package.metadata.android.sdk]
+min_sdk_version = 31
+target_sdk_version = 35
+
+# Not used for the manifest (overridden), but `cargo apk2 run` launches the
+# first activity here with a MAIN filter.
+[[package.metadata.android.application.activity]]
+name = ".LauncherActivity"
+
+[[package.metadata.android.application.activity.intent_filter]]
+actions = ["android.intent.action.MAIN"]
+categories = ["android.intent.category.LAUNCHER"]
+
+[lib]
+# Loaded by `System.loadLibrary("calvados")`; also names the APK.
+name = "calvados"
+crate-type = ["cdylib", "lib"]
+
+[dependencies]
+anyhow = "1"
+bitflags = "2"
+hex = "0.4"
+crossbeam-channel = "0.5"
+jni = "0.22"
+num_enum = "0.7"
+protocol = { path = "../protocol" }
+parking_lot = "0.12"
+tracing = "0.1"
+tracing-appender = "0.2"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+
+[target.'cfg(target_os = "android")'.dependencies]
+paranoid-android = "0.2"

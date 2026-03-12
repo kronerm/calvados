@@ -1,0 +1,94 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- The collapsed notification: name and status, then the levels as in the
+     Linux bar: the buds left then right (the primary's in bold), the case's
+     after its icon. Filled by notification.rs. -->
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="match_parent"
+    android:layout_height="wrap_content"
+    android:orientation="vertical">
+
+    <TextView
+        android:id="@+id/title"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:ellipsize="end"
+        android:singleLine="true"
+        android:textAppearance="@android:style/TextAppearance.Material.Notification.Title"
+        android:textColor="@color/notification_text" />
+
+    <LinearLayout
+        android:id="@+id/levels"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="2dp"
+        android:gravity="center_vertical"
+        android:orientation="horizontal">
+
+        <ImageView
+            android:layout_width="16dp"
+            android:layout_height="16dp"
+            android:src="@drawable/ic_device_airpods" />
+
+        <TextView
+            android:id="@+id/sum_left_level"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_marginStart="4dp"
+            android:textAppearance="@android:style/TextAppearance.Material.Notification"
+            android:textColor="@color/notification_text" />
+
+        <ImageView
+            android:id="@+id/sum_left_charging"
+            android:layout_width="14dp"
+            android:layout_height="14dp"
+            android:src="@drawable/ic_bolt"
+            android:visibility="gone" />
+
+        <TextView
+            android:id="@+id/sum_right_level"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_marginStart="4dp"
+            android:textAppearance="@android:style/TextAppearance.Material.Notification"
+            android:textColor="@color/notification_text" />
+
+        <ImageView
+            android:id="@+id/sum_right_charging"
+            android:layout_width="14dp"
+            android:layout_height="14dp"
+            android:src="@drawable/ic_bolt"
+            android:visibility="gone" />
+
+        <ImageView
+            android:id="@+id/sum_case_icon"
+            android:layout_width="16dp"
+            android:layout_height="16dp"
+            android:layout_marginStart="10dp"
+            android:alpha="0.7"
+            android:src="@drawable/ic_device_airpods_case" />
+
+        <TextView
+            android:id="@+id/sum_case_level"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_marginStart="4dp"
+            android:textAppearance="@android:style/TextAppearance.Material.Notification"
+            android:textColor="@color/notification_text" />
+
+        <ImageView
+            android:id="@+id/sum_case_charging"
+            android:layout_width="14dp"
+            android:layout_height="14dp"
+            android:src="@drawable/ic_bolt"
+            android:visibility="gone" />
+    </LinearLayout>
+
+    <TextView
+        android:id="@+id/text"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:ellipsize="end"
+        android:singleLine="true"
+        android:textAppearance="@android:style/TextAppearance.Material.Notification"
+        android:textColor="@color/notification_text" />
+</LinearLayout>

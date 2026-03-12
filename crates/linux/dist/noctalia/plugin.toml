@@ -1,0 +1,32 @@
+# Calvados for Noctalia: the AirPods' state in the bar and a panel with the
+# same controls as the Android notification. Talks to the daemon through
+# `calvados watch` / `calvados set` (Noctalia plugins have no D-Bus).
+
+id = "kroner/calvados"
+name = "Calvados"
+version = "0.1.0"
+plugin_api = 24
+# 22: require() of ./lib modules; 24: runAsync with an argv table.
+author = "kroner"
+license = "MIT"
+dependencies = []
+tags = ["bluetooth", "audio", "airpods"]
+icon = "headphones"
+description = "AirPods battery, ear state and audio ownership, with noise mode and switching controls."
+
+[[widget]]
+id = "bar"
+entry = "bar.luau"
+
+[[panel]]
+id = "panel"
+entry = "panel.luau"
+width = 400
+height = 350
+placement = "attached"
+position = "auto"
+open_near_click = true
+
+[[service]]
+id = "service"
+entry = "service.luau"

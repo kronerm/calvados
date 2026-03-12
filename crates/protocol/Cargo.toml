@@ -1,0 +1,21 @@
+[package]
+name = "protocol"
+description = "AACP protocol parsing, command construction, and state management"
+version = "0.1.0"
+authors.workspace = true
+license.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+
+[dependencies]
+eui48 = { version = "1.1", default-features = false, features = ["disp_hexstring"] }
+nom = "8.0"
+humantime = "2"
+aes = "0.8"
+bitflags = "2"
+num_enum = "0.7"
+tracing = "0.1"
+
+[dev-dependencies]
+hex = "0.4"

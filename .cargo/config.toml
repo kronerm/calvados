@@ -1,0 +1,13 @@
+# The Android crates are built by tools that set their own NDK linker from
+# ANDROID_NDK_ROOT: the app by `cargo apk2`, the hook by `cargo xposed`.
+
+[alias]
+app-build = "apk2 build -p android-app"
+app-run = "apk2 run -p android-app"
+xposed = "run -p android-xposed --release"
+
+[env]
+# The app's Java shell for the bytecode d8 reads: d8 9.2 rejects newer class
+# files (Java 27's major version 71). cargo-apk2 takes no javac options; javac
+# reads this. The xposed build passes the same flag itself.
+JDK_JAVAC_OPTIONS = "--release 17"

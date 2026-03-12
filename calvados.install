@@ -1,0 +1,20 @@
+# A file capability: user units can't grant capabilities themselves.
+_setcap() {
+  setcap cap_net_raw+ep usr/bin/calvados
+}
+
+post_install() {
+  _setcap
+  cat <<'MSG'
+==> The AirPods keep the phone connected only with hosts identifying as
+    Apple: add under [General] in /etc/bluetooth/main.conf
+      DeviceID = bluetooth:004C:0000:0000
+    then `systemctl restart bluetooth`.
+==> Start it as your user: `systemctl --user enable --now calvados`
+MSG
+}
+
+post_upgrade() {
+  _setcap
+  echo '==> Restart it: `systemctl --user restart calvados`'
+}

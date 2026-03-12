@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- The notification's colors, light: the system's dynamic palette, as the shade uses. -->
+<resources>
+    <!-- titles, labels and icons -->
+    <color name="notification_text">@android:color/system_neutral1_900</color>
+    <!-- descriptions, the off toggle -->
+    <color name="notification_text_secondary">@android:color/system_neutral2_700</color>
+    <!-- the primary dot, charging, the on toggle -->
+    <color name="notification_accent">@android:color/system_accent1_600</color>
+    <!-- the current noise mode's tile -->
+    <color name="notification_tile_selected">@android:color/system_accent2_100</color>
+    <!-- the other tiles' outline -->
+    <color name="notification_outline">@android:color/system_neutral2_400</color>
+</resources>
