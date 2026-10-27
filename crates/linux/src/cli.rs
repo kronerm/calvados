@@ -18,6 +18,8 @@ usage: calvados                      run the daemon
        calvados watch                print the state as JSON, one line per change
        calvados set auto-switch|auto-connect on|off|toggle
        calvados set noise anc|transparency|adaptive|next
+       calvados set cycle anc,transparency,adaptive   press and hold's modes (two at least)
+       calvados set cycle toggle anc|transparency|adaptive
        calvados firmware status     the firmware, the latest release, an update
        calvados firmware update     update the AirPods to the latest release
        calvados firmware cancel     stop an update";
@@ -40,6 +42,10 @@ trait Calvados {
     fn noise_mode(&self) -> zbus::Result<String>;
     #[zbus(property)]
     fn set_noise_mode(&self, name: &str) -> zbus::Result<()>;
+    #[zbus(property)]
+    fn cycle(&self) -> zbus::Result<Vec<String>>;
+    #[zbus(property)]
+    fn set_cycle(&self, names: &[&str]) -> zbus::Result<()>;
     #[zbus(property)]
     fn firmware(&self) -> zbus::Result<String>;
     #[zbus(property)]
@@ -86,6 +92,21 @@ pub async fn run(args: &[String]) -> anyhow::Result<()> {
             Ok(proxy.set_noise_mode(display::mode_name(Some(next))).await?)
         }
         ["set", "noise", name] => Ok(proxy.set_noise_mode(name).await?),
+        ["set", "cycle", "toggle", name] => {
+            let mode = display::parse_mode(name)
+                .filter(|mode| !matches!(mode, NoiseControlMode::Off))
+                .ok_or_else(|| anyhow::anyhow!("{USAGE}"))?;
+            let current = proxy.cycle().await?;
+            let current = display::parse_cycle(current.iter().map(String::as_str));
+            let cycle = display::toggle_cycle(current, mode)
+                .ok_or_else(|| anyhow::anyhow!("press and hold needs two modes at least"))?;
+            let names = display::cycle_names(Some(cycle));
+            proxy.set_cycle(&names).await.map_err(failure)
+        }
+        ["set", "cycle", names] => {
+            let names = names.split(',').map(str::trim).collect::<Vec<_>>();
+            proxy.set_cycle(&names).await.map_err(failure)
+        }
         ["firmware", "status"] => firmware_status(&proxy).await,
         ["firmware", "update"] => firmware_update(&bus, &proxy).await,
         ["firmware", "cancel"] => proxy.cancel_update().await.map_err(failure),
@@ -248,7 +269,7 @@ async fn snapshot(proxy: &CalvadosProxy<'_>) -> Value {
             proxy.name().await?,
             proxy.ownership_phase().await?,
             proxy.buds().await?,
-            proxy.noise_mode().await?,
+            (proxy.noise_mode().await?, proxy.cycle().await?),
             proxy.auto_switch().await?,
             proxy.auto_connect().await?,
             (
@@ -260,7 +281,8 @@ async fn snapshot(proxy: &CalvadosProxy<'_>) -> Value {
             ),
         ))
     };
-    let Ok((connected, name, phase, buds, noise, auto_switch, auto_connect, firmware)) = read.await
+    let Ok((connected, name, phase, buds, (noise, cycle), auto_switch, auto_connect, firmware)) =
+        read.await
     else {
         return json!({ "running": false });
     };
@@ -273,6 +295,7 @@ async fn snapshot(proxy: &CalvadosProxy<'_>) -> Value {
         "name": name,
         "ownership": phase,
         "noise_mode": noise,
+        "cycle": cycle,
         "auto_switch": auto_switch,
         "auto_connect": auto_connect,
         "firmware": firmware,

@@ -1,11 +1,11 @@
 //! The `dev.kroner.Calvados1` session-bus object: status properties, which
 //! signal `PropertiesChanged` (no polling needed), the two remembered
-//! settings, and the firmware update's methods.
+//! settings, the press-and-hold cycle, and the firmware update's methods.
 
 use std::sync::Arc;
 use std::time::Duration;
 
-use protocol::display::{self, Buds, Place, mode_name, parse_mode};
+use protocol::display::{self, Buds, Place, cycle_names, mode_name, parse_cycle, parse_mode};
 use protocol::engine::Engine;
 use protocol::firmware::Release;
 use protocol::settings::Setting;
@@ -73,6 +73,7 @@ pub struct Status {
     summary: String,
     name: String,
     noise_mode: String,
+    cycle: Vec<String>,
     buds: Vec<WireComponent>,
     firmware: String,
     latest_firmware: String,
@@ -131,6 +132,10 @@ impl Status {
             summary,
             name: state.name.clone().unwrap_or_default(),
             noise_mode: mode_name(state.noise_mode).to_owned(),
+            cycle: cycle_names(state.cycle)
+                .into_iter()
+                .map(str::to_owned)
+                .collect(),
             buds: wire_buds(Buds::of(state)),
             firmware: display::firmware(&state.firmware).unwrap_or_default(),
             latest_firmware: latest.map(Release::to_string).unwrap_or_default(),
@@ -162,19 +167,25 @@ impl CalvadosService {
     /// the changed signal that follows carries the new value.
     async fn set(&self, setting: Setting, enabled: bool) -> zbus::fdo::Result<()> {
         tracing::info!(?setting, enabled, "D-Bus setting");
-        let mut status = self.0.status.subscribe();
-        self.0
-            .inputs
-            .send(Input::Set(setting, enabled))
-            .map_err(|_| zbus::fdo::Error::Failed("the daemon is stopping".into()))?;
-        let applied = status.wait_for(|status| {
+        self.apply(Input::Set(setting, enabled), |status| {
             let current = match setting {
                 Setting::AutoSwitch => status.auto_switch,
                 Setting::AutoConnect => status.auto_connect,
             };
             current == enabled
-        });
-        match tokio::time::timeout(Duration::from_secs(1), applied).await {
+        })
+        .await
+    }
+
+    /// Send `input` to the loop and wait until the status shows it.
+    async fn apply(
+        &self,
+        input: Input,
+        applied: impl Fn(&Status) -> bool,
+    ) -> zbus::fdo::Result<()> {
+        let mut status = self.0.status.subscribe();
+        self.0.inputs.send(input).map_err(|_| stopping())?;
+        match tokio::time::timeout(Duration::from_secs(1), status.wait_for(applied)).await {
             Ok(Ok(_)) => Ok(()),
             _ => Err(zbus::fdo::Error::Failed(
                 "the setting wasn't applied".into(),
@@ -298,6 +309,35 @@ impl CalvadosService {
             .map_err(|_| zbus::fdo::Error::Failed("the daemon is stopping".into()))
     }
 
+    /// The modes press and hold cycles through: `anc`, `transparency`,
+    /// `adaptive` (`off` too if the pods report it). Empty until set from
+    /// here: the pods don't report it. Remembered per pods.
+    #[zbus(property)]
+    fn cycle(&self) -> Vec<String> {
+        self.snapshot().cycle
+    }
+
+    /// Two modes at least, of `anc`, `transparency` and `adaptive`.
+    #[zbus(property)]
+    async fn set_cycle(&self, names: Vec<String>) -> zbus::fdo::Result<()> {
+        let cycle = parse_cycle(names.iter().map(String::as_str))
+            .filter(|_| !names.iter().any(|name| name == "off"))
+            .ok_or_else(|| {
+                zbus::fdo::Error::InvalidArgs(format!(
+                    "{names:?}: two at least of anc, transparency and adaptive"
+                ))
+            })?;
+        if !self.snapshot().connected {
+            return Err(zbus::fdo::Error::Failed(
+                "the AirPods aren't connected".into(),
+            ));
+        }
+        tracing::info!(?cycle, "D-Bus: set the press-and-hold cycle");
+        let names = cycle_names(Some(cycle));
+        self.apply(Input::Cycle(cycle), |status| status.cycle == names)
+            .await
+    }
+
     /// Media starting on this host takes the audio. Default on, remembered.
     #[zbus(property)]
     fn auto_switch(&self) -> bool {
@@ -377,6 +417,9 @@ async fn signal_changes(iface: InterfaceRef<CalvadosService>, mut status: watch:
         }
         if now.noise_mode != last.noise_mode {
             signalled = signalled.and(service.noise_mode_changed(emitter).await);
+        }
+        if now.cycle != last.cycle {
+            signalled = signalled.and(service.cycle_changed(emitter).await);
         }
         if now.firmware != last.firmware {
             signalled = signalled.and(service.firmware_changed(emitter).await);

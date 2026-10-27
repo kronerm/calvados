@@ -19,7 +19,7 @@ use std::time::{Duration, Instant};
 use anyhow::Context as _;
 use futures_util::future::OptionFuture;
 use protocol::MacAddress;
-use protocol::aacp::{NoiseControlMode, Packet};
+use protocol::aacp::{Cycle, NoiseControlMode, Packet};
 use protocol::connection::AIRPODS_PSM;
 use protocol::engine::{Effect, Engine, LocalAudio};
 use protocol::firmware::Release;
@@ -59,6 +59,8 @@ enum Input {
     Set(Setting, bool),
     /// Takes effect once the pods echo it back.
     Noise(NoiseControlMode),
+    /// The press-and-hold cycle.
+    Cycle(Cycle),
     /// An Apple device advertising nearby, with its manufacturer data (from
     /// the type byte).
     Nearby(bluer::Address, Vec<u8>),
@@ -231,6 +233,7 @@ async fn run(daemon: &Daemon, mut engine: Engine, inputs: &mut mpsc::UnboundedRe
                     Vec::new()
                 }
                 Input::Noise(mode) => engine.set_noise_mode(mode),
+                Input::Cycle(cycle) => engine.set_cycle(cycle),
                 Input::Nearby(address, advertisement) => engine.nearby(
                     address.0,
                     &advertisement,
