@@ -84,6 +84,42 @@ function format.firmware(state)
   return latest and `Firmware {state.firmware} · {latest} available` or `Firmware {state.firmware}`
 end
 
+-- An update's line, as the Android notification has it (protocol's
+-- `display::update`): "Updating firmware… 40 %", "Staged: close the lid", …;
+-- nil without one.
+local function updateLine(update)
+  local name = update and update.state or ""
+  if name == "downloading" then
+    return "Downloading firmware…"
+  elseif name == "offered" then
+    return "Offering firmware…"
+  elseif name == "deferred" then
+    return "Waiting for the AirPods…"
+  elseif name == "transferring" then
+    return `Updating firmware… {update.progress} %`
+  elseif name == "interrupted" then
+    return `Update paused at {update.progress} %`
+  elseif name == "staged" then
+    return "Staged: close the lid"
+  elseif name == "done" then
+    return `Updated to {update.detail}`
+  elseif name == "failed" then
+    return `Update failed: {update.detail}`
+  end
+  return nil
+end
+
+-- This host's update, else another calvados host's (" · <its address>").
+function format.update(state)
+  local line = updateLine(state.update)
+  if line then
+    return line
+  end
+  local peer = state.peer_update
+  line = updateLine(peer)
+  return line and `{line} · {peer.host}` or nil
+end
+
 function format.ownership(state)
   if state.ownership == "owning" then
     return "Active"

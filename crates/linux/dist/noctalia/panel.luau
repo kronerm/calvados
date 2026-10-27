@@ -1,7 +1,7 @@
 --!nonstrict
 -- The Android notification's controls, laid out for a panel: the batteries,
 -- the noise mode as a choice, the two switching settings with what they do,
--- and the firmware.
+-- and the firmware (or its update).
 
 local format = require("./lib/format.luau")
 
@@ -144,9 +144,10 @@ local function setting(title, description, checked, key)
   })
 end
 
--- One small line; only while connected (the daemon clears it otherwise).
+-- One small line: a firmware update while there is one, else the firmware
+-- (only while connected; the daemon clears it otherwise).
 local function firmware()
-  local text = format.firmware(state)
+  local text = format.update(state) or format.firmware(state)
   return text and ui.label({ text = text, fontSize = 12, color = "on_surface_variant", maxLines = 1 })
 end
 
