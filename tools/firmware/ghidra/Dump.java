@@ -64,6 +64,19 @@ public class Dump extends GhidraScript {
                 String lbl = (f != null && f.getEntryPoint().equals(ins.getAddress())) ? "  <" + f.getName() + ">" : "";
                 out(ins.getAddress() + ": " + ins + lbl);
             }
+        } else if (mode.equals("lin")) {
+          for (int pi = 1; pi + 1 < args.length; pi += 2) {
+            Address a = toAddr(args[pi]), end = toAddr(args[pi+1]);
+            while (a.compareTo(end) < 0) {
+                Instruction ins = getInstructionAt(a);
+                if (ins == null) { disassemble(a); ins = getInstructionAt(a); }
+                if (ins == null) { a = a.add(2); continue; }
+                Function f = getFunctionContaining(ins.getAddress());
+                String lbl = (f != null && f.getEntryPoint().equals(ins.getAddress())) ? "  <" + f.getName() + ">" : "";
+                out(ins.getAddress() + ": " + ins + lbl);
+                a = a.add(ins.getLength());
+            }
+          }
         } else if (mode.equals("before")) {
             int n = Integer.parseInt(args[1]);
             for (int i = 2; i < args.length; i++) {
@@ -112,7 +125,7 @@ public class Dump extends GhidraScript {
                 for (int k = 0; k < n && ins != null; k++) {
                     out("  " + ins.getAddress() + ": " + ins);
                     String m = ins.getMnemonicString();
-                    if (m.equals("bx") || m.startsWith("pop") || (m.equals("b.w") ) || m.equals("b")) break;
+                    if (n < 100 && (m.equals("bx") || m.startsWith("pop") || m.equals("b.w") || m.equals("b"))) break;
                     ins = ins.getNext();
                 }
             }

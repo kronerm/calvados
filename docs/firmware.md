@@ -187,7 +187,9 @@ POSH SECURE_SENSOR GATT`] index the registration calls.
 - **Receive path**: `0xbe378(endpoint, transport, data, length, role)` →
   accessory `0x76e80` → UARP core `0x103f10`. Messages start with three
   big-endian u16s: type, payload length, message id; the core switches on
-  the type, 0–0x26.
+  the type, 0–0x26. Every message type, the handshake (protocol version 6
+  at most here), the information tags, the offer → pull → stage → apply
+  flow and the personalization asset: [uarp.md](uarp.md).
 - **Personalization (Image4)**: every BuildManifest entry has `Personalize =
   True`, and `rkof` has `UARPL3Personalization.c` ("Personalization Required:
   %s", "Personalized Manifest"; strings `0x1e1dc1`–`0x1e1f36`). A host has to
@@ -208,7 +210,7 @@ RTP BTM DSP1 DSP2`) that Apple hosts use for analytics.
 
 ## Open
 
-- The UARP message types and the personalization exchange (in progress).
+- UARP: see the open list in [uarp.md](uarp.md).
 - How a host reads a crash log.
 - What 0x62/0x63 carry, and the `0x02` record ids.
 - The handoff path: the `0x09` (`0x6d886`) and `0x10` (`0x6d91c`) handlers,
