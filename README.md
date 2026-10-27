@@ -158,6 +158,9 @@ its properties signal changes.
 
 ## Known issues
 
+Seen with AirPods Pro 2 (USB-C) on firmware 7.1.21 (7B21); newer firmware
+may behave differently.
+
 - **Switching back and forth quickly** (a laptop take within a few seconds
   of a phone take) occasionally reboots the AirPods mid-switch: a moment
   with one bud in noise cancelling and the other in transparency. Both

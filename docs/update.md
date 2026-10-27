@@ -31,10 +31,16 @@ allowed properties.) Only `R1FW`, the case's UWB firmware, is marked
 - A bud accepts a sibling's image only if strictly newer, and stages it the
   usual way (digest-checked, A/B). Nothing found refuses audio or pairing
   on a version mismatch.
-- The case's own firmware (`STFC`/`STFW` its MCU, `NERF` its BLE chip with
-  its own UARP service, `R1FW` the UWB chip) is staged by the case itself;
-  Inferred: a host updates it directly over BLE. No rule found that it must
-  match the buds.
+- The case's own firmware (`STFC`/`STFW` its MCU, `NERF` its BLE chip,
+  `R1FW` the UWB chip, the `AU*` sounds of its speaker) comes in the same
+  package but is the case's own UARP accessory's business: the buds never
+  pull or keep those payloads. The case takes an offer as downstream 1
+  through a bud for an Apple host's AAP session (not over GATT, as
+  observed) or over its own BLE UARP service, which needs an encrypted
+  link and refuses new pairings once it belongs to a Find My owner;
+  `R1FW` needs a live ticket. A buds-only update leaves the case on its old
+  firmware; nothing found requires the two to match. Details:
+  [case.md](case.md).
 - A GATT host gets no downstream endpoints: they're added only when the
   host session is on transport 0xd (Inferred: an Apple host's AAP channel).
 

@@ -502,6 +502,9 @@ What there is to read after one, and for how long:
 
 ## Pod reboots
 
+All observed on firmware 7.1.21 (7B21); the current release (9A348 at the
+time of writing) may not do it.
+
 Rapid takeovers (a laptop take within ~6 s of a phone take) occasionally
 reboot the pods mid-switch: after they pause the old host, before they
 suspend its stream; nothing in AACP warns first (HCI traces of 13:20:40
