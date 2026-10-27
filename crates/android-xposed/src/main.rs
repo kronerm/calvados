@@ -46,7 +46,7 @@ fn main() {
     println!("Creating APK: {}", apk.display());
     create_apk(&apk, &manifest, &classes_dex, &hook_lib).expect("create APK");
     align_apk(&apk);
-    sign_apk(&apk, &assets.join("debug.keystore"));
+    sign_apk(&apk, &workspace.join("target"));
     println!("Done: {}", apk.display());
 }
 
@@ -215,7 +215,22 @@ fn align_apk(apk: &Path) {
     fs::rename(&aligned, apk).expect("replace APK with aligned one");
 }
 
-fn sign_apk(apk: &Path, keystore: &Path) {
+/// With the app's release key when cargo-apk2's variables name one (so both
+/// APKs share a signature), else a debug key generated in `target`.
+fn sign_apk(apk: &Path, target: &Path) {
+    let release = env::var("CARGO_APK_RELEASE_KEYSTORE")
+        .ok()
+        .zip(env::var("CARGO_APK_RELEASE_KEYSTORE_PASSWORD").ok());
+    let (keystore, password) = match release.clone() {
+        Some((keystore, password)) => (PathBuf::from(keystore), password),
+        None => (target.join("debug.keystore"), "android".to_owned()),
+    };
+    let keystore = keystore.as_path();
+    assert!(
+        keystore.exists() || release.is_none(),
+        "release keystore {} not found",
+        keystore.display()
+    );
     if !keystore.exists() {
         println!("Generating debug keystore...");
         run(
@@ -250,9 +265,9 @@ fn sign_apk(apk: &Path, keystore: &Path) {
             "--ks",
             path(keystore),
             "--ks-pass",
-            "pass:android",
+            &format!("pass:{password}"),
             "--key-pass",
-            "pass:android",
+            &format!("pass:{password}"),
             path(apk),
         ],
     );

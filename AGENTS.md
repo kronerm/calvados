@@ -44,19 +44,24 @@ passes the flag itself), since `d8` rejects class files from newer JDKs
 NDK's clang and `llvm-ar` (at `/opt/android-ndk`) for ring's C, which plain
 `cargo clippy --target …-android` needs; cargo-apk2 sets its own.
 
-Release signing: cargo-apk2 takes the keystore from the environment; for
-the committed one:
+Release signing: the release key is private, never in the repo: the
+maintainer keeps it outside the checkout (and a backup in a password
+manager), CI has it as the secrets `ANDROID_KEYSTORE` (base64) and
+`ANDROID_KEYSTORE_PASSWORD`. Both APKs are signed with it: cargo-apk2 reads
+`CARGO_APK_RELEASE_KEYSTORE` / `CARGO_APK_RELEASE_KEYSTORE_PASSWORD`, and
+`cargo xposed` uses the same variables (without them, a debug key it
+generates in `target/`). Store and key share the password (cargo-apk2 passes
+one to `apksigner`): `keytool -genkeypair -storetype PKCS12 -keystore …
+-alias calvados -keyalg RSA -keysize 4096 -validity 10000 -storepass …
+-dname "CN=Calvados"`. A new key changes the apps' signature: uninstall the
+old builds first.
 
-```sh
-export CARGO_APK_RELEASE_KEYSTORE=crates/android-app/release.keystore
-export CARGO_APK_RELEASE_KEYSTORE_PASSWORD=asdflmao
-```
-
-A new keystore needs the same password for store and key (cargo-apk2 passes
-one to `apksigner`): `keytool -genkeypair -v -storetype PKCS12 -keystore …
--alias … -keyalg RSA -keysize 4096 -validity 10000 -storepass … -dname
-"CN=Calvados"`. A new key changes the app's signature: uninstall the old
-build first.
+Releases: `tools/release.sh 0.2.0` sets the version in both crates, the
+PKGBUILD and the app's manifest (`versionCode` by cargo-apk2's formula, it
+must grow); commit and push to main, and `.github/workflows/release.yml`
+builds the signed APKs and the Arch package and publishes release
+`v0.2.0` (it runs whenever main's version has no tag yet, and fails if the
+version fields disagree).
 
 ## Protocol crate layout
 

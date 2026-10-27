@@ -32,10 +32,13 @@ config (below). Calvados itself needs no root.
 
 [LSPosed]: https://github.com/LSPosed/LSPosed
 
+Releases on GitHub have the signed Android app and LSPosed module and an
+Arch Linux package; or build them yourself (below).
+
 ## Android
 
-1. Build and install the two APKs (below): the app and the LSPosed
-   module.
+1. Install the app and the LSPosed module (from a release, or built
+   below).
 2. Enable the Calvados module in LSPosed, then turn Bluetooth off and on.
    Again after updating the module.
 3. Open Calvados once and grant the permissions. It has no window, only a
@@ -78,7 +81,8 @@ DeviceID = bluetooth:004C:0000:0000
 Experimental = true
 ```
 
-Install (Arch Linux, from a checkout):
+Install (Arch Linux: the release's package with `sudo pacman -U
+calvados-*.pkg.tar.zst`, or from a checkout):
 
 ```sh
 makepkg -si

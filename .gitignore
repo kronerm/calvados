@@ -5,3 +5,4 @@
 /*.pkg.tar.*
 /firmware/
 __pycache__/
+*.keystore
