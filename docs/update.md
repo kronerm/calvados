@@ -19,6 +19,25 @@ Apple's signing server. (`ECID` appears only in the certificate's list of
 allowed properties.) Only `R1FW`, the case's UWB firmware, is marked
 "Personalization Required".
 
+## The other bud and the case (summary; details in [sibling-and-case.md](sibling-and-case.md))
+
+- Staging on the primary is not inert (Known code, trigger conditions
+  partly Inferred): with both buds in the case, the case compares the buds'
+  running and staged versions and copies the newer image to the other bud
+  (`R2L`/`L2R`, through the buds), then applies (`APPLY_BOTH`), without a
+  host sending Apply. It acts only with both buds present, comparable
+  versions and no copy running, and needs a lid flag and enough battery or
+  charging.
+- A bud accepts a sibling's image only if strictly newer, and stages it the
+  usual way (digest-checked, A/B). Nothing found refuses audio or pairing
+  on a version mismatch.
+- The case's own firmware (`STFC`/`STFW` its MCU, `NERF` its BLE chip with
+  its own UARP service, `R1FW` the UWB chip) is staged by the case itself;
+  Inferred: a host updates it directly over BLE. No rule found that it must
+  match the buds.
+- A GATT host gets no downstream endpoints: they're added only when the
+  host session is on transport 0xd (Inferred: an Apple host's AAP channel).
+
 ## 1. A/B slots in rkof (Known)
 
 - Two firmware files in the flash filesystem (FS object 0x200020c0): `firm.00`, `firm.01`
