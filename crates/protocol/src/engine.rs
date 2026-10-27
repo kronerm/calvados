@@ -459,6 +459,7 @@ impl Engine {
         }
         let previous_ears = self.state.ear_detection;
         let was_stowed = self.state.is_stowed();
+        let was_in_case = self.state.in_case();
         self.state.apply(&packet);
         let learned = self.learn_local_mac(&packet).map(Effect::LearnedLocalMac);
         let reaction = match packet {
@@ -509,7 +510,13 @@ impl Engine {
                     true => self.take_if_alone(),
                     false => Vec::new(),
                 };
-                media.into_iter().chain(alone).collect()
+                // Both put in the case: let go, so playing here again comes
+                // out of this host's own speakers, as on iOS.
+                let put_away = match !was_in_case && self.state.in_case() {
+                    true => self.release(),
+                    false => Vec::new(),
+                };
+                media.into_iter().chain(alone).chain(put_away).collect()
             }
             // Only when the hosts change: a list (a host joined) or a host
             // leaving, not the per-device updates of a burst.
@@ -618,7 +625,7 @@ impl Engine {
     /// automatic switching. Not while the other host is on a call, nor before
     /// the pods have said what's playing (a session without the state burst).
     pub fn media_started(&mut self) -> Vec<Effect> {
-        if !self.may_switch() {
+        if !self.may_switch() || self.buds_in_case() {
             return Vec::new();
         }
         match self.state.audio_source {
@@ -639,11 +646,21 @@ impl Engine {
     /// A call started on this host (answered or placed): take the audio. A
     /// call wins over whatever the other host plays.
     pub fn call_started(&mut self) -> Vec<Effect> {
-        if !self.may_switch() {
+        if !self.may_switch() || self.buds_in_case() {
             return Vec::new();
         }
         tracing::info!("auto-take: call started here");
         self.take()
+    }
+
+    /// Both buds in the case: nobody would hear them, so audio started here
+    /// stays here, as on iOS.
+    fn buds_in_case(&self) -> bool {
+        let in_case = self.state.in_case();
+        if in_case {
+            tracing::info!("not taking: both buds are in the case");
+        }
+        in_case
     }
 
     /// Automatic switching is on, and there's a session whose audio we don't
@@ -1596,6 +1613,23 @@ mod tests {
         assert_eq!(sends(&e.media_started()), 4, "unconfirmed: again");
         feed(&mut e, &owns_connection(true));
         assert!(e.media_started().is_empty(), "confirmed");
+    }
+
+    #[test]
+    fn no_take_while_both_buds_are_in_the_case() {
+        let source = |mac, kind| Packet::AudioSource(AudioSource { mac, kind });
+        let mut e = engine();
+        feed(&mut e, CONNECTED_DEVICES);
+        e.handle(source(mac(PEER), Activity::MEDIA), now());
+        e.handle(ears(InCase, InCase), now());
+        assert!(e.media_started().is_empty());
+        assert!(e.call_started().is_empty());
+        e.handle(ears(InEar, InCase), now());
+        assert_eq!(sends(&e.media_started()), 4, "one bud out: take");
+        feed(&mut e, &owns_connection(true));
+        let away = e.handle(ears(InCase, InCase), now());
+        assert!(away.iter().any(|e| matches!(e, Effect::ReleaseAudio)));
+        assert!(matches!(e.ownership, Ownership::Idle));
     }
 
     #[test]

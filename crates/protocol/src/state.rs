@@ -115,6 +115,17 @@ impl DeviceState {
         })
     }
 
+    /// Both buds reported in the case (unlike [`Self::is_stowed`], not
+    /// while unknown).
+    pub fn in_case(&self) -> bool {
+        self.ear_detection.is_some_and(|ears| {
+            matches!(
+                (ears.primary, ears.secondary),
+                (EarStatus::InCase, EarStatus::InCase)
+            )
+        })
+    }
+
     pub fn apply(&mut self, packet: &Packet) {
         match packet {
             Packet::Battery(infos) => infos.iter().for_each(|info| self.battery.update(*info)),

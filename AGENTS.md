@@ -378,7 +378,11 @@ texts are written twice. A change to one side needs the other:
 - Automatic switching (`Engine::media_started`): media starting on this host
   while `Idle` takes the audio, like Apple devices: not while the other host
   is on a call (`AudioSource` kind `Call`), nor while no `AudioSource` is
-  known. `Engine::call_started` takes for a call regardless. Linux: MPRIS
+  known, nor while both buds report being in the case
+  (`DeviceState::in_case`; calls too). Both buds going into the case while
+  holding the audio releases it (Linux: profile `off`, so the laptop's
+  speakers play). Android still routes to the pods by itself, and the pods
+  follow any host that streams. `Engine::call_started` takes for a call regardless. Linux: MPRIS
   `PlaybackStatus` → `Playing` (D-Bus signals). Android: the
   `AudioPlaybackCallback` (`USAGE_MEDIA` starts media, a
   `USAGE_VOICE_COMMUNICATION` playback is a VoIP call) and the phone-state

@@ -11,6 +11,9 @@ are a tap away.
   case nearby, to the phone and the laptop alike, and again if they drop
   while you wear them.
 - **Ear detection:** taking a bud out pauses, putting it back resumes.
+- **In the case:** with both buds in the case, playing doesn't take the
+  AirPods, and putting both in hands the audio back (on Linux to the
+  laptop's speakers; Android keeps them as its audio device by itself).
 - **Status and controls:** battery per bud and case, where each bud is,
   which bud is the primary (it holds the link), noise control (ANC,
   Transparency, Adaptive), and both settings above, in the phone's
