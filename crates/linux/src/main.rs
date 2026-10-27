@@ -11,6 +11,7 @@ mod mpris;
 mod pipewire;
 mod presence;
 mod state;
+mod uarp;
 
 use std::io::IsTerminal as _;
 use std::sync::Arc;
@@ -22,7 +23,7 @@ use protocol::MacAddress;
 use protocol::aacp::{NoiseControlMode, Packet};
 use protocol::connection::AIRPODS_PSM;
 use protocol::engine::{Effect, Engine, LocalAudio};
-use protocol::firmware::Release;
+use protocol::firmware::{ExactVersion, Release};
 use protocol::protocol::parse_datagram;
 use protocol::settings::{Setting, Settings};
 use tokio::signal::unix::{SignalKind, signal};
@@ -64,6 +65,8 @@ enum Input {
     /// A firmware catalog check for these models (a product's): its
     /// current release, `None` when it failed.
     Catalog(Vec<String>, Option<Release>),
+    /// The pods' exact running firmware, asked over UARP.
+    ExactFirmware(MacAddress, ExactVersion),
 }
 
 impl Daemon {
@@ -189,6 +192,7 @@ async fn run(daemon: &Daemon, mut engine: Engine, inputs: &mut mpsc::UnboundedRe
                 match attached {
                     Ok(new) => {
                         let pods = MacAddress::new(new.device.address().0);
+                        uarp::spawn(new.device.clone(), daemon.inputs.clone());
                         session = Some(new);
                         let effects = engine.connected(pods, Instant::now());
                         engine.stored_firmware(firmware::stored(pods));
@@ -234,6 +238,7 @@ async fn run(daemon: &Daemon, mut engine: Engine, inputs: &mut mpsc::UnboundedRe
                     catalog.found(models, release);
                     Vec::new()
                 }
+                Input::ExactFirmware(pods, exact) => engine.exact_firmware(pods, exact),
             },
             Some(playing) = playback_change(&mut playback) => engine.local_audio(match playing {
                 true => LocalAudio::Media,
