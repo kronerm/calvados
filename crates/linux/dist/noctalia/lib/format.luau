@@ -74,6 +74,25 @@ function format.mode(state)
   return state.noise_mode == "off" and "Off" or "—"
 end
 
+-- A tile's dot for the press-and-hold cycle, as the notification's
+-- (protocol's `display::CycleMark`): filled when in, outlined when out,
+-- dimmed while unknown (not set from here yet, taken as all three). Returns
+-- the glyph and its opacity.
+function format.cycleDot(state, mode)
+  local cycle = state.cycle or {}
+  if #cycle == 0 then
+    return "point-filled", 0.4
+  end
+  return table.find(cycle, mode) and "point-filled" or "point", 1
+end
+
+-- Whether the dot toggles (`display::toggle_cycle`): press and hold keeps
+-- two modes at least.
+function format.cycleToggles(state, mode)
+  local cycle = state.cycle or {}
+  return #cycle == 0 or not table.find(cycle, mode) or #cycle > 2
+end
+
 -- "Firmware 7.1.21" (UARP) or "Firmware 7.1 (6663)" (0x1D alone), plus
 -- " · 9.0.348 available" when Apple has a newer one; nil until reported.
 function format.firmware(state)

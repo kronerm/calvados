@@ -89,10 +89,28 @@ local function batteries()
   })
 end
 
+-- The dot in a tile's corner: in the press-and-hold cycle or not; a click
+-- toggles it (the tile's own click sets the mode).
+local function cycleDot(mode, connected, color)
+  local glyph, opacity = format.cycleDot(state, mode.name)
+  local toggles = connected and format.cycleToggles(state, mode.name)
+  return ui.row({
+    key = `{mode.name}:{glyph}:{opacity}:{toggles}`,
+    width = 16,
+    height = 16,
+    align = "center",
+    justify = "center",
+    onClick = toggles and function()
+      noctalia.runAsync({ "calvados", "set", "cycle", "toggle", mode.name })
+    end or nil,
+  }, { ui.glyph({ name = glyph, size = 12, color = color, opacity = opacity }) })
+end
+
 -- Tiles, glyph above label, so "Transparency" fits a third of the panel;
--- the current mode is filled. The key changes with the selection: the host
--- diffs retained nodes and keeps a dropped prop (the old fill), so a tile
--- whose selection changed is built anew instead.
+-- the current mode is filled, and a dot beside the glyph (balanced on the
+-- other side) marks the press-and-hold cycle. The key changes with the
+-- selection: the host diffs retained nodes and keeps a dropped prop (the
+-- old fill), so a tile whose selection changed is built anew instead.
 local function noiseControl()
   local connected = state.running == true and state.connected == true
   local tiles = {}
@@ -103,8 +121,9 @@ local function noiseControl()
       key = `{mode.name}:{selected}`,
       flexGrow = 1,
       gap = 6,
-      align = "center",
+      align = "stretch",
       paddingV = 10,
+      paddingH = 6,
       radius = 10,
       fill = selected and "primary" or nil,
       border = selected and nil or "outline",
@@ -114,8 +133,14 @@ local function noiseControl()
         set("noise", mode.name)
       end or nil,
     }, {
-      ui.glyph({ name = mode.glyph, size = 20, color = color }),
-      ui.label({ text = mode.short, fontSize = 12, color = color, maxLines = 1 }),
+      ui.row({ align = "start" }, {
+        ui.box({ width = 16, height = 16 }),
+        ui.row({ flexGrow = 1, justify = "center" }, {
+          ui.glyph({ name = mode.glyph, size = 20, color = color }),
+        }),
+        cycleDot(mode, connected, color),
+      }),
+      ui.label({ text = mode.short, fontSize = 12, color = color, maxLines = 1, textAlign = "center" }),
     }))
   end
   -- Off (never offered, but the pods can report it) or not yet known: say so.
