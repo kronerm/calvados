@@ -143,7 +143,10 @@ pub enum Effect {
     },
     /// What the pods run changed (a `0x1D` report, or UARP's exact
     /// version): persist it per pods, for [`Engine::stored_firmware`].
-    LearnedFirmware { pods: MacAddress, firmware: Firmware },
+    LearnedFirmware {
+        pods: MacAddress,
+        firmware: Firmware,
+    },
     /// Pause local media playback (a bud left an ear).
     Pause,
     /// Resume the playback [`Effect::Pause`] paused.
@@ -1427,7 +1430,10 @@ mod tests {
         e.stored_firmware(stored.clone());
         assert_eq!(e.state().firmware, stored);
         assert!(e.handle(report(old), now()).is_empty(), "nothing new");
-        assert!(e.exact_firmware(mac(PODS), "7.1.21".parse().unwrap()).is_empty());
+        assert!(
+            e.exact_firmware(mac(PODS), "7.1.21".parse().unwrap())
+                .is_empty()
+        );
         let new = "90.3431000025000000.6807";
         let reported = Firmware {
             model: Some("A3048".into()),

@@ -150,10 +150,16 @@ impl Content {
         let style = DecoratedCustomViewStyle::new(env)?;
         let icon = res.get(env, "ic_stat_airpods", "drawable")?;
         // Title and text also serve the lock screen's and accessibility's
-        // plain rendering.
-        Notification::builder(env, context.as_obj(), CHANNEL_ID)?
+        // plain rendering. The firmware goes in the header: the expanded
+        // layout has no height to spare (Android cuts custom views off).
+        let builder = Notification::builder(env, context.as_obj(), CHANNEL_ID)?
             .set_content_title(env, &self.title)?
-            .set_content_text(env, &self.text)?
+            .set_content_text(env, &self.text)?;
+        let builder = match self.firmware.is_empty() {
+            true => builder,
+            false => builder.set_sub_text(env, &self.firmware)?,
+        };
+        builder
             .set_small_icon(env, icon)?
             .set_show_when(env, false)?
             .set_ongoing(env, true)?
@@ -204,8 +210,7 @@ impl Content {
         Ok(views)
     }
 
-    /// Batteries, noise tiles, settings and the firmware, like the Linux
-    /// panel.
+    /// Batteries, noise tiles and settings, like the Linux panel.
     fn expanded<'local>(
         &self,
         env: &mut jni::Env<'local>,
@@ -252,7 +257,6 @@ impl Content {
             ui.image(env, &format!("{row}_toggle"), toggle)?;
             ui.on_click(env, context, row, request_code, action)?;
         }
-        ui.optional_text(env, "firmware", &self.firmware)?;
         Ok(views)
     }
 }

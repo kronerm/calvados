@@ -340,9 +340,10 @@ texts are written twice. A change to one side needs the other:
   `notification_expanded.xml` and `notification.rs` `MODES`);
 - the settings' titles and descriptions ("this computer" / "this phone");
 - the noise heading ("· Off", "· unknown yet");
-- the firmware line ("Firmware " + `display::firmware`, `format.firmware`
-  and `notification.rs` `Content::firmware`; " · 9.0.348 available" on
-  Linux only);
+- the firmware ("Firmware " + `display::firmware`: the panel's last line,
+  `format.firmware`; the notification's header subtext,
+  `notification.rs` `Content::firmware`, since the expanded layout has no
+  height to spare; " · 9.0.348 available" on Linux only);
 - the battery glyph thresholds 88/63/38/13 (`format.batteryGlyph`,
   `notification.rs` `battery_glyph`);
 - the icons: Noctalia names Tabler glyphs, Android has them converted in

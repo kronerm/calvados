@@ -3,11 +3,11 @@
 use std::fmt;
 
 use crate::MacAddress;
-use crate::firmware::Firmware;
 use crate::aacp::{
     AudioSource, BatteryComponent, BatteryInfo, Bud, ChargingStatus, ControlCommand, ControlId,
     DeviceConnectionStatus, DeviceRole, EarDetection, EarStatus, NoiseControlMode, Packet,
 };
+use crate::firmware::Firmware;
 
 #[derive(Debug, Clone, Default)]
 pub struct DeviceState {

@@ -53,10 +53,10 @@ are a tap away.
    as a persistent notification.
 
 The notification shows the AirPods' name and whether the phone has the
-audio (Active, Standby), and the battery levels, the primary bud's in bold.
-Expanded, it shows each bud's battery and where it is (a dot marks the
-primary bud), the noise control modes to tap, the firmware the AirPods
-run ("Firmware 7.1 (6663)": the version and its build), and two
+audio (Active, Standby), the battery levels, the primary bud's in bold,
+and in its header the firmware the AirPods run ("Firmware 7.1 (6663)": the
+version and its build). Expanded, it shows each bud's battery and where it
+is (a dot marks the primary bud), the noise control modes to tap, and two
 settings, both remembered:
 
 - **Automatic switching:** media starting on the phone takes the AirPods

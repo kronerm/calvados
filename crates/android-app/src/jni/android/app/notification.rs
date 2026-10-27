@@ -52,6 +52,16 @@ impl<'object_scope, 'env_scope, R: Reference + AsRef<JObject<'object_scope>>> Bu
         )?;
         Ok(self)
     }
+    pub fn set_sub_text(self, env: &mut Env<'env_scope>, text: &str) -> anyhow::Result<Self> {
+        let text = JString::new(env, text)?;
+        env.call_method(
+            &self.0,
+            jni_str!("setSubText"),
+            jni_sig!("(Ljava/lang/CharSequence;)Landroid/app/Notification$Builder;"),
+            &[JValue::Object(&text)],
+        )?;
+        Ok(self)
+    }
     pub fn set_small_icon(self, env: &mut Env<'env_scope>, res_id: i32) -> anyhow::Result<Self> {
         env.call_method(
             &self.0,

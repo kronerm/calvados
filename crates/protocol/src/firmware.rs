@@ -58,7 +58,12 @@ impl FromStr for ExactVersion {
     type Err = ();
 
     fn from_str(s: &str) -> Result<Self, ()> {
-        match s.split('.').map(digits).collect::<Option<Vec<_>>>().ok_or(())?[..] {
+        match s
+            .split('.')
+            .map(digits)
+            .collect::<Option<Vec<_>>>()
+            .ok_or(())?[..]
+        {
             [major, minor, release] => Ok(Self {
                 version: Version { major, minor },
                 release,
@@ -134,10 +139,9 @@ impl Firmware {
 
     /// What [`Self::to_stored`] wrote; unknown lines are skipped.
     pub fn from_stored(stored: &str) -> Self {
-        stored
-            .lines()
-            .filter_map(|line| line.split_once('='))
-            .fold(Self::default(), |firmware, (key, value)| match key {
+        stored.lines().filter_map(|line| line.split_once('=')).fold(
+            Self::default(),
+            |firmware, (key, value)| match key {
                 "model" => Self {
                     model: Some(value.to_owned()),
                     ..firmware
@@ -151,7 +155,8 @@ impl Firmware {
                     ..firmware
                 },
                 _ => firmware,
-            })
+            },
+        )
     }
 }
 
