@@ -2,8 +2,9 @@
 
     python3 tools/firmware/uarp_probe.py AA:BB:CC:DD:EE:FF
 
-Sends Sync, version discovery and the information requests (tags 1–9),
-nothing that offers, transfers or applies firmware. Needs the pods
+Sends Sync, version discovery, the information requests (tags 1–9) and
+Discover Downstream (the devices the pods can relay an update to: the other
+bud, the case), nothing that offers, transfers or applies firmware. Needs the pods
 connected (BlueZ serves their GATT over the classic link), dbus-python and
 PyGObject.
 """
@@ -35,9 +36,17 @@ def message(kind, msg_id, payload=b""):
     return struct.pack(">HHH", kind, len(payload), msg_id) + payload
 
 
+def message_ack(added):
+    return message(0x18, 0, struct.pack(">H", 0) + added[6:8])
+
+
 def describe(data):
     kind, length, _ = struct.unpack_from(">HHH", data)
     body = data[6:6 + length]
+    if kind == 0x16:
+        return f"discover downstream: status {struct.unpack_from('>H', body)[0]}"
+    if kind == 0x17:
+        return f"downstream added: id {struct.unpack_from('>H', body)[0]}, {body[2:].hex(' ')}"
     if kind == 2:
         return f"protocol version {struct.unpack_from('>H', body, 2)[0]}"
     if kind == 4 and len(body) >= 10:
@@ -64,21 +73,28 @@ def main(address):
         raw = bytes(props["Value"])
         pending.extend(raw[1:])
         if raw[0] & LAST:
-            print(describe(bytes(pending)), flush=True)
+            message = bytes(pending)
             pending.clear()
+            print(describe(message), flush=True)
+            if struct.unpack_from(">H", message)[0] == 0x17:
+                # Acknowledge it (status 0, the id), as a controller does.
+                send_now(message_ack(message))
 
     bus.add_signal_receiver(changed, "PropertiesChanged",
                             "org.freedesktop.DBus.Properties", path=path)
     char.StartNotify()
     queue = [message(0, 1), message(1, 2, struct.pack(">H", 9))]
     queue += [message(3, 3 + tag, struct.pack(">I", tag)) for tag in range(1, 10)]
+    queue.append(message(0x15, 13))
+
+    def send_now(data):
+        char.WriteValue(dbus.Array(bytes([LAST]) + data, signature="y"), {"type": "request"})
 
     def send():
         if not queue:
             GLib.timeout_add_seconds(2, loop.quit)
             return False
-        data = bytes([LAST]) + queue.pop(0)
-        char.WriteValue(dbus.Array(data, signature="y"), {"type": "request"})
+        send_now(queue.pop(0))
         return True
 
     GLib.timeout_add(500, send)

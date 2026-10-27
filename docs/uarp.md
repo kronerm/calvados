@@ -52,6 +52,12 @@ personalization request in between: the buds stage `FTAB` first and need
 no ticket. At 475 bytes a request, `FTAB` is ~16 500 requests. Rescinded
 there; acknowledged, nothing staged.
 
+Discover Downstream (0x15, in `uarp_probe.py`) is answered with 0x16
+status 0 and no 0x17 at all, also with a fresh state (case closed and
+reopened) and charging: with nothing staged, the primary offers a host no
+route to the other bud or the case. Right after the case reopens, BlueZ
+can refuse the first GATT write ("Not connected") for a moment.
+
 All addresses `[rkof 0x…]`. **Known** = read from code; **Inferred** = meaning guessed
 (names are not in the binary: no msg-type name strings exist; names below follow
 behaviour and request/ack pairing).
