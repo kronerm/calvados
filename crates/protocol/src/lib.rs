@@ -11,6 +11,7 @@ mod mac_address;
 pub mod protocol;
 pub mod settings;
 pub mod state;
+pub mod superbinary;
 pub mod uarp;
 
 pub use mac_address::MacAddress;
