@@ -11,7 +11,6 @@
 use std::fmt;
 use std::time::{Duration, Instant};
 
-use crate::aacp::ChargingStatus;
 use crate::firmware::{ExactVersion, Version};
 use crate::state::DeviceState;
 use crate::superbinary::Package;
@@ -161,7 +160,6 @@ pub enum Refusal {
     /// Another host updates them (its [`News`]).
     PeerRunning,
     NotInCase,
-    NotCharging,
     /// Neither the exact nor the reported running firmware is known.
     VersionUnknown,
     /// They run it already, or newer (the pods refuse downgrades anyway).
@@ -176,7 +174,6 @@ impl fmt::Display for Refusal {
             Self::Running => "an update is already running",
             Self::PeerRunning => "another device is updating the AirPods",
             Self::NotInCase => "put both AirPods in the case, and keep the lid open",
-            Self::NotCharging => "connect the case to power",
             Self::VersionUnknown => "the AirPods' firmware version isn't known yet",
             Self::NotNewer => "the AirPods already run this firmware or a newer one",
         })
@@ -186,24 +183,19 @@ impl fmt::Display for Refusal {
 impl std::error::Error for Refusal {}
 
 /// Whether pods in `state` take `version`: both buds in the open case (an
-/// AACP session reports their ears), the case charging, and `version`
-/// newer than what they run: exactly when known, else by major.minor
-/// (equal counts as not newer).
+/// AACP session reports their ears) and `version` newer than what they run:
+/// exactly when known, else by major.minor (equal counts as not newer).
+/// Power is the pods' call: they defer an offer until the case charges.
 pub fn check(state: &DeviceState, version: ExactVersion) -> Result<(), Refusal> {
-    let charging = state
-        .battery
-        .case
-        .is_some_and(|case| matches!(case.status, Some(ChargingStatus::Charging)));
     let newer = match (state.firmware.exact, state.firmware.version()) {
         (Some(exact), _) => version > exact,
         (None, Some(running)) => version.version > running,
         (None, None) => return Err(Refusal::VersionUnknown),
     };
-    match (state.in_case(), charging, newer) {
-        (false, ..) => Err(Refusal::NotInCase),
-        (true, false, _) => Err(Refusal::NotCharging),
-        (true, true, false) => Err(Refusal::NotNewer),
-        (true, true, true) => Ok(()),
+    match (state.in_case(), newer) {
+        (false, _) => Err(Refusal::NotInCase),
+        (true, false) => Err(Refusal::NotNewer),
+        (true, true) => Ok(()),
     }
 }
 
@@ -628,13 +620,12 @@ impl News {
     }
 }
 
-const REFUSALS: [Refusal; 8] = [
+const REFUSALS: [Refusal; 7] = [
     Refusal::NotConnected,
     Refusal::NoRelease,
     Refusal::Running,
     Refusal::PeerRunning,
     Refusal::NotInCase,
-    Refusal::NotCharging,
     Refusal::VersionUnknown,
     Refusal::NotNewer,
 ];
@@ -678,7 +669,9 @@ fn failure_of(code: u8, argument: u8) -> Option<Failure> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::aacp::{BatteryComponent, BatteryInfo, EarDetection, EarStatus, Packet};
+    use crate::aacp::{
+        BatteryComponent, BatteryInfo, ChargingStatus, EarDetection, EarStatus, Packet,
+    };
     use crate::superbinary::tests::{package, package_bytes, package_bytes_with};
     use crate::uarp;
 
@@ -992,7 +985,7 @@ mod tests {
         let worn = state(EarStatus::InEar, ChargingStatus::Charging, OLD);
         assert_eq!(check(&worn, version), Err(Refusal::NotInCase));
         let unplugged = state(EarStatus::InCase, ChargingStatus::Discharging, OLD);
-        assert_eq!(check(&unplugged, version), Err(Refusal::NotCharging));
+        assert_eq!(check(&unplugged, version), Ok(()), "the pods defer, not us");
         let same = state(
             EarStatus::InCase,
             ChargingStatus::Charging,
@@ -1025,7 +1018,7 @@ mod tests {
             UpdateStatus::Staged,
             UpdateStatus::Done(version),
             UpdateStatus::Failed(Failure::Denied { reason: 2 }),
-            UpdateStatus::Failed(Failure::Refused(Refusal::NotCharging)),
+            UpdateStatus::Failed(Failure::Refused(Refusal::NotInCase)),
             UpdateStatus::Failed(Failure::Cancelled),
         ];
         let news = statuses

@@ -255,8 +255,9 @@ impl CalvadosService {
         self.snapshot().peer_update
     }
 
-    /// Update the pods to `LatestFirmware`: both buds in the open case,
-    /// the case charging. Fails with the reason when it can't start;
+    /// Update the pods to `LatestFirmware`: both buds in the open case
+    /// (the pods wait for the case to charge). Fails with the reason when
+    /// it can't start;
     /// `Update` follows it from there. The pods are never told to apply:
     /// the case does once the lid closes.
     async fn start_update(&self) -> zbus::fdo::Result<()> {

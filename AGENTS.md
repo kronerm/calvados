@@ -139,7 +139,7 @@ build first.
   without a request in between, or 5 minutes down → `Lost`. Staged is the
   end: never an apply; with both buds in the closed case, the case copies
   the image to the other bud and applies both (~30 min). `check`: both
-  buds in the case, the case `Charging`, and the release newer than the
+  buds in the case and the release newer than the
   running firmware, exactly when known, else by major.minor (equal is not
   newer: the pods refuse equal and older anyway). `News`: calvados to
   calvados, `calvados` + format 1 + `1` exact firmware (3 × u32 BE) or
@@ -587,8 +587,9 @@ the payload headers, `FTAB`'s metadata and `FTAB` (~7.8 MB, ~8 minutes)
 min) → the next session's version query shows it (`Done`). Rules:
 - never an apply (no 0x0A message exists), never a solicitation; only
   the offer, data responses, rescinds and acks;
-- preconditions (`update::check`): both buds in the case, the case
-  charging, the release newer than what runs;
+- preconditions (`update::check`): both buds in the case, the release
+  newer than what runs; power is the pods' call (they defer until the case
+  charges);
 - no UARP unless settled and the primary isn't changing (see the engine);
 - the watchdog rescinds after 60 s without a request;
 - a drop resumes by re-offering the identical package; a staged image

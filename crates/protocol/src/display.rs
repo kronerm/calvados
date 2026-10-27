@@ -123,7 +123,7 @@ pub fn update(status: UpdateStatus) -> String {
     match status {
         UpdateStatus::Downloading => "Downloading firmware…".to_owned(),
         UpdateStatus::Offered => "Offering firmware…".to_owned(),
-        UpdateStatus::Deferred => "Waiting for the AirPods…".to_owned(),
+        UpdateStatus::Deferred => "Waiting: plug the case in".to_owned(),
         UpdateStatus::Transferring { percent } => format!("Updating firmware… {percent} %"),
         UpdateStatus::Interrupted { percent } => format!("Update paused at {percent} %"),
         UpdateStatus::Staged => "Staged: close the lid".to_owned(),

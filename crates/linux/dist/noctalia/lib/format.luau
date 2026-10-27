@@ -94,7 +94,7 @@ local function updateLine(update)
   elseif name == "offered" then
     return "Offering firmware…"
   elseif name == "deferred" then
-    return "Waiting for the AirPods…"
+    return "Waiting: plug the case in"
   elseif name == "transferring" then
     return `Updating firmware… {update.progress} %`
   elseif name == "interrupted" then
