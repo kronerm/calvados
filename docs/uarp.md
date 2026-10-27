@@ -34,6 +34,16 @@ rescind-all (`0x0c` asset `0xFFFF`, acknowledged). Why is open: in 9A348
 the default survives e.g. an offering endpoint of type 0xe
 [rkof 0xbdae4–0xbdaea]. Nothing was staged in any of these.
 
+After closing and reopening the case (their message ids restart at 1, so
+the UARP state was reset), the same offer with the case charging is
+**accepted**: the pods pull the SuperBinary header (offset 0, 0x2c bytes),
+then the payload headers one by one (0x28 each) up to `FTAB`, the 13th
+(`AUCH AUER AUFM AUFR AULB AUPC AUPS AUUF AUUT CMAP CMAP CTAB FTAB`),
+then 50 bytes at `0x253c`, past the headers (metadata, Inferred `FTAB`'s).
+The tool rescinded there; acknowledged, nothing staged. So the denials
+came from state left by earlier offers, which rescinds didn't clear;
+closing the case did.
+
 All addresses `[rkof 0x…]`. **Known** = read from code; **Inferred** = meaning guessed
 (names are not in the binary: no msg-type name strings exist; names below follow
 behaviour and request/ack pairing).
