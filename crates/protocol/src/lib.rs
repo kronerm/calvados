@@ -13,5 +13,6 @@ pub mod settings;
 pub mod state;
 pub mod superbinary;
 pub mod uarp;
+pub mod update;
 
 pub use mac_address::MacAddress;

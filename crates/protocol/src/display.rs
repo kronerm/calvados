@@ -4,7 +4,8 @@
 use crate::aacp::{BatteryInfo, Bud, ChargingStatus, EarStatus, NoiseControlMode};
 use crate::engine::Ownership;
 use crate::firmware::{Firmware, Version};
-use crate::state::DeviceState;
+use crate::state::{DeviceState, PeerUpdate};
+use crate::update::UpdateStatus;
 
 /// Where a bud is, as far as the display goes.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -116,6 +117,30 @@ pub fn firmware(firmware: &Firmware) -> Option<String> {
         .or_else(|| firmware.reported.as_deref().map(reported))
 }
 
+/// The update's line, as the panel and the notification show it:
+/// `Updating firmware… 40 %`, `Staged: close the lid`, ….
+pub fn update(status: UpdateStatus) -> String {
+    match status {
+        UpdateStatus::Downloading => "Downloading firmware…".to_owned(),
+        UpdateStatus::Offered => "Offering firmware…".to_owned(),
+        UpdateStatus::Deferred => "Waiting for the AirPods…".to_owned(),
+        UpdateStatus::Transferring { percent } => format!("Updating firmware… {percent} %"),
+        UpdateStatus::Interrupted { percent } => format!("Update paused at {percent} %"),
+        UpdateStatus::Staged => "Staged: close the lid".to_owned(),
+        UpdateStatus::Done(version) => format!("Updated to {version}"),
+        UpdateStatus::Failed(failure) => format!("Update failed: {failure}"),
+    }
+}
+
+/// Another host's: `Updating firmware… 40 % · 64:4A:…`.
+pub fn peer_update(peer: PeerUpdate) -> String {
+    format!(
+        "{} · {}",
+        update(peer.status),
+        peer.host.to_hex_string().to_uppercase()
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -154,6 +179,31 @@ mod tests {
         assert!(!right.primary && right.charging && matches!(right.place, Some(Place::InCase)));
         assert!(case.last_known && case.level == 60);
         assert_eq!(Buds::of(&DeviceState::default()), Buds::default());
+    }
+
+    #[test]
+    fn update_lines() {
+        use crate::update::Failure;
+        assert_eq!(
+            update(UpdateStatus::Transferring { percent: 40 }),
+            "Updating firmware… 40 %"
+        );
+        assert_eq!(
+            update(UpdateStatus::Done("9.0.348".parse().unwrap())),
+            "Updated to 9.0.348"
+        );
+        assert_eq!(
+            update(UpdateStatus::Failed(Failure::Stalled)),
+            "Update failed: the transfer stalled"
+        );
+        let peer = PeerUpdate {
+            host: "64:4a:00:11:22:33".parse().unwrap(),
+            status: UpdateStatus::Staged,
+        };
+        assert_eq!(
+            peer_update(peer),
+            "Staged: close the lid · 64:4A:00:11:22:33"
+        );
     }
 
     #[test]

@@ -322,6 +322,7 @@ async fn perform(daemon: &Daemon, session: Option<&Session>, effect: Effect) -> 
         Effect::LearnedLocalMac(_) => {}
         Effect::LearnedKey { pods, kind, key } => presence::save_key(pods, kind, key),
         Effect::LearnedFirmware { pods, firmware } => firmware::save(pods, &firmware),
+        Effect::OpenUarp | Effect::UarpWrite(_) | Effect::CloseUarp => {}
         Effect::Pause => daemon.media.iter().for_each(mpris::Media::pause),
         Effect::Resume => daemon.media.iter().for_each(mpris::Media::resume),
     }

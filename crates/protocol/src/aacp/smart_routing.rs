@@ -2,6 +2,7 @@
 //! `[peer mac 6, reversed]` followed by a string-keyed TLV blob.
 
 use crate::MacAddress;
+use crate::update::News;
 
 use super::frame::data_frame;
 
@@ -26,6 +27,8 @@ pub enum Routing {
     YieldRequest,
     /// The owner declined our hijack (e.g. it's on a call).
     HijackDeclined,
+    /// Another calvados host's [`News`] ([`news`]).
+    News(News),
     Other,
 }
 
@@ -42,6 +45,16 @@ pub fn parse_response(input: &[u8]) -> nom::IResult<&[u8], RoutingResponse> {
         .first_chunk::<6>()
         .map(|b| super::from_reversed(*b))
         .filter(|mac| !mac.is_nil());
+    // `[len 2]`, then ours start with their magic.
+    if let Some(news) = input.get(8..).and_then(News::decode) {
+        return Ok((
+            &[],
+            RoutingResponse {
+                from,
+                kind: Routing::News(news),
+            },
+        ));
+    }
     let find = |needle: &[u8]| input.windows(needle.len()).position(|w| w == needle);
     let contains = |needle: &[u8]| find(needle).is_some();
     // `HostStreamingState` `42` `YES` / `NO`.
@@ -73,6 +86,16 @@ fn frame(target: MacAddress, len: usize, fields: &[&[u8]]) -> Vec<u8> {
         .copied()
         .collect::<Vec<_>>();
     body.resize(len, 0);
+    data_frame(OPCODE, &body)
+}
+
+/// [`News`] for the calvados host `target`: `[mac] [len 2 LE]` and the
+/// news, which starts with its magic where Apple's frames have their
+/// dictionary (`01 e5 …`).
+pub fn news(target: MacAddress, news: News) -> Vec<u8> {
+    let news = news.encode();
+    let len = u16::try_from(news.len()).expect("short news");
+    let body = [&super::to_reversed(target)[..], &len.to_le_bytes(), &news].concat();
     data_frame(OPCODE, &body)
 }
 
@@ -203,5 +226,26 @@ mod tests {
         );
         assert_eq!(relayed(show_ui(peer)), Routing::ShowNearbyUi);
         assert_eq!(relayed(hijack_request(peer)), Routing::YieldRequest);
+    }
+
+    #[test]
+    fn news_is_relayed_as_is() {
+        use crate::aacp::Packet;
+        use crate::protocol::parse_datagram;
+        use crate::update::UpdateStatus;
+
+        let peer = PEER.parse().unwrap();
+        let news = News::Update(UpdateStatus::Transferring { percent: 40 });
+        let sent = super::news(peer, news);
+        assert!(hex::encode(&sent).starts_with("040004001000aa9988776602190063616c7661646f73"));
+        // The pods relay it as 0x11, from the sender.
+        let relayed = [&[0x04, 0x00, 0x04, 0x00, 0x11, 0x00][..], &sent[6..]].concat();
+        let packets = parse_datagram(&[relayed.clone(), relayed].concat());
+        assert_eq!(packets.len(), 2, "its length frames it");
+        let Packet::RoutingResponse(response) = &packets[0] else {
+            panic!("a routing response");
+        };
+        assert_eq!(response.kind, Routing::News(news));
+        assert_eq!(response.from, Some(peer));
     }
 }

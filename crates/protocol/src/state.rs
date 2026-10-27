@@ -5,9 +5,11 @@ use std::fmt;
 use crate::MacAddress;
 use crate::aacp::{
     AudioSource, BatteryComponent, BatteryInfo, Bud, ChargingStatus, ControlCommand, ControlId,
-    DeviceConnectionStatus, DeviceRole, EarDetection, EarStatus, NoiseControlMode, Packet,
+    DeviceConnectionStatus, DeviceRole, EarDetection, EarStatus, NoiseControlMode, Packet, Routing,
+    RoutingResponse,
 };
 use crate::firmware::Firmware;
+use crate::update::{News, UpdateStatus};
 
 #[derive(Debug, Clone, Default)]
 pub struct DeviceState {
@@ -32,6 +34,15 @@ pub struct DeviceState {
     /// `None` until the first `ConnectedDevices` list: the per-device updates
     /// at session start arrive before it and are partial.
     pub hosts: Option<Vec<MacAddress>>,
+    /// Another calvados host's firmware update, as it last told
+    /// ([`News::Update`]); until it leaves.
+    pub peer_update: Option<PeerUpdate>,
+}
+
+#[derive(Debug, Clone, Copy)]
+pub struct PeerUpdate {
+    pub host: MacAddress,
+    pub status: UpdateStatus,
 }
 
 /// Where [`DeviceState::noise_mode`] comes from.
@@ -161,6 +172,9 @@ impl DeviceState {
             Packet::ConnectedDevices(macs) => {
                 macs.iter().for_each(|mac| self.record_peer(*mac));
                 self.hosts = Some(macs.clone());
+                self.peer_update = self
+                    .peer_update
+                    .filter(|update| macs.contains(&update.host));
             }
             Packet::DeviceConnection(
                 device @ DeviceConnectionStatus {
@@ -174,6 +188,9 @@ impl DeviceState {
                         hosts.push(device.mac);
                     }
                 }
+                self.peer_update = self
+                    .peer_update
+                    .filter(|update| device.connected || update.host != device.mac);
             }
             // Not every session gets a device list: the history still names
             // the other hosts, as handoff targets.
@@ -181,6 +198,16 @@ impl DeviceState {
                 .connected_hosts()
                 .into_iter()
                 .for_each(|mac| self.record_peer(mac)),
+            Packet::RoutingResponse(RoutingResponse {
+                from: Some(host),
+                kind: Routing::News(News::Update(status)),
+            }) => {
+                self.record_peer(*host);
+                self.peer_update = Some(PeerUpdate {
+                    host: *host,
+                    status: *status,
+                });
+            }
             Packet::RoutingResponse(response) => response
                 .from
                 .into_iter()
