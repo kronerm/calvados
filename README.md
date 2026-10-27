@@ -58,8 +58,10 @@ and in its header the firmware the AirPods run ("Firmware 7.1.21", or
 "Firmware 7.1 (6663)", the version and its build, until they tell it
 exactly) and whether Apple has a newer one ("· 9.0.348 available": the
 app checks Apple's update catalog once a day, its only use of the
-internet). It can update them ([below](#from-the-phone)). Expanded, it shows each bud's battery and where it
-is (a dot marks the primary bud), the noise control modes to tap, and two
+internet; on LineageOS, turn on the app's network access under Settings →
+Apps → Calvados → Mobile data & Wi-Fi, which can be off for new apps).
+It can update them ([below](#from-the-phone)). Expanded, it shows each
+bud's battery and where it is (a dot marks the primary bud), the noise control modes to tap, and two
 settings, both remembered:
 
 - **Automatic switching:** media starting on the phone takes the AirPods
