@@ -8,6 +8,7 @@ the reasoning behind individual changes lives in commit messages.
 | Crate | Role | Boundary |
 |-------|------|----------|
 | `protocol` | AACP decoding, framing, commands, state, settings, the engine | Pure Rust, sans-IO, fully unit-tested. No platform code. |
+| `firmware-fetch` | Apple's firmware catalog and the update's package, for both platforms | Blocking I/O (ureq, zip); the platforms pick the thread and the cache dir. |
 | `linux` (binary `calvados`) | BlueZ daemon (`bluer`, tokio, D-Bus via `zbus`) | Transport + effects only; all decisions come from `Engine`. |
 | `android-app` (`libcalvados.so`) | Android foreground service (cdylib) + thin Java shell | Transport + effects + notification; decisions from `Engine`. |
 | `android-hook` (`libcalvados_hook.so`) | LSPosed native hook in the system Bluetooth process | `#![cfg(target_os = "android")]`; empty on the host. |
@@ -39,7 +40,9 @@ linker); `aapt2`, `javac`, `d8`, `zipalign`, `apksigner` and `keytool` on
 `PATH` for the xposed APK. Any JDK works: `.cargo/config.toml` sets
 `JDK_JAVAC_OPTIONS=--release 17` for cargo-apk2's `javac` (the xposed build
 passes the flag itself), since `d8` rejects class files from newer JDKs
-(Java 27: "Unsupported class file major version 71").
+(Java 27: "Unsupported class file major version 71"). It also names the
+NDK's clang and `llvm-ar` (at `/opt/android-ndk`) for ring's C, which plain
+`cargo clippy --target …-android` needs; cargo-apk2 sets its own.
 
 Release signing: cargo-apk2 takes the keystore from the environment; for
 the committed one:
@@ -88,7 +91,7 @@ build first.
   from UARP), and Apple's catalog: `catalog_url`, `catalog_models` (a product's models,
   served first: AirPods Pro 2 USB-C asks A3048, the case A2968, then
   A3047, which gets a 403; an unknown model only itself) and, behind the
-  `catalog` feature (the `plist` crate; only Linux enables it),
+  `catalog` feature (the `plist` crate; `firmware-fetch` enables it),
   `parse_catalog` (the newest of `Assets`: `FirmwareVersionMajor`/`Minor`/
   `Release`, `Build`). The running string carries no release number (9A348
   is `90.…`; 7B19–7B21 all read 7.1), so `Release::is_newer_than`
@@ -219,7 +222,14 @@ power-on (`LinkChange`). Its length caps at 255, i.e. 15 events.
   received and sent), to look back at a reboot.
 - `exports.rs` — the JNI entry points of `PersistentService.java`.
 - `service.rs` — the event loop: one channel of `Event`s (intents, link
-  events, stop) driving the `Engine`; effects out.
+  events, stop) driving the `Engine`; effects out. Also the firmware
+  update's I/O, with `firmware-fetch` as on Linux: the catalog checked
+  once a day per product (`Catalog::due`) and the package fetched on
+  `UPDATE_FIRMWARE`, each on a thread that posts `Event::Catalog` /
+  `Event::Package`; the package is cached in the app's cache dir
+  (`getCacheDir`, `<build>.uarp`). Hence the `INTERNET` permission, the
+  app's only network use. A refusal's reason is kept 8 s for the
+  notification.
 - `link.rs` — the AACP L2CAP socket (connect / send / read thread).
 - `bluetooth.rs` — paired AirPods, local MAC, A2DP routing, and the
   presence scan: a `BluetoothLeScanner` scan (Apple manufacturer data `07`
@@ -251,7 +261,13 @@ power-on (`LinkChange`). Its length caps at 255, i.e. 15 events.
   Linux panel's batteries, noise tiles and settings rows), filled by view
   id. There's no generated `R` class, so ids come from
   `Resources.getIdentifier`. Tiles and rows fire service intents
-  (`NOISE:<mode>`, `AUTO_SWITCH`, `AUTO_CONNECT`). Bold text is a `Spanned`
+  (`NOISE:<mode>`, `AUTO_SWITCH`, `AUTO_CONNECT`). The header's subtext is
+  one line (`header`): a refused update's reason, else this phone's update
+  (`display::update`), else a peer's (`display::peer_update`), else the
+  firmware and the newer release. The update's start and cancel are a
+  `Notification.Action` (`UPDATE_FIRMWARE`, `CANCEL_UPDATE`; no icon, as
+  AndroidX builds them), shown under the custom view and outside its height
+  limit, where a row in the layout would be cut off. Bold text is a `Spanned`
   from `Html.fromHtml`. RemoteViews allow only some views (no `Space`), and
   an id must be a valid Java name (no `case`).
 - `res/` (crate root) — the layouts and the icons: Tabler SVGs converted to
@@ -303,13 +319,14 @@ power-on (`LinkChange`). Its length caps at 255, i.e. 15 events.
   keeps it (a failed check keeps the last answer; logged at debug/info).
   On D-Bus: `Firmware` (`7.1.21`, or `7.1 (6663)` without UARP),
   `LatestFirmware` (`9.0.348 (9A348)`, empty until checked) and
-  `FirmwareUpdate`. Android doesn't check (no INTERNET permission): it
-  shows the running version only. Also the stored firmware
+  `FirmwareUpdate`. Also the stored firmware
   (`<address>.firmware`), and the update's package: the release's zip
   (`__BaseURL` + `__RelativePath`), `AssetData/Firmware.acsw/firmware.uarp`
   read with `zip` (pure Rust inflate), checked (`Package::parse`, the
   release's version) and cached as `$XDG_CACHE_HOME/calvados/<build>.uarp`
   (written aside, renamed), reused while it checks out; `Input::Package`.
+  The checking, download, unzip and cache are `firmware-fetch`'s, shared
+  with Android; this module runs them on blocking tasks.
   D-Bus: `StartUpdate` (fails with the refusal's text; the package is
   fetched after it returns), `CancelUpdate`, `Update`
   (`(state, percent, detail)`) and `PeerUpdate` (the host first).
@@ -401,14 +418,15 @@ texts are written twice. A change to one side needs the other:
 - the noise heading ("· Off", "· unknown yet");
 - the firmware ("Firmware " + `display::firmware`: the panel's last line,
   `format.firmware`; the notification's header subtext,
-  `notification.rs` `Content::firmware`, since the expanded layout has no
-  height to spare; " · 9.0.348 available" on Linux only);
+  `notification.rs` `header`, since the expanded layout has no
+  height to spare; " · 9.0.348 available" once the catalog has a newer one);
 - the update's line (`display::update`, `format.update`: "Updating
   firmware… 40 %", "Staged: close the lid", …, a peer's with " · <host>";
   in the panel it takes the firmware line's place);
 - the update's button ("Update" when a newer release is known and no host
   updates, "Cancel" while this host's runs: `format.updateAction` and the
-  notification's action); the UI stays the panel and the notification, no
+  notification's action, `UpdateAction`, which says "Update firmware" and
+  "Cancel update" since it stands apart from the firmware line); the UI stays the panel and the notification, no
   windows or activities;
 - the battery glyph thresholds 88/63/38/13 (`format.batteryGlyph`,
   `notification.rs` `battery_glyph`);
@@ -582,8 +600,10 @@ texts are written twice. A change to one side needs the other:
 ## Firmware updates
 
 Where: `protocol::{superbinary, uarp, update}` and the engine (UARP over
-the AACP session); Linux fetches and caches the package (`firmware.rs`)
-and exposes it (D-Bus, CLI, panel); Android has no package fetch yet.
+the AACP session); `firmware-fetch` checks the catalog and fetches and
+caches the package for both platforms; Linux exposes the update on D-Bus,
+the CLI and the panel, Android in the notification (its header and an
+action).
 The flow, as done once with `tools/firmware/uarp_offer.py … full` over
 GATT (docs/uarp.md): offer → the primary pulls the SuperBinary header,
 the payload headers, `FTAB`'s metadata and `FTAB` (~7.8 MB, ~8 minutes)

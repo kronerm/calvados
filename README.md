@@ -54,8 +54,11 @@ are a tap away.
 
 The notification shows the AirPods' name and whether the phone has the
 audio (Active, Standby), the battery levels, the primary bud's in bold,
-and in its header the firmware the AirPods run ("Firmware 7.1 (6663)": the
-version and its build). Expanded, it shows each bud's battery and where it
+and in its header the firmware the AirPods run ("Firmware 7.1.21", or
+"Firmware 7.1 (6663)", the version and its build, until they tell it
+exactly) and whether Apple has a newer one ("· 9.0.348 available": the
+app checks Apple's update catalog once a day, its only use of the
+internet). It can update them ([below](#from-the-phone)). Expanded, it shows each bud's battery and where it
 is (a dot marks the primary bud), the noise control modes to tap, and two
 settings, both remembered:
 
@@ -182,6 +185,26 @@ the case and try again. A transfer that stalls for a minute is
 withdrawn; one cut by a dropped connection carries on where it was once
 they're back. Another calvados host (the phone) shows the progress, and
 won't start an update of its own meanwhile.
+
+### From the phone
+
+The same update, from the notification:
+
+1. When Apple has newer firmware, the header says so ("Firmware 7.1.21 ·
+   9.0.348 available") and the expanded notification has an **Update
+   firmware** button.
+2. Put both buds in the case and plug the case in, lid open (step 2
+   above), then tap it. If something isn't right, the header says why
+   for a few seconds ("Put both AirPods in the case, and keep the lid
+   open").
+3. The header follows the update: "Downloading firmware…" (from Apple,
+   kept in the app's cache), "Updating firmware… 40 %", until "Staged:
+   close the lid". **Cancel update** withdraws it.
+4. Close the lid and wait, then open it (steps 4 and 5 above): the header
+   says "Updated to 9.0.348".
+
+While another calvados host updates the AirPods, the phone's header shows
+that one's progress, with its address, and offers no button.
 
 The research tools (curl, unzip, b3sum, Python with dbus-python and
 PyGObject, calvados stopped, the AirPods' address from `bluetoothctl
