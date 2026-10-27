@@ -52,8 +52,9 @@ manager), CI has it as the secrets `ANDROID_KEYSTORE` (base64) and
 `cargo xposed` uses the same variables (without them, a debug key it
 generates in `target/`). Store and key share the password (cargo-apk2 passes
 one to `apksigner`): `keytool -genkeypair -storetype PKCS12 -keystore …
--alias calvados -keyalg RSA -keysize 4096 -validity 10000 -storepass …
--dname "CN=Calvados"`. A new key changes the apps' signature: uninstall the
+-alias calvados -keyalg EC -groupname secp256r1 -sigalg SHA256withECDSA
+-validity 10000 -storepass … -keypass … -dname "CN=Calvados"` (EC: APK
+signing takes it since API 24, the app needs 31). A new key changes the apps' signature: uninstall the
 old builds first.
 
 Versions come only from git tags (`tools/version.sh`): tag `v0.1.1` is
