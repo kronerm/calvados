@@ -194,11 +194,13 @@ POSH SECURE_SENSOR GATT`] index the registration calls.
   the type, 0–0x26. Every message type, the handshake (protocol version 6
   at most here), the information tags, the offer → pull → stage → apply
   flow and the personalization asset: [uarp.md](uarp.md).
-- **Personalization (Image4)**: every BuildManifest entry has `Personalize =
-  True`, and `rkof` has `UARPL3Personalization.c` ("Personalization Required:
-  %s", "Personalized Manifest"; strings `0x1e1dc1`–`0x1e1f36`). A host has to
-  get a ticket for the pods' chip, ECID and nonce from Apple's signing
-  server (TSS), as for an iPhone restore; Apple signs only current builds.
+- **Personalization (Image4)**: the BuildManifest marks every entry
+  `Personalize = True`, but the buds' images come with an Apple-signed
+  manifest that binds no ECID and no nonce, valid for every pair of the
+  model; only the case's UWB firmware (`R1FW`) asks for a ticket (TSS
+  prefix `Rap`). The `AudioAP1` request format, if ever needed, is
+  libtatsu's `tss_request_add_durant_tags`. Safety, A/B slots and the
+  steps: [update.md](update.md).
 - The package is a whole image, not a delta (`RestoreBehavior = Erase`, every
   image present), and Apple's catalog has only the current build, so a host
   that can update one old version can update any.
