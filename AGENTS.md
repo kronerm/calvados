@@ -78,6 +78,16 @@ main as the rolling pre-release `testing`: a release is
 - `aacp/` — one module per opcode: `OPCODE` constant + nom parser. `aacp::Packet`
   is the single decoded-packet enum; unknown or undecoded payloads become
   `Packet::Opaque`. Byte enums derive `num_enum::TryFromPrimitive`.
+- `aacp/control_command.rs` — also `Cycle`, the modes press and hold
+  cycles through: control `0x1A`, a bitmask (`ListeningModes`: off `01`,
+  ANC `02`, transparency `04`, adaptive `08`; value `[mask, 0, 0, 0]`), two
+  modes at least (the pods require it). The pods never reported it to us,
+  not even in the startup burst, so a host can only set it
+  (`Engine::set_cycle`, shown as set); `Effect::LearnedCycle` persists the
+  last one per pods, handed back by `Engine::stored_cycle` on connect. A
+  report would win. A firmware update resets it on the pods, so a changed
+  firmware version forgets it (`LearnedCycle` with `None`). Off is never
+  offered (`AllowOffOption`, `0x34`, isn't set).
 - `protocol.rs` — framing (`Decoder` for byte streams, `parse_datagram` for
   message-preserving reads; both share `step()`), and command builders.
 - `state.rs` — `DeviceState`, display-only state accumulated from packets.
@@ -93,7 +103,10 @@ main as the rolling pre-release `testing`: a release is
   the engine.
 - `display.rs` — what both platforms show, so they read the same: `Buds`
   (per component: level, charging, last known, place, primary), the
-  ownership label, and the noise modes' names (D-Bus `NoiseMode`, the Android actions).
+  ownership label, the noise modes' names (D-Bus `NoiseMode`, the Android
+  actions), and the cycle's: its names (D-Bus `Cycle`, the CLI, both stores), a
+  tile's `CycleMark` and `toggle_cycle` (from all three while unknown,
+  never below two).
 - `ble.rs` — the proximity pairing advertisement: IRK resolution, the lid
   and in-case bits (the lid bit holds only from a bud in the case), and the case's level from its encrypted last 16 bytes
   (AES-128 decrypted with the pods' encryption key, as sent; byte 3, the
@@ -279,7 +292,10 @@ power-on (`LinkChange`). Its length caps at 255, i.e. 15 events.
   Linux panel's batteries, noise tiles and settings rows), filled by view
   id. There's no generated `R` class, so ids come from
   `Resources.getIdentifier`. Tiles and rows fire service intents
-  (`NOISE:<mode>`, `AUTO_SWITCH`, `AUTO_CONNECT`). The header's subtext is
+  (`NOISE:<mode>`, `AUTO_SWITCH`, `AUTO_CONNECT`); a tile's cycle dot is
+  its own view over the tile's corner (a `FrameLayout`, adding no height)
+  with its own intent, `CYCLE:<mode>`. The cycle is stored in the
+  preference `cycle:<MAC>`. The header's subtext is
   one line (`header`): this phone's update (a refusal included)
   (`display::update`), else a peer's (`display::peer_update`), else the
   firmware and the newer release. The update's start and cancel are a
@@ -308,8 +324,9 @@ power-on (`LinkChange`). Its length caps at 255, i.e. 15 events.
 - `bluez.rs` — Apple DID record, finding the pods, L2CAP, A2DP.
 - `dbus.rs` — the `dev.kroner.Calvados1` object and its `Status`, published
   through a `watch` channel; a task emits `PropertiesChanged` per changed
-  property. Writes go to the loop as `Input`s; a setting's setter waits
-  until the status shows it, so zbus' own changed signal is current.
+  property. Writes go to the loop as `Input`s; a setting's setter (and
+  `Cycle`'s) waits until the status shows it, so zbus' own changed signal
+  is current.
 - `mpris.rs` — pause/resume of MPRIS players on one ordered worker task.
 - `presence.rs` — reports Apple advertisers to the loop (`Input::Nearby`;
   `Engine::nearby` decides), since the pods page only the host that last
@@ -354,7 +371,8 @@ power-on (`LinkChange`). Its length caps at 255, i.e. 15 events.
   the daemon's own D-Bus object (no daemon logic), for shells without
   D-Bus. `watch` prints JSON lines on `PropertiesChanged` and on the bus
   name's owner changes: the D-Bus properties, as data (the plugin does its
-  own labels).
+  own labels). `set cycle toggle <mode>` is `display::toggle_cycle`
+  against the daemon's `Cycle`, for the panel's dots.
 - `dist/noctalia/` — Noctalia (v5, Luau) plugin, installed to
   `/usr/share/calvados/noctalia`: a `[[service]]` holds one `runStream` of
   `calvados watch` and republishes it via `noctalia.state`; the bar widget
@@ -370,7 +388,8 @@ power-on (`LinkChange`). Its length caps at 255, i.e. 15 events.
   (its log names the range when it refuses a plugin), while the published API
   definitions run ahead (container tooltips are API 32). The plugin needs 24
   (`runAsync` with an argv table).
-- `state.rs` — the state directory and the two remembered settings
+- `state.rs` — the state directory, the press-and-hold cycle last set
+  (`<address>.cycle`, the modes' names), and the two remembered settings
   (`protocol::settings`; files `auto_switch`/`auto_connect`, `on`/`off`,
   default on), the same two as the Android notification's Switch and
   Connect buttons (preferences under the same keys).
@@ -434,6 +453,11 @@ texts are written twice. A change to one side needs the other:
   `notification_expanded.xml` and `notification.rs` `MODES`);
 - the settings' titles and descriptions ("this computer" / "this phone");
 - the noise heading ("· Off", "· unknown yet");
+- the cycle dots (`format.cycleDot`/`cycleToggles`, `notification.rs`
+  `cycle_dot`): Tabler `point-filled` when in, `point` when out, the
+  filled one at 0.4 while unknown, in the tile's text color; the dot's
+  click toggles the mode, the tile's sets it. Noctalia takes
+  `onRightClick` only on buttons, so a tile has no right-click;
 - the firmware ("Firmware " + `display::firmware`: the panel's last line,
   `format.firmware`; the notification's header subtext,
   `notification.rs` `header`, since the expanded layout has no

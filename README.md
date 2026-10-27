@@ -14,6 +14,8 @@ are a tap away.
   the case, playing stays on the device's own speakers.
 - **Status and controls:** battery, where each bud is, noise control and
   the firmware, in the phone's notification and a Linux status bar panel.
+  The dot in a noise tile's corner picks the modes pressing and holding a
+  stem cycles through.
 - **Firmware updates** (experimental), from either device.
 
 ## Requirements
@@ -122,6 +124,7 @@ bars:
 calvados watch                              # the state as JSON, a line per change
 calvados set auto-switch|auto-connect on|off|toggle
 calvados set noise anc|transparency|adaptive|next
+calvados set cycle anc,transparency,adaptive   # press and hold's modes
 calvados firmware status|update|cancel
 ```
 
