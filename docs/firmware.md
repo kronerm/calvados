@@ -55,6 +55,8 @@ The pods tested with calvados (Observed, over GATT Device Information and
 AACP `0x1D`) are older: model A3048 (the primary at the time), hardware
 `3.36.32`, firmware `71.2256000021000000.6663`, i.e. 7.1. Offsets here are
 from 9A348; the formats checked against those pods are marked Observed.
+UARP names that build: running firmware 7.1.21.0, i.e. 7B21
+(`tools/firmware/uarp_probe.py`, read-only).
 
 ### Version strings
 
@@ -176,7 +178,9 @@ POSH SECURE_SENSOR GATT`] index the registration calls.
 
 ## Firmware update (UARP)
 
-- **Transport**: the GATT characteristic above. UARP registers per
+- **Transport**: the GATT characteristic above, each write and indication
+  prefixed with a fragment header byte (bit 0: last fragment); probing it
+  works from Linux (`tools/firmware/uarp_probe.py`, read-only). UARP registers per
   transport id in a 51-slot registry [`0x84a04`; id list at `0x1c2230`:
   `00`–`11 18`–`1e 2d`–`30 15`]; registration at `0x15418e`–`0x154202`:
   accessory role (a host updating these pods) on ids `0x10 0x11 0x09 0x02`,

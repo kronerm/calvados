@@ -2,8 +2,24 @@
 
 The firmware-update protocol as the pods' side implements it: AirPods Pro 2
 (USB-C), build 9A348, image `rkof` (hashes and tools: [firmware.md](firmware.md)).
-Static analysis; nothing here has been sent to real pods. The transport is
-the GATT characteristic `94110001-6d9b-4225-a4f1-6a4a7f01b0de` (firmware.md).
+Static analysis, except where marked Observed: the handshake and the
+information requests, sent with `tools/firmware/uarp_probe.py` to pods on
+7.1.21 (7B21).
+
+## Transport (Known; Observed on 7B21)
+
+The GATT characteristic `94110001-6d9b-4225-a4f1-6a4a7f01b0de` (write,
+indicate; firmware.md), which BlueZ serves over the classic link too. Every
+write and every indication starts with a **one-byte fragment header**,
+bit 0 set on a message's last fragment; the rest is appended to the
+message [rkof 0x69fba–0x6a03c, the service's write callback at
+`0x1c1428[3]`]. Without the header nothing is delivered: a first byte
+without bit 0 just starts buffering.
+
+Observed (7B21): version discovery proposing 9 answers **4** (9A348 would
+answer 6). Tags: 1 `Apple`, 2 `AirPods Pro`, 3 a bud's serial, 4
+`X2290/MPMP/MXXC1/*/*`, 5 running `7.1.21.0`, 6 staged `0.0.0.0` (none),
+7 and 8 zero, 9 empty. Replies number their own message ids from 1.
 
 All addresses `[rkof 0x…]`. **Known** = read from code; **Inferred** = meaning guessed
 (names are not in the binary: no msg-type name strings exist; names below follow
