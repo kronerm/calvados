@@ -167,6 +167,8 @@ pub struct Release {
     pub version: ExactVersion,
     /// E.g. `9A348`.
     pub build: String,
+    /// The asset's zip (`AssetData/Firmware.acsw/firmware.uarp` inside).
+    pub package: Option<String>,
 }
 
 impl Release {
@@ -225,7 +227,11 @@ pub fn parse_catalog(xml: &[u8]) -> Option<Release> {
         .filter_map(|asset| {
             let asset = asset.as_dictionary()?;
             let number = |key| asset.get(key)?.as_unsigned_integer()?.try_into().ok();
+            let text = |key| asset.get(key)?.as_string();
             Some(Release {
+                package: text("__BaseURL")
+                    .zip(text("__RelativePath"))
+                    .map(|(base, path)| format!("{base}{path}")),
                 version: ExactVersion {
                     version: Version {
                         major: number("FirmwareVersionMajor")?,
@@ -233,7 +239,7 @@ pub fn parse_catalog(xml: &[u8]) -> Option<Release> {
                     },
                     release: number("FirmwareVersionRelease")?,
                 },
-                build: asset.get("Build")?.as_string()?.to_owned(),
+                build: text("Build")?.to_owned(),
             })
         })
         .max_by_key(|release| release.version)
@@ -269,6 +275,7 @@ mod tests {
         let release = Release {
             version: "7.1.22".parse().unwrap(),
             build: "7B22".into(),
+            package: None,
         };
         let mut running = Firmware {
             reported: Some("71.2256000021000000.6663".into()),
@@ -352,6 +359,10 @@ mod tests {
 			<integer>348</integer>
 			<key>_IsZipStreamable</key>
 			<true/>
+			<key>__BaseURL</key>
+			<string>https://updates.cdn-apple.com/MobileAssets2026/patches/082-16653/28D7B0C9-CA9C-4B3C-A8EE-41715E2763E6/</string>
+			<key>__RelativePath</key>
+			<string>com_apple_MobileAsset_UARP_A3048/5d0896d881bbc7e321f89b4ada11b31cf8b5569c.zip</string>
 			<key>_Measurement</key>
 			<data>
 			H8K8Ux39hMcp8/BfHdUxejV7SV8=
@@ -362,6 +373,12 @@ mod tests {
 </plist>"#;
         let release = parse_catalog(xml).unwrap();
         assert_eq!(release.to_string(), "9.0.348 (9A348)");
+        assert_eq!(
+            release.package.as_deref(),
+            Some(
+                "https://updates.cdn-apple.com/MobileAssets2026/patches/082-16653/28D7B0C9-CA9C-4B3C-A8EE-41715E2763E6/com_apple_MobileAsset_UARP_A3048/5d0896d881bbc7e321f89b4ada11b31cf8b5569c.zip"
+            )
+        );
         let reported = |raw: &str| Firmware {
             reported: Some(raw.into()),
             ..Firmware::default()
