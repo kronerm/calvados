@@ -19,7 +19,7 @@ use nom::{IResult, Parser as _, combinator::map};
 
 use crate::MacAddress;
 
-pub use audio_source::{AudioSource, AudioSourceType};
+pub use audio_source::{Activity, AudioSource};
 pub use battery_info::{BatteryComponent, BatteryInfo, ChargingStatus};
 pub use connection_history::{ConnectionHistory, HistoryEvent, LinkChange};
 pub use control_command::{ControlCommand, ControlId, NoiseControlMode};

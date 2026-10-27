@@ -8,8 +8,8 @@ use std::time::{Duration, Instant};
 
 use crate::MacAddress;
 use crate::aacp::{
-    AudioSource, AudioSourceType, ControlCommand, ControlId, DeviceRole, EarDetection, EarStatus,
-    KeyType, NoiseControlMode, Packet, Routing, RoutingResponse,
+    Activity, AudioSource, ControlCommand, ControlId, DeviceRole, EarDetection, EarStatus, KeyType,
+    NoiseControlMode, Packet, Routing, RoutingResponse,
 };
 use crate::ble;
 use crate::protocol::{
@@ -49,6 +49,17 @@ pub enum Ownership {
     /// We hold the audio: the firmware confirmed it, we're streaming, or
     /// we're the only host. Leaving it drops any ear pause with it.
     Owning(Playback),
+}
+
+/// What the pods last said about who owns the connection. They tell a host
+/// only when the owner changes (the last host to write `OwnsConnection = 1`
+/// wins at once; writing 0 hands it to the other: docs/firmware.md), so a
+/// claim while they count us as owner gets no answer.
+#[derive(Debug, Clone, Copy, Default)]
+enum PodsOwner {
+    Us,
+    #[default]
+    NotUs,
 }
 
 /// The handoff from the other hosts, while claiming.
@@ -156,6 +167,7 @@ pub struct Engine {
     /// The session's state; after it, kept for display and the next one.
     state: DeviceState,
     ownership: Ownership,
+    pods_owner: PodsOwner,
     /// Where this session's startup stands, for [`Engine::check_state_burst`].
     startup: Startup,
     /// When [`Engine::check_state_burst`] runs next.
@@ -457,8 +469,14 @@ impl Engine {
             }) => {
                 tracing::info!(owns = owns != 0, was = %self.ownership, "firmware ownership");
                 let reaction = match owns {
-                    0 => self.release(),
-                    _ => self.confirm(now),
+                    0 => {
+                        self.pods_owner = PodsOwner::NotUs;
+                        self.release()
+                    }
+                    _ => {
+                        self.pods_owner = PodsOwner::Us;
+                        self.confirm(now)
+                    }
                 };
                 return learned.into_iter().chain(reaction).collect();
             }
@@ -604,7 +622,7 @@ impl Engine {
             return Vec::new();
         }
         match self.state.audio_source {
-            Some(source) if !matches!(source.kind, AudioSourceType::Call) => {
+            Some(source) if !source.kind.contains(Activity::CALL) => {
                 tracing::info!(?source, "auto-take: media started here");
                 self.take()
             }
@@ -665,6 +683,14 @@ impl Engine {
         if handoff.is_empty() {
             tracing::info!("no other host known yet: the handoff waits for one");
             return vec![Effect::RouteAudio];
+        }
+        // Still the owner for the pods (another host streamed without
+        // claiming): they won't confirm, so route now; the handoff still
+        // pauses the other host.
+        if let PodsOwner::Us = self.pods_owner {
+            tracing::info!("the pods count us as owner already: routing now");
+            self.own();
+            return handoff.into_iter().chain([Effect::RouteAudio]).collect();
         }
         handoff
     }
@@ -759,7 +785,7 @@ impl Engine {
         let (Some(local), Some(source)) = (self.local_mac.get(), self.state.audio_source) else {
             return false;
         };
-        source.mac == local && matches!(source.kind, AudioSourceType::Media)
+        source.mac == local && source.kind.contains(Activity::MEDIA)
     }
 
     /// Mirror the firmware's reported audio source in the displayed ownership.
@@ -775,11 +801,9 @@ impl Engine {
             self.own();
             return Vec::new();
         }
-        match (source.kind, self.ownership) {
-            (AudioSourceType::None, _) | (_, Ownership::Idle | Ownership::Claiming(_)) => {
-                Vec::new()
-            }
-            (_, Ownership::Owning(_)) => {
+        match (source.kind.is_playing(), self.ownership) {
+            (false, _) | (_, Ownership::Idle | Ownership::Claiming(_)) => Vec::new(),
+            (true, Ownership::Owning(_)) => {
                 tracing::info!(peer = %source.mac, "another device took the audio");
                 self.ownership = Ownership::Idle;
                 vec![Effect::ReleaseAudio]
@@ -1054,7 +1078,7 @@ mod tests {
         e.handle(
             Packet::AudioSource(AudioSource {
                 mac: mac(LOCAL),
-                kind: AudioSourceType::Media,
+                kind: Activity::MEDIA,
             }),
             now(),
         );
@@ -1069,7 +1093,7 @@ mod tests {
         feed(&mut e, CONNECTED_DEVICES);
         e.call_started();
         feed(&mut e, &owns_connection(true));
-        playing(&mut e, AudioSourceType::Call);
+        playing(&mut e, Activity::CALL);
         let at = e.next_wake().expect("the startup check at least");
         assert!(
             !e.tick(at + Duration::from_secs(2))
@@ -1137,18 +1161,18 @@ mod tests {
     fn audio_source_naming_us_counts_as_owning() {
         let mut e = engine();
         let source = |mac, kind| Packet::AudioSource(AudioSource { mac, kind });
-        e.handle(source(mac(PEER), AudioSourceType::Media), now());
+        e.handle(source(mac(PEER), Activity::MEDIA), now());
         assert_eq!(e.ownership(), Ownership::Idle);
-        e.handle(source(mac(LOCAL), AudioSourceType::None), now());
+        e.handle(source(mac(LOCAL), Activity::empty()), now());
         assert_eq!(e.ownership(), Ownership::Idle);
         assert!(
-            e.handle(source(mac(LOCAL), AudioSourceType::Media), now())
+            e.handle(source(mac(LOCAL), Activity::MEDIA), now())
                 .is_empty()
         );
         assert_eq!(e.ownership(), Ownership::Owning(Playback::AsIs));
         // Another device streaming: the pods switched to it, we lost the audio.
         assert_eq!(
-            e.handle(source(mac(PEER), AudioSourceType::Call), now()),
+            e.handle(source(mac(PEER), Activity::CALL), now()),
             vec![Effect::ReleaseAudio]
         );
         assert_eq!(e.ownership(), Ownership::Idle);
@@ -1163,7 +1187,7 @@ mod tests {
         e.handle(
             Packet::AudioSource(AudioSource {
                 mac: mac(PEER),
-                kind: AudioSourceType::Media,
+                kind: Activity::MEDIA,
             }),
             now(),
         );
@@ -1174,7 +1198,7 @@ mod tests {
         Packet::EarDetection(EarDetection { primary, secondary })
     }
 
-    fn playing(e: &mut Engine, kind: AudioSourceType) {
+    fn playing(e: &mut Engine, kind: Activity) {
         e.handle(
             Packet::AudioSource(AudioSource {
                 mac: mac(LOCAL),
@@ -1190,7 +1214,7 @@ mod tests {
     fn bud_out_pauses_and_back_in_resumes() {
         let mut e = engine();
         e.handle(ears(InEar, InEar), now());
-        playing(&mut e, AudioSourceType::Media);
+        playing(&mut e, Activity::MEDIA);
         assert_eq!(e.handle(ears(InEar, NotInEar), now()), vec![Effect::Pause]);
         assert_eq!(e.handle(ears(InEar, InEar), now()), vec![Effect::Resume]);
         // Still playing here: the next removal pauses again.
@@ -1201,13 +1225,13 @@ mod tests {
     fn another_device_streaming_forgets_an_ear_pause() {
         let mut e = engine();
         e.handle(ears(InEar, InEar), now());
-        playing(&mut e, AudioSourceType::Media);
+        playing(&mut e, Activity::MEDIA);
         assert_eq!(e.handle(ears(InEar, NotInEar), now()), vec![Effect::Pause]);
         assert_eq!(e.ownership(), Ownership::Owning(Playback::EarPaused));
         e.handle(
             Packet::AudioSource(AudioSource {
                 mac: mac(PEER),
-                kind: AudioSourceType::Media,
+                kind: Activity::MEDIA,
             }),
             now(),
         );
@@ -1549,7 +1573,7 @@ mod tests {
         e.handle(
             Packet::AudioSource(AudioSource {
                 mac: mac(PEER),
-                kind: AudioSourceType::Call,
+                kind: Activity::CALL,
             }),
             now(),
         );
@@ -1563,9 +1587,11 @@ mod tests {
         let mut e = engine();
         feed(&mut e, CONNECTED_DEVICES);
         assert!(e.media_started().is_empty(), "nothing known yet");
-        e.handle(source(mac(PEER), AudioSourceType::Call), now());
+        e.handle(source(mac(PEER), Activity::CALL), now());
         assert!(e.media_started().is_empty(), "the peer is on a call");
-        e.handle(source(mac(PEER), AudioSourceType::Media), now());
+        e.handle(source(mac(PEER), Activity::CALL | Activity::MEDIA), now());
+        assert!(e.media_started().is_empty(), "a call, with media too");
+        e.handle(source(mac(PEER), Activity::MEDIA), now());
         assert_eq!(sends(&e.media_started()), 4, "ownership + 3 handoff frames");
         assert_eq!(sends(&e.media_started()), 4, "unconfirmed: again");
         feed(&mut e, &owns_connection(true));
@@ -1573,9 +1599,27 @@ mod tests {
     }
 
     #[test]
+    fn a_take_the_pods_wont_answer_routes_at_once() {
+        // The peer streams without claiming: we let go, the pods still count
+        // us as owner, and our next claim changes nothing for them.
+        let source = |mac, kind| Packet::AudioSource(AudioSource { mac, kind });
+        let mut e = engine();
+        feed(&mut e, CONNECTED_DEVICES);
+        e.handle(source(mac(PEER), Activity::MEDIA), now());
+        e.media_started();
+        feed(&mut e, &owns_connection(true));
+        let lost = e.handle(source(mac(PEER), Activity::MEDIA), now());
+        assert!(matches!(lost[..], [Effect::ReleaseAudio]));
+        let take = e.media_started();
+        assert_eq!(sends(&take), 4, "the handoff still pauses the peer");
+        assert!(take.iter().any(|e| matches!(e, Effect::RouteAudio)));
+        assert!(matches!(e.ownership, Ownership::Owning(_)));
+    }
+
+    #[test]
     fn release_forgets_an_ear_pause() {
         let mut e = engine();
-        playing(&mut e, AudioSourceType::Media);
+        playing(&mut e, Activity::MEDIA);
         e.handle(ears(EarStatus::InEar, EarStatus::InEar), now());
         assert_eq!(
             e.handle(ears(EarStatus::InEar, EarStatus::NotInEar), now()),
@@ -1592,7 +1636,7 @@ mod tests {
     fn both_out_pauses_without_resume() {
         let mut e = engine();
         e.handle(ears(InEar, InEar), now());
-        playing(&mut e, AudioSourceType::Media);
+        playing(&mut e, Activity::MEDIA);
         assert_eq!(e.handle(ears(InEar, NotInEar), now()), vec![Effect::Pause]);
         assert!(e.handle(ears(InCase, NotInEar), now()).is_empty());
         assert!(e.handle(ears(InEar, InEar), now()).is_empty());
@@ -1607,7 +1651,7 @@ mod tests {
             "nothing playing"
         );
         e.handle(ears(InEar, InEar), now());
-        playing(&mut e, AudioSourceType::Call);
+        playing(&mut e, Activity::CALL);
         assert!(
             e.handle(ears(InEar, NotInEar), now()).is_empty(),
             "calls are not paused"
@@ -1616,7 +1660,7 @@ mod tests {
         e.handle(
             Packet::AudioSource(AudioSource {
                 mac: mac(PEER),
-                kind: AudioSourceType::Media,
+                kind: Activity::MEDIA,
             }),
             now(),
         );

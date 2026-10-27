@@ -278,7 +278,7 @@ impl Decoder {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::aacp::{ControlCommand, EarDetection, EarStatus, Opaque, Routing};
+    use crate::aacp::{Activity, ControlCommand, EarDetection, EarStatus, Opaque, Routing};
 
     const EAR_DETECTION: &[u8] = &[0x04, 0x00, 0x04, 0x00, 0x06, 0x00, 0x00, 0x01];
     const CONNECTED_DEVICES: &[u8] = &[
@@ -464,6 +464,15 @@ mod tests {
         assert!(matches!(
             Decoder::default().push(&ownership_to_false()).as_slice(),
             [Packet::RoutingResponse(r)] if matches!(r.kind, Routing::YieldRequest)
+        ));
+    }
+
+    #[test]
+    fn audio_source_activity_is_a_mask() {
+        let frame = [&DATA_MAGIC[..], &[0x0E, 0x00, 1, 2, 3, 4, 5, 6, 0x03]].concat();
+        assert!(matches!(
+            Decoder::default().push(&frame).as_slice(),
+            [Packet::AudioSource(s)] if s.kind == Activity::CALL | Activity::MEDIA
         ));
     }
 
