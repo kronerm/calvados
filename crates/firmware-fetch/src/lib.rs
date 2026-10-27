@@ -90,8 +90,8 @@ impl Client {
                     tracing::info!(%model, %release, "firmware catalog");
                     return Some(release);
                 }
-                Ok(None) => tracing::debug!(%model, "firmware catalog: no release in the answer"),
-                Err(e) => tracing::debug!(%model, "firmware catalog: {e}"),
+                Ok(None) => tracing::info!(%model, "firmware catalog: no release in the answer"),
+                Err(e) => tracing::info!(%model, "firmware catalog: {e:#}"),
             }
         }
         tracing::info!(?models, "firmware catalog: no answer");
