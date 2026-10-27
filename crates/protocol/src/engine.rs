@@ -51,6 +51,17 @@ pub enum Ownership {
     Owning(Playback),
 }
 
+/// What plays on this host, as the platform last reported it (a call over
+/// media). Its starts take the audio; a bud going into an ear while it plays
+/// can too ([`Engine::ear_take`]).
+#[derive(Debug, Clone, Copy, Default)]
+pub enum LocalAudio {
+    #[default]
+    Silent,
+    Media,
+    Call,
+}
+
 /// What the pods last said about who owns the connection. They tell a host
 /// only when the owner changes (the last host to write `OwnsConnection = 1`
 /// wins at once; writing 0 hands it to the other: docs/firmware.md), so a
@@ -173,6 +184,7 @@ pub struct Engine {
     /// When [`Engine::check_state_burst`] runs next.
     burst_check: Option<Instant>,
     stream: Stream,
+    local_audio: LocalAudio,
 }
 
 /// The AACP session.
@@ -308,6 +320,7 @@ impl Engine {
                 false => DeviceState::default(),
             },
             burst_check: Some(now + STATE_BURST_WAIT),
+            local_audio: self.local_audio,
             ..Self::new(known, self.settings)
         };
         vec![Effect::Send(handshake())]
@@ -516,7 +529,20 @@ impl Engine {
                     true => self.release(),
                     false => Vec::new(),
                 };
-                media.into_iter().chain(alone).chain(put_away).collect()
+                let in_ear = |ears: EarDetection| {
+                    matches!(ears.primary, EarStatus::InEar)
+                        || matches!(ears.secondary, EarStatus::InEar)
+                };
+                let worn = match !previous_ears.is_some_and(in_ear) && in_ear(ears) {
+                    true => self.ear_take(),
+                    false => Vec::new(),
+                };
+                media
+                    .into_iter()
+                    .chain(alone)
+                    .chain(put_away)
+                    .chain(worn)
+                    .collect()
             }
             // Only when the hosts change: a list (a host joined) or a host
             // leaving, not the per-device updates of a burst.
@@ -621,10 +647,23 @@ impl Engine {
         }
     }
 
+    /// What plays here now; its starts take the audio (a call's also over
+    /// media already playing).
+    pub fn local_audio(&mut self, audio: LocalAudio) -> Vec<Effect> {
+        let before = std::mem::replace(&mut self.local_audio, audio);
+        match (before, audio) {
+            (LocalAudio::Call, _)
+            | (_, LocalAudio::Silent)
+            | (LocalAudio::Media, LocalAudio::Media) => Vec::new(),
+            (_, LocalAudio::Call) => self.call_started(),
+            (LocalAudio::Silent, LocalAudio::Media) => self.media_started(),
+        }
+    }
+
     /// Media started playing on this host: take the audio, like Apple's
     /// automatic switching. Not while the other host is on a call, nor before
     /// the pods have said what's playing (a session without the state burst).
-    pub fn media_started(&mut self) -> Vec<Effect> {
+    fn media_started(&mut self) -> Vec<Effect> {
         if !self.may_switch() || self.buds_in_case() {
             return Vec::new();
         }
@@ -645,12 +684,43 @@ impl Engine {
 
     /// A call started on this host (answered or placed): take the audio. A
     /// call wins over whatever the other host plays.
-    pub fn call_started(&mut self) -> Vec<Effect> {
+    fn call_started(&mut self) -> Vec<Effect> {
         if !self.may_switch() || self.buds_in_case() {
             return Vec::new();
         }
         tracing::info!("auto-take: call started here");
         self.take()
+    }
+
+    /// A bud went into an ear while something plays here and we don't hold
+    /// the audio: take it, by what plays on each host. A call wins over
+    /// media; with the same on both, the host the pods count as owner keeps
+    /// it, so exactly one host takes (two racing is when the pods rebooted).
+    fn ear_take(&mut self) -> Vec<Effect> {
+        if !self.may_switch() {
+            return Vec::new();
+        }
+        let (Some(local), Some(source)) = (self.local_mac.get(), self.state.audio_source) else {
+            return Vec::new();
+        };
+        let theirs = match source.mac == local {
+            true => LocalAudio::Silent,
+            false if source.kind.contains(Activity::CALL) => LocalAudio::Call,
+            false if source.kind.contains(Activity::MEDIA) => LocalAudio::Media,
+            false => LocalAudio::Silent,
+        };
+        let take = match (self.local_audio, theirs) {
+            (LocalAudio::Silent, _) | (LocalAudio::Media, LocalAudio::Call) => false,
+            (LocalAudio::Call, LocalAudio::Media) | (_, LocalAudio::Silent) => true,
+            (LocalAudio::Media, LocalAudio::Media) | (LocalAudio::Call, LocalAudio::Call) => {
+                matches!(self.pods_owner, PodsOwner::Us)
+            }
+        };
+        tracing::info!(here = ?self.local_audio, there = ?theirs, take, "a bud went into an ear");
+        match take {
+            true => self.take(),
+            false => Vec::new(),
+        }
     }
 
     /// Both buds in the case: nobody would hear them, so audio started here
@@ -1613,6 +1683,57 @@ mod tests {
         assert_eq!(sends(&e.media_started()), 4, "unconfirmed: again");
         feed(&mut e, &owns_connection(true));
         assert!(e.media_started().is_empty(), "confirmed");
+    }
+
+    #[test]
+    fn local_audio_takes_on_its_starts() {
+        let source = |mac, kind| Packet::AudioSource(AudioSource { mac, kind });
+        let mut e = engine();
+        feed(&mut e, CONNECTED_DEVICES);
+        e.handle(source(mac(PEER), Activity::MEDIA), now());
+        assert_eq!(sends(&e.local_audio(LocalAudio::Media)), 4);
+        assert!(e.local_audio(LocalAudio::Media).is_empty(), "still playing");
+        assert_eq!(
+            sends(&e.local_audio(LocalAudio::Call)),
+            4,
+            "a call over media"
+        );
+        assert!(
+            e.local_audio(LocalAudio::Media).is_empty(),
+            "the call ended"
+        );
+        assert!(e.local_audio(LocalAudio::Silent).is_empty());
+    }
+
+    /// Something plays here and on the peer, with the buds in the case;
+    /// then a bud goes into an ear: does this host take?
+    fn ear_takes(here: LocalAudio, there: Activity, pods_owner: bool) -> bool {
+        let source = |mac, kind| Packet::AudioSource(AudioSource { mac, kind });
+        let mut e = engine();
+        feed(&mut e, CONNECTED_DEVICES);
+        if pods_owner {
+            feed(&mut e, &owns_connection(true));
+            e.handle(source(mac(PEER), Activity::MEDIA), now()); // lost it, bare
+        }
+        e.handle(source(mac(PEER), there), now());
+        e.handle(ears(InCase, InCase), now());
+        e.local_audio(here);
+        e.handle(ears(InEar, InCase), now())
+            .iter()
+            .any(|e| matches!(e, Effect::Send(_)))
+    }
+
+    #[test]
+    fn a_bud_worn_takes_by_what_plays_on_each_host() {
+        use LocalAudio::{Call, Media, Silent};
+        let (none, media, call) = (Activity::empty(), Activity::MEDIA, Activity::CALL);
+        assert!(!ear_takes(Silent, none, false), "nothing plays here");
+        assert!(ear_takes(Media, none, false), "nothing plays there");
+        assert!(!ear_takes(Media, call, false), "their call wins");
+        assert!(ear_takes(Call, media, false), "our call wins");
+        assert!(!ear_takes(Media, media, false), "media on both: theirs");
+        assert!(ear_takes(Media, media, true), "media on both: ours");
+        assert!(!ear_takes(Call, call, false), "calls on both: theirs");
     }
 
     #[test]

@@ -20,7 +20,7 @@ use futures_util::future::OptionFuture;
 use protocol::MacAddress;
 use protocol::aacp::{NoiseControlMode, Packet};
 use protocol::connection::AIRPODS_PSM;
-use protocol::engine::{Effect, Engine};
+use protocol::engine::{Effect, Engine, LocalAudio};
 use protocol::protocol::parse_datagram;
 use protocol::settings::{Setting, Settings};
 use tokio::signal::unix::{SignalKind, signal};
@@ -216,10 +216,10 @@ async fn run(daemon: &Daemon, mut engine: Engine, inputs: &mut mpsc::UnboundedRe
                     Instant::now(),
                 ),
             },
-            Some(playing) = playback_change(&mut playback) => match playing {
-                true => engine.media_started(),
-                false => Vec::new(),
-            },
+            Some(playing) = playback_change(&mut playback) => engine.local_audio(match playing {
+                true => LocalAudio::Media,
+                false => LocalAudio::Silent,
+            }),
         };
         for effect in effects {
             if let Err(e) = perform(daemon, session.as_ref(), effect).await {

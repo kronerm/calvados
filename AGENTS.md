@@ -375,14 +375,19 @@ texts are written twice. A change to one side needs the other:
 - Relayed routing frames (0x11) carry their length like 0x10 and complete
   at once; as unknown-length frames they waited for the next frame's magic
   on Android (11.5 s in one capture).
-- Automatic switching (`Engine::media_started`): media starting on this host
+- Automatic switching (`Engine::local_audio`): media starting on this host
   while `Idle` takes the audio, like Apple devices: not while the other host
   is on a call (`AudioSource` kind `Call`), nor while no `AudioSource` is
   known, nor while both buds report being in the case
-  (`DeviceState::in_case`; calls too). Both buds going into the case while
+  (`DeviceState::in_case`; calls too). The platforms report what plays
+  (`Engine::local_audio`: silent, media, a call over media) and the engine
+  finds the starts. A bud going into an ear while something plays here and
+  we don't hold the audio takes it too (`Engine::ear_take`): a call wins
+  over media, and with the same on both hosts the one the pods count as
+  owner (`PodsOwner`) takes, so only one does. Both buds going into the case while
   holding the audio releases it (Linux: profile `off`, so the laptop's
   speakers play). Android still routes to the pods by itself, and the pods
-  follow any host that streams. `Engine::call_started` takes for a call regardless. Linux: MPRIS
+  follow any host that streams. A call starting takes regardless of what plays elsewhere. Linux: MPRIS
   `PlaybackStatus` → `Playing` (D-Bus signals). Android: the
   `AudioPlaybackCallback` (`USAGE_MEDIA` starts media, a
   `USAGE_VOICE_COMMUNICATION` playback is a VoIP call) and the phone-state

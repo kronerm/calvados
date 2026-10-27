@@ -11,6 +11,9 @@ are a tap away.
   case nearby, to the phone and the laptop alike, and again if they drop
   while you wear them.
 - **Ear detection:** taking a bud out pauses, putting it back resumes.
+- **Putting them on:** a bud going into an ear while something plays takes
+  the AirPods (a call over the other device's media; with the same on
+  both, the device that had them last).
 - **In the case:** with both buds in the case, playing doesn't take the
   AirPods, and putting both in hands the audio back (on Linux to the
   laptop's speakers; Android keeps them as its audio device by itself).

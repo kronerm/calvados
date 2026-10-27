@@ -15,7 +15,7 @@ use crate::link::{self, BluetoothEvent};
 use crate::notification::Content;
 use crate::proto::MacAddress;
 use crate::proto::display;
-use crate::proto::engine::{Effect, Engine};
+use crate::proto::engine::{Effect, Engine, LocalAudio};
 use crate::proto::protocol::Decoder;
 use crate::proto::settings::{Setting, Settings};
 use crate::{bluetooth, media};
@@ -44,40 +44,31 @@ pub(crate) enum Event {
     Stop,
 }
 
-/// What plays on this phone; its rising edges can take the audio.
+/// What plays on this phone, from the playback callback and the phone state.
 #[derive(Debug, Default)]
-struct LocalAudio {
+struct Playing {
     media: bool,
     voip: bool,
     phone_call: bool,
 }
 
-/// What just started here.
-#[derive(Debug, Clone, Copy)]
-#[cfg_attr(test, derive(PartialEq, Eq))]
-enum Started {
-    Media,
-    Call,
-}
-
-impl LocalAudio {
+impl Playing {
     fn in_call(&self) -> bool {
         self.voip || self.phone_call
     }
 
-    /// Apply `event`; what started with it, a call over media.
-    fn update(&mut self, event: &Event) -> Option<Started> {
-        let (was_media, was_call) = (self.media, self.in_call());
+    /// Apply `event`; what plays now, a call over media, if it was about that.
+    fn update(&mut self, event: &Event) -> Option<LocalAudio> {
         match *event {
             Event::Playback { media, voip } => (self.media, self.voip) = (media, voip),
             Event::PhoneCall(active) => self.phone_call = active,
             _ => return None,
         }
-        match (self.in_call() && !was_call, self.media && !was_media) {
-            (true, _) => Some(Started::Call),
-            (false, true) => Some(Started::Media),
-            (false, false) => None,
-        }
+        Some(match (self.in_call(), self.media) {
+            (true, _) => LocalAudio::Call,
+            (false, true) => LocalAudio::Media,
+            (false, false) => LocalAudio::Silent,
+        })
     }
 }
 
@@ -141,7 +132,7 @@ fn service_main(jvm: JavaVM, events: crossbeam_channel::Receiver<Event>) {
     let mut reconnect_at = Instant::now();
     // Shown notification content, and when it was last posted.
     let mut shown: Option<(Content, Instant)> = None;
-    let mut local_audio = LocalAudio::default();
+    let mut playing = Playing::default();
     // When to (re)post the notification: now, to replace the "Starting…"
     // placeholder, and later for a change held back by NOTIFY_MIN_INTERVAL.
     let mut notify_at = Some(Instant::now());
@@ -177,12 +168,10 @@ fn service_main(jvm: JavaVM, events: crossbeam_channel::Receiver<Event>) {
         };
         let now = Instant::now();
 
-        let started = event.as_ref().and_then(|event| local_audio.update(event));
-        let mut effects = match started {
-            Some(Started::Media) => engine.media_started(),
-            Some(Started::Call) => engine.call_started(),
-            None => Vec::new(),
-        };
+        let mut effects = event
+            .as_ref()
+            .and_then(|event| playing.update(event))
+            .map_or_else(Vec::new, |audio| engine.local_audio(audio));
 
         match event {
             None | Some(Event::Playback { .. } | Event::PhoneCall(_)) => {}
@@ -281,7 +270,7 @@ fn service_main(jvm: JavaVM, events: crossbeam_channel::Receiver<Event>) {
 
         effects.extend(engine.tick(now));
         for effect in effects {
-            if !execute_effect(&conn, effect, local_audio.in_call()) {
+            if !execute_effect(&conn, effect, playing.in_call()) {
                 link::disconnect();
                 engine.disconnected(now);
                 conn = Conn::Disconnected;
@@ -432,20 +421,21 @@ mod tests {
     use super::*;
 
     #[test]
-    fn rising_edges_report_once() {
-        let mut local = LocalAudio::default();
-        let playing = Event::Playback {
+    fn a_call_over_media() {
+        let mut playing = Playing::default();
+        let media = Event::Playback {
             media: true,
             voip: false,
         };
-        assert_eq!(local.update(&playing), Some(Started::Media));
-        assert_eq!(local.update(&playing), None, "still playing");
-        assert_eq!(local.update(&Event::PhoneCall(true)), Some(Started::Call));
-        let voip = Event::Playback {
-            media: true,
-            voip: true,
-        };
-        assert_eq!(local.update(&voip), None, "already in a call");
-        assert_eq!(local.update(&Event::PhoneCall(false)), None);
+        assert!(matches!(playing.update(&media), Some(LocalAudio::Media)));
+        assert!(matches!(
+            playing.update(&Event::PhoneCall(true)),
+            Some(LocalAudio::Call)
+        ));
+        assert!(matches!(
+            playing.update(&Event::PhoneCall(false)),
+            Some(LocalAudio::Media)
+        ));
+        assert!(playing.update(&Event::Stop).is_none());
     }
 }
