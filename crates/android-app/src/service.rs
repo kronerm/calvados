@@ -283,6 +283,10 @@ fn service_main(jvm: JavaVM, events: crossbeam_channel::Receiver<Event>) {
                                     Ok(stored) => engine.stored_firmware(stored),
                                     Err(e) => tracing::warn!("reading the firmware: {e:#}"),
                                 }
+                                match bluetooth::stored_cycle(pods) {
+                                    Ok(stored) => engine.stored_cycle(stored),
+                                    Err(e) => tracing::warn!("reading the cycle: {e:#}"),
+                                }
                             }
                             Err(_) => tracing::warn!(mac, "the pods' address is unusable"),
                         }
@@ -444,6 +448,11 @@ fn execute_effect(conn: &Conn, effect: Effect, in_call: bool) -> bool {
         Effect::LearnedFirmware { pods, firmware } => {
             if let Err(e) = bluetooth::save_firmware(pods, &firmware) {
                 tracing::warn!("storing the firmware: {e:#}");
+            }
+        }
+        Effect::LearnedCycle { pods, cycle } => {
+            if let Err(e) = bluetooth::save_cycle(pods, cycle) {
+                tracing::warn!("storing the press-and-hold cycle: {e:#}");
             }
         }
         Effect::LearnedLocalMac(mac) => {

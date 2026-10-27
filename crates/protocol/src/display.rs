@@ -1,7 +1,9 @@
 //! What the hosts show, shared so the Android notification and Linux's
 //! `calvados watch` read the same: `L 80%👂 · R 🪫9%⚡ · Case 60%`.
 
-use crate::aacp::{BatteryInfo, Bud, ChargingStatus, EarStatus, NoiseControlMode};
+use crate::aacp::{
+    BatteryInfo, Bud, ChargingStatus, Cycle, EarStatus, ListeningModes, NoiseControlMode,
+};
 use crate::engine::Ownership;
 use crate::firmware::{Firmware, Version};
 use crate::state::{DeviceState, PeerUpdate};
@@ -103,6 +105,58 @@ pub fn parse_mode(name: &str) -> Option<NoiseControlMode> {
     .find(|mode| mode_name(Some(*mode)) == name)
 }
 
+/// A noise mode tile's mark for the press-and-hold cycle: a dot, filled
+/// when in, outlined when out, dimmed while unknown (taken as all three).
+#[derive(Debug, Clone, Copy)]
+#[cfg_attr(test, derive(PartialEq, Eq))]
+pub enum CycleMark {
+    /// Not set from here yet: the pods don't report it.
+    Unknown,
+    In,
+    Out,
+}
+
+impl CycleMark {
+    pub fn of(cycle: Option<Cycle>, mode: NoiseControlMode) -> Self {
+        match cycle.map(|cycle| cycle.contains(mode)) {
+            None => Self::Unknown,
+            Some(true) => Self::In,
+            Some(false) => Self::Out,
+        }
+    }
+}
+
+/// `cycle` with `mode` added or removed, from [`Cycle::OFFERED`] while
+/// unknown; `None` when fewer than two modes would be left (that mark
+/// doesn't toggle).
+pub fn toggle_cycle(cycle: Option<Cycle>, mode: NoiseControlMode) -> Option<Cycle> {
+    cycle.unwrap_or(Cycle::OFFERED).toggled(mode)
+}
+
+/// The cycle's modes by [`mode_name`] (`off` too, if the pods have it), as
+/// D-Bus `Cycle`, the CLI and the stores have them; none while unknown.
+pub fn cycle_names(cycle: Option<Cycle>) -> Vec<&'static str> {
+    [
+        NoiseControlMode::Off,
+        NoiseControlMode::NoiseCancellation,
+        NoiseControlMode::Transparency,
+        NoiseControlMode::Adaptive,
+    ]
+    .into_iter()
+    .filter(|mode| cycle.is_some_and(|cycle| cycle.contains(*mode)))
+    .map(|mode| mode_name(Some(mode)))
+    .collect()
+}
+
+/// The cycle of these names; `None` for an unknown name or fewer than two.
+pub fn parse_cycle<'a>(names: impl IntoIterator<Item = &'a str>) -> Option<Cycle> {
+    let modes = names
+        .into_iter()
+        .map(|name| parse_mode(name.trim()).map(ListeningModes::of))
+        .collect::<Option<Vec<_>>>()?;
+    Cycle::new(modes.into_iter().collect())
+}
+
 /// The running firmware as both hosts show it: `7.1.21` when known
 /// exactly (UARP), else from `0x1D` major.minor and the build counter,
 /// `7.1 (6663)`, or the reported string when it isn't in the known format.
@@ -179,6 +233,24 @@ mod tests {
         assert!(!right.primary && right.charging && matches!(right.place, Some(Place::InCase)));
         assert!(case.last_known && case.level == 60);
         assert_eq!(Buds::of(&DeviceState::default()), Buds::default());
+    }
+
+    #[test]
+    fn the_cycle_marks_and_toggles() {
+        use NoiseControlMode::{Adaptive, NoiseCancellation, Transparency};
+        assert_eq!(CycleMark::of(None, Adaptive), CycleMark::Unknown);
+        // Unknown: from all three.
+        let two = toggle_cycle(None, Adaptive);
+        assert_eq!(cycle_names(two), ["anc", "transparency"]);
+        assert_eq!(CycleMark::of(two, Adaptive), CycleMark::Out);
+        assert_eq!(CycleMark::of(two, NoiseCancellation), CycleMark::In);
+        assert_eq!(toggle_cycle(two, Transparency), None);
+        assert_eq!(toggle_cycle(two, Adaptive), Some(Cycle::OFFERED));
+        assert_eq!(parse_cycle("anc, transparency".split(',')), two);
+        assert_eq!(parse_cycle(["anc"]), None);
+        assert_eq!(parse_cycle(["anc", "loud"]), None);
+        assert_eq!(parse_cycle([""]), None);
+        assert!(cycle_names(None).is_empty());
     }
 
     #[test]

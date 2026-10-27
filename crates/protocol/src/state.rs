@@ -5,8 +5,8 @@ use std::fmt;
 use crate::MacAddress;
 use crate::aacp::{
     AudioSource, BatteryComponent, BatteryInfo, Bud, ChargingStatus, ControlCommand, ControlId,
-    DeviceConnectionStatus, DeviceRole, EarDetection, EarStatus, NoiseControlMode, Packet, Routing,
-    RoutingResponse,
+    Cycle, DeviceConnectionStatus, DeviceRole, EarDetection, EarStatus, NoiseControlMode, Packet,
+    Routing, RoutingResponse,
 };
 use crate::firmware::Firmware;
 use crate::update::{News, UpdateStatus};
@@ -27,6 +27,9 @@ pub struct DeviceState {
     /// one out: the pods fall back to Transparency by themselves while a bud
     /// is out, and return to the chosen one when it's back.
     worn_noise_modes: WornNoiseModes,
+    /// The press-and-hold cycle: as the pods report it, else as last set
+    /// (stored per pods). They haven't reported it unasked so far.
+    pub cycle: Option<Cycle>,
     pub audio_source: Option<AudioSource>,
     /// Peer MACs seen this session: the hijack targets.
     pub peers: Vec<MacAddress>,
@@ -167,6 +170,14 @@ impl DeviceState {
                 match self.both_in_ear() {
                     true => self.worn_noise_modes.both = self.noise_mode,
                     false => self.worn_noise_modes.one = self.noise_mode,
+                }
+            }
+            Packet::Control(ControlCommand {
+                id: ControlId::ListeningModeConfigs,
+                value: [modes, ..],
+            }) => {
+                if let Some(cycle) = Cycle::from_bits(*modes) {
+                    self.cycle = Some(cycle);
                 }
             }
             Packet::ConnectedDevices(macs) => {

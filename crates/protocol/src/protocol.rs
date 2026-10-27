@@ -2,7 +2,7 @@
 
 use crate::MacAddress;
 use crate::aacp::frame::{DATA_MAGIC, HANDSHAKE_ACK_MAGIC, HANDSHAKE_MAGIC, data_frame};
-use crate::aacp::{ControlId, HexDump, NoiseControlMode, Packet, smart_routing};
+use crate::aacp::{ControlId, Cycle, HexDump, NoiseControlMode, Packet, smart_routing};
 
 pub use smart_routing::{hijack_request, media_information, news, show_ui};
 
@@ -61,6 +61,14 @@ pub fn set_ownership(owns: bool) -> Vec<u8> {
 
 pub fn set_noise_control(mode: NoiseControlMode) -> Vec<u8> {
     control(ControlId::ListeningMode, [mode as u8, 0, 0, 0])
+}
+
+/// The modes press and hold cycles through.
+pub fn set_cycle(cycle: Cycle) -> Vec<u8> {
+    control(
+        ControlId::ListeningModeConfigs,
+        [cycle.modes().bits(), 0, 0, 0],
+    )
 }
 
 /// The takeover sequence for one peer, sent after [`set_ownership`]`(true)`.

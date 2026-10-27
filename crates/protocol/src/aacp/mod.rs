@@ -22,7 +22,7 @@ use crate::MacAddress;
 pub use audio_source::{Activity, AudioSource};
 pub use battery_info::{BatteryComponent, BatteryInfo, ChargingStatus};
 pub use connection_history::{ConnectionHistory, HistoryEvent, LinkChange};
-pub use control_command::{ControlCommand, ControlId, NoiseControlMode};
+pub use control_command::{ControlCommand, ControlId, Cycle, ListeningModes, NoiseControlMode};
 pub use device_status::{Bud, DeviceConnectionStatus, DeviceRole, PrimaryBud};
 pub use ear_detection::{EarDetection, EarStatus};
 pub use eq_data::EqData;

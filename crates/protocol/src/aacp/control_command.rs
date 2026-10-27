@@ -97,6 +97,65 @@ impl NoiseControlMode {
     }
 }
 
+bitflags::bitflags! {
+    /// Value of [`ControlId::ListeningModeConfigs`].
+    #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+    pub struct ListeningModes: u8 {
+        const OFF = 0x01;
+        const NOISE_CANCELLATION = 0x02;
+        const TRANSPARENCY = 0x04;
+        const ADAPTIVE = 0x08;
+    }
+}
+
+impl ListeningModes {
+    pub fn of(mode: NoiseControlMode) -> Self {
+        match mode {
+            NoiseControlMode::Off => Self::OFF,
+            NoiseControlMode::NoiseCancellation => Self::NOISE_CANCELLATION,
+            NoiseControlMode::Transparency => Self::TRANSPARENCY,
+            NoiseControlMode::Adaptive => Self::ADAPTIVE,
+        }
+    }
+}
+
+/// The modes press and hold cycles through: two at least, as the pods
+/// require.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Cycle(ListeningModes);
+
+impl Cycle {
+    /// The three modes the hosts offer.
+    pub const OFFERED: Self = Self(
+        ListeningModes::NOISE_CANCELLATION
+            .union(ListeningModes::TRANSPARENCY)
+            .union(ListeningModes::ADAPTIVE),
+    );
+
+    /// `None` with fewer than two modes.
+    pub fn new(modes: ListeningModes) -> Option<Self> {
+        (modes.iter().count() >= 2).then_some(Self(modes))
+    }
+
+    /// As the pods report it, unknown bits dropped.
+    pub fn from_bits(bits: u8) -> Option<Self> {
+        Self::new(ListeningModes::from_bits_truncate(bits))
+    }
+
+    pub fn modes(self) -> ListeningModes {
+        self.0
+    }
+
+    pub fn contains(self, mode: NoiseControlMode) -> bool {
+        self.0.contains(ListeningModes::of(mode))
+    }
+
+    /// With `mode` added or removed; `None` when fewer than two would be left.
+    pub fn toggled(self, mode: NoiseControlMode) -> Option<Self> {
+        Self::new(self.0.symmetric_difference(ListeningModes::of(mode)))
+    }
+}
+
 #[derive(Debug, Clone, Copy)]
 #[cfg_attr(test, derive(PartialEq, Eq))]
 pub struct ControlCommand {
@@ -117,6 +176,23 @@ pub fn parse(input: &[u8]) -> IResult<&[u8], ControlCommand> {
 #[cfg(test)]
 mod tests {
     use super::NoiseControlMode::{self, Adaptive, NoiseCancellation, Off, Transparency};
+    use super::{Cycle, ListeningModes};
+
+    #[test]
+    fn a_cycle_keeps_two_modes() {
+        let two = Cycle::OFFERED.toggled(Adaptive).unwrap();
+        assert_eq!(two.modes().bits(), 0x06);
+        assert!(two.contains(Transparency) && !two.contains(Adaptive));
+        assert!(two.toggled(Transparency).is_none());
+        assert_eq!(two.toggled(Adaptive), Some(Cycle::OFFERED));
+        // Off counts: the pods take it once allowed.
+        assert_eq!(
+            two.toggled(Off).and_then(|c| c.toggled(NoiseCancellation)),
+            Cycle::new(ListeningModes::OFF | ListeningModes::TRANSPARENCY)
+        );
+        assert_eq!(Cycle::from_bits(0xF4), None);
+        assert_eq!(Cycle::from_bits(0x0E), Some(Cycle::OFFERED));
+    }
 
     #[test]
     fn modes_cycle_without_off() {

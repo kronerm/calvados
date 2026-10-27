@@ -8,13 +8,13 @@ use std::time::{Duration, Instant};
 
 use crate::MacAddress;
 use crate::aacp::{
-    Activity, AudioSource, Bud, ControlCommand, ControlId, DeviceRole, EarDetection, EarStatus,
-    KeyType, NoiseControlMode, Packet, Routing, RoutingResponse,
+    Activity, AudioSource, Bud, ControlCommand, ControlId, Cycle, DeviceRole, EarDetection,
+    EarStatus, KeyType, NoiseControlMode, Packet, Routing, RoutingResponse,
 };
 use crate::ble;
 use crate::firmware::{ExactVersion, Firmware};
 use crate::protocol::{
-    self, handshake, hijack_sequence, request_notifications, session_setup_frames,
+    self, handshake, hijack_sequence, request_notifications, session_setup_frames, set_cycle,
     set_noise_control, set_ownership,
 };
 use crate::settings::{Setting, Settings};
@@ -149,6 +149,13 @@ pub enum Effect {
     LearnedFirmware {
         pods: MacAddress,
         firmware: Firmware,
+    },
+    /// The press-and-hold cycle was set or reported, or is unknown again
+    /// (`None`: the firmware changed, which resets it): persist it per pods,
+    /// for [`Engine::stored_cycle`].
+    LearnedCycle {
+        pods: MacAddress,
+        cycle: Option<Cycle>,
     },
     /// Pause local media playback (a bud left an ear).
     Pause,
@@ -409,6 +416,12 @@ impl Engine {
         self.state.firmware = firmware.or_stored(stored);
     }
 
+    /// What was stored for the session's pods ([`Effect::LearnedCycle`]),
+    /// right after [`Engine::connected`]. A report wins.
+    pub fn stored_cycle(&mut self, stored: Option<Cycle>) {
+        self.state.cycle = self.state.cycle.or(stored);
+    }
+
     /// The pods' exact running version, as our query found it: also told
     /// the other hosts (they may not have asked).
     fn exact_firmware(&mut self, exact: ExactVersion) -> Vec<Effect> {
@@ -603,6 +616,26 @@ impl Engine {
         vec![Effect::Send(set_noise_control(mode))]
     }
 
+    /// Set the modes press and hold cycles through. The pods don't report
+    /// it, so it's shown as set.
+    pub fn set_cycle(&mut self, cycle: Cycle) -> Vec<Effect> {
+        if !self.is_connected() {
+            return Vec::new();
+        }
+        tracing::info!(?cycle, "setting the press-and-hold cycle");
+        self.state.cycle = Some(cycle);
+        std::iter::once(Effect::Send(set_cycle(cycle)))
+            .chain(self.learned_cycle())
+            .collect()
+    }
+
+    fn learned_cycle(&self) -> Option<Effect> {
+        Some(Effect::LearnedCycle {
+            pods: self.pods?,
+            cycle: self.state.cycle,
+        })
+    }
+
     pub fn handle(&mut self, packet: Packet, now: Instant) -> Vec<Effect> {
         if let (Startup::Acked { retries }, false) =
             (self.startup, matches!(packet, Packet::HandshakeAck))
@@ -614,7 +647,12 @@ impl Engine {
         let was_stowed = self.state.is_stowed();
         let was_in_case = self.state.in_case();
         let firmware = self.state.firmware.clone();
+        let cycle = self.state.cycle;
         self.state.apply(&packet);
+        // Updated pods start from the default cycle again.
+        if firmware.reported.is_some() && self.state.firmware.reported != firmware.reported {
+            self.state.cycle = None;
+        }
         let learned = self
             .learn_local_mac(&packet)
             .map(Effect::LearnedLocalMac)
@@ -622,6 +660,11 @@ impl Engine {
             .chain(
                 (self.state.firmware != firmware)
                     .then(|| self.learned_firmware())
+                    .flatten(),
+            )
+            .chain(
+                (self.state.cycle != cycle)
+                    .then(|| self.learned_cycle())
                     .flatten(),
             );
         let reaction = match packet {
@@ -1802,6 +1845,65 @@ mod tests {
                 }
             }]
         );
+    }
+
+    #[test]
+    fn the_cycle_is_shown_as_set_or_stored_until_reported_or_updated() {
+        use crate::aacp::{ListeningModes, NoiseControlMode};
+        let report = |firmware: &str| {
+            Packet::DeviceInformation(DeviceInformation {
+                firmware: Some(firmware.into()),
+                ..Default::default()
+            })
+        };
+        let two = Cycle::OFFERED.toggled(NoiseControlMode::Adaptive).unwrap();
+        let mut idle = Engine::new(None, Settings::default());
+        assert!(idle.set_cycle(two).is_empty(), "nothing without a session");
+        let mut e = engine();
+        e.stored_firmware(Firmware {
+            reported: Some("1.0".into()),
+            ..Firmware::default()
+        });
+        e.stored_cycle(Some(Cycle::OFFERED));
+        assert_eq!(e.state().cycle, Some(Cycle::OFFERED));
+        assert_eq!(
+            e.set_cycle(two),
+            [
+                Effect::Send(protocol::set_cycle(two)),
+                Effect::LearnedCycle {
+                    pods: mac(PODS),
+                    cycle: Some(two)
+                }
+            ]
+        );
+        assert_eq!(e.state().cycle, Some(two));
+        // An echo of it changes nothing; a report wins.
+        let reported = |modes: ListeningModes| {
+            Packet::Control(ControlCommand {
+                id: ControlId::ListeningModeConfigs,
+                value: [modes.bits(), 0, 0, 0],
+            })
+        };
+        assert!(e.handle(reported(two.modes()), now()).is_empty());
+        let others = ListeningModes::TRANSPARENCY | ListeningModes::ADAPTIVE;
+        assert_eq!(
+            e.handle(reported(others), now()),
+            [Effect::LearnedCycle {
+                pods: mac(PODS),
+                cycle: Cycle::new(others)
+            }]
+        );
+        assert!(e.handle(report("1.0"), now()).is_empty());
+        // Updated pods start from the default again.
+        let fx = e.handle(report("2.0"), now());
+        assert!(matches!(
+            fx[..],
+            [
+                Effect::LearnedFirmware { .. },
+                Effect::LearnedCycle { cycle: None, .. }
+            ]
+        ));
+        assert_eq!(e.state().cycle, None);
     }
 
     #[test]
