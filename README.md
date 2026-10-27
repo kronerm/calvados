@@ -34,8 +34,8 @@ config (below). Calvados itself needs no root.
 
 ## Android
 
-1. Install `calvados.apk` and `calvados-xposed.apk` (building them:
-   [`AGENTS.md`](AGENTS.md)).
+1. Build and install the two APKs (below): the app and the LSPosed
+   module.
 2. Enable the Calvados module in LSPosed, then turn Bluetooth off and on.
    Again after updating the module.
 3. Open Calvados once and grant the permissions. It has no window, only a
@@ -52,6 +52,19 @@ noise control and two settings:
 It checks Apple's catalog for new AirPods firmware once a day. On
 LineageOS, allow the app network access (Settings → Apps → Calvados →
 Mobile data & Wi-Fi).
+
+**Building the APKs** needs Rust, the Android SDK and NDK (`ANDROID_HOME`,
+and `ANDROID_NDK_ROOT` unless it's at `/opt/android-ndk`), a JDK,
+[cargo-apk2](https://crates.io/crates/cargo-apk2) (`cargo install
+cargo-apk2`) and, for the module, the SDK's `aapt2`, `d8`, `zipalign` and
+`apksigner` on `PATH`:
+
+```sh
+cargo app-build      # the app -> target/debug/apk/calvados.apk
+cargo xposed         # the module -> target/release/calvados-xposed.apk
+adb install target/debug/apk/calvados.apk
+adb install target/release/calvados-xposed.apk
+```
 
 ## Linux
 
@@ -170,5 +183,4 @@ Seen on firmware 7.1.21; newer firmware may behave differently.
 [linden/uarp]: https://github.com/linden/uarp
 [Tabler Icons]: https://tabler.io/icons
 
-Developer notes: [`AGENTS.md`](AGENTS.md); the firmware research:
-[`docs/firmware.md`](docs/firmware.md).
+The firmware research: [`docs/firmware.md`](docs/firmware.md).
