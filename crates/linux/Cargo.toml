@@ -15,7 +15,8 @@ path = "src/main.rs"
 [dependencies]
 anyhow = "1"
 bluer = { version = "0.17", features = ["full"] }
-protocol = { path = "../protocol", features = ["catalog"] }
+firmware-fetch = { path = "../firmware-fetch" }
+protocol = { path = "../protocol" }
 tokio = { version = "1.53", features = ["full", "signal"] }
 tracing = "0.1"
 zbus = { version = "5.19", default-features = false, features = ["tokio"] }
@@ -25,6 +26,3 @@ hex = "0.4"
 serde_json = "1"
 libc = "0.2"
 pipewire = "0.10"
-ureq = { version = "3", default-features = false, features = ["rustls"] }
-# The firmware asset; pure Rust inflate.
-zip = { version = "8.6", default-features = false, features = ["deflate-flate2-zlib-rs"] }

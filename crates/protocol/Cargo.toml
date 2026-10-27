@@ -20,7 +20,8 @@ tracing = "0.1"
 plist = { version = "1.10", default-features = false, optional = true }
 
 [features]
-# Parsing Apple's firmware catalog (`firmware::parse_catalog`): Linux only.
+# Parsing Apple's firmware catalog (`firmware::parse_catalog`): for
+# `firmware-fetch`, the platforms' I/O.
 catalog = ["dep:plist"]
 
 [dev-dependencies]

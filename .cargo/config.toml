@@ -11,3 +11,9 @@ xposed = "run -p android-xposed --release"
 # files (Java 27's major version 71). cargo-apk2 takes no javac options; javac
 # reads this. The xposed build passes the same flag itself.
 JDK_JAVAC_OPTIONS = "--release 17"
+# ring's C (HTTPS for the firmware catalog) for plain `cargo clippy --target
+# …-android`, from the default NDK; cargo-apk2 sets its own, which wins.
+CC_aarch64_linux_android = "/opt/android-ndk/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android31-clang"
+AR_aarch64_linux_android = "/opt/android-ndk/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-ar"
+CC_armv7_linux_androideabi = "/opt/android-ndk/toolchains/llvm/prebuilt/linux-x86_64/bin/armv7a-linux-androideabi31-clang"
+AR_armv7_linux_androideabi = "/opt/android-ndk/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-ar"
