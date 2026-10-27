@@ -1,13 +1,17 @@
 """Offer a firmware package to AirPods and withdraw it before any firmware
 data moves: the pods' answer to an offer, without updating them.
 
-    python3 tools/firmware/uarp_offer.py AA:BB:CC:DD:EE:FF firmware.uarp [SECONDS]
+    python3 tools/firmware/uarp_offer.py MAC firmware.uarp [headers|metadata] [SECONDS]
 
-Offers the SuperBinary (docs/uarp.md), answers the pods' requests for its
-header and payload headers only (the first `HEADERS` bytes), and rescinds
-the offer at the first request beyond them, which it leaves unanswered.
-Never sends firmware data or an apply. Prints every message both ways.
-Afterwards `uarp_probe.py` should report nothing staged.
+Offers the SuperBinary (docs/uarp.md) and answers the pods' requests up to
+a limit: `headers`, the SuperBinary header and payload headers; `metadata`,
+also every payload's metadata (digests, personalization requests), i.e.
+everything before the first payload's data. It rescinds the offer at the
+first request beyond the limit, which it leaves unanswered, and never
+sends firmware data or an apply. Prints every message both ways.
+Afterwards `uarp_probe.py` should report nothing staged. The pods answer
+an offer while charging in the case, and keep a withdrawn one until the
+case closes: close and reopen it before each run.
 """
 import struct
 import sys
@@ -30,13 +34,17 @@ NAMES = {
 
 
 class Session:
-    def __init__(self, char, package):
+    def __init__(self, char, package, stage):
         self.char, self.package = char, package
-        _, header_length, self.length = struct.unpack_from(">3I", package)
+        _, _, self.length = struct.unpack_from(">3I", package)
         self.version = package[12:28]
         _, _, headers_at, headers_length = struct.unpack_from(">4I", package, 28)
-        self.headers = headers_at + headers_length
         self.payloads = headers_length // 0x28
+        # Payload headers: [length 4] [tag 4] [version 16] [metadata at, length]
+        # [data at, length]; the data starts after all metadata.
+        data = min(struct.unpack_from(">I", package, headers_at + i * 0x28 + 32)[0]
+                   for i in range(self.payloads))
+        self.limit = {"headers": headers_at + headers_length, "metadata": data}[stage]
         self.msg_id = 0
         self.pending = bytearray()
         self.rescinded = False
@@ -76,8 +84,9 @@ class Session:
         asset, offset, wanted = struct.unpack_from(">HIH", body)
         if self.rescinded:
             return
-        if asset != ASSET or offset + wanted > self.headers:
-            print(f"   beyond the headers ({offset:#x}+{wanted}): rescinding", flush=True)
+        if asset != ASSET or offset + wanted > self.limit:
+            print(f"   beyond the limit {self.limit:#x} ({offset:#x}+{wanted}): rescinding",
+                  flush=True)
             self.rescinded = True
             self.send(0x0C, struct.pack(">H", ASSET))
             return
@@ -86,13 +95,13 @@ class Session:
         self.send(0x07, struct.pack(">HHIHH", 0, asset, offset, wanted, len(data)) + data)
 
 
-def main(address, path, wait="30"):
+def main(address, path, stage="headers", wait="30"):
     package = open(path, "rb").read()
     dbus.mainloop.glib.DBusGMainLoop(set_as_default=True)
     bus = dbus.SystemBus()
     char_path = characteristic(bus, address)
     char = dbus.Interface(bus.get_object("org.bluez", char_path), GATT)
-    session = Session(char, package)
+    session = Session(char, package, stage)
     loop = GLib.MainLoop()
 
     def changed(interface, props, _invalidated):
@@ -117,8 +126,8 @@ def main(address, path, wait="30"):
         loop.run()
     finally:
         char.StopNotify()
-        print(f"served {session.served} bytes (header and payload headers only)")
+        print(f"served {session.served} bytes, all before {session.limit:#x}")
 
 
 if __name__ == "__main__":
-    main(*sys.argv[1:4])
+    main(*sys.argv[1:5])
