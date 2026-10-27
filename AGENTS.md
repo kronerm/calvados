@@ -406,6 +406,10 @@ texts are written twice. A change to one side needs the other:
 - the update's line (`display::update`, `format.update`: "Updating
   firmware… 40 %", "Staged: close the lid", …, a peer's with " · <host>";
   in the panel it takes the firmware line's place);
+- the update's button ("Update" when a newer release is known and no host
+  updates, "Cancel" while this host's runs: `format.updateAction` and the
+  notification's action); the UI stays the panel and the notification, no
+  windows or activities;
 - the battery glyph thresholds 88/63/38/13 (`format.batteryGlyph`,
   `notification.rs` `battery_glyph`);
 - the icons: Noctalia names Tabler glyphs, Android has them converted in

@@ -109,6 +109,29 @@ local function updateLine(update)
   return nil
 end
 
+-- An update this host can still cancel (after "staged" there's nothing to).
+local RUNNING = {
+  downloading = true,
+  offered = true,
+  deferred = true,
+  transferring = true,
+  interrupted = true,
+}
+
+-- The update button, as the Android notification's action: "Cancel" while
+-- this host's update runs, "Update" when a newer release is known and no
+-- host is updating; nil otherwise.
+function format.updateAction(state)
+  local own = state.update and state.update.state or ""
+  local peer = state.peer_update and state.peer_update.state or ""
+  if RUNNING[own] then
+    return "Cancel"
+  elseif state.firmware_update and own ~= "staged" and not RUNNING[peer] and peer ~= "staged" then
+    return "Update"
+  end
+  return nil
+end
+
 -- This host's update, else another calvados host's (" · <its address>").
 function format.update(state)
   local line = updateLine(state.update)

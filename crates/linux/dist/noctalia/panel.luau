@@ -145,10 +145,30 @@ local function setting(title, description, checked, key)
 end
 
 -- One small line: a firmware update while there is one, else the firmware
--- (only while connected; the daemon clears it otherwise).
+-- (only while connected; the daemon clears it otherwise), with the update's
+-- button when there's something to start or cancel.
 local function firmware()
   local text = format.update(state) or format.firmware(state)
-  return text and ui.label({ text = text, fontSize = 12, color = "on_surface_variant", maxLines = 1 })
+  if not text then
+    return nil
+  end
+  local line = ui.label({ text = text, fontSize = 12, color = "on_surface_variant", maxLines = 1, flexGrow = 1 })
+  local action = state.connected == true and format.updateAction(state)
+  if not action then
+    return line
+  end
+  local button = ui.row({
+    key = action,
+    paddingH = 10,
+    paddingV = 4,
+    radius = 8,
+    border = "outline",
+    borderWidth = 1,
+    onClick = function()
+      noctalia.runAsync({ "calvados", "firmware", action == "Update" and "update" or "cancel" })
+    end,
+  }, { ui.label({ text = action, fontSize = 12, maxLines = 1 }) })
+  return ui.row({ gap = 12, align = "center" }, { line, button })
 end
 
 local function render()
