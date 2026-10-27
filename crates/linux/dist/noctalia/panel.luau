@@ -147,7 +147,7 @@ end
 -- One small line; only while connected (the daemon clears it otherwise).
 local function firmware()
   local text = format.firmware(state)
-  return text and ui.label({ text = text, fontSize = 12, color = "on_surface_variant" })
+  return text and ui.label({ text = text, fontSize = 12, color = "on_surface_variant", maxLines = 1 })
 end
 
 local function render()

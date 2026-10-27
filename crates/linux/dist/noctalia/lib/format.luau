@@ -74,13 +74,13 @@ function format.mode(state)
   return state.noise_mode == "off" and "Off" or "—"
 end
 
--- "Firmware 7.1", plus " · 9.0 available" when Apple has a newer one;
--- nil until reported.
+-- "Firmware 7.1.21" (UARP) or "Firmware 7.1 (6663)" (0x1D alone), plus
+-- " · 9.0.348 available" when Apple has a newer one; nil until reported.
 function format.firmware(state)
   if (state.firmware or "") == "" then
     return nil
   end
-  local latest = state.firmware_update and string.match(state.latest_firmware or "", "^%d+%.%d+")
+  local latest = state.firmware_update and string.match(state.latest_firmware or "", "^%S+")
   return latest and `Firmware {state.firmware} · {latest} available` or `Firmware {state.firmware}`
 end
 
