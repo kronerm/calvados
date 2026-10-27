@@ -23,7 +23,6 @@ use crate::proto::firmware::Release;
 use crate::proto::protocol::Decoder;
 use crate::proto::settings::{Setting, Settings};
 use crate::proto::superbinary::Package;
-use crate::proto::update::Refusal;
 use crate::{bluetooth, media};
 
 /// Android sheds notification updates beyond ~5/s; stay well under that.
@@ -31,9 +30,6 @@ const NOTIFY_MIN_INTERVAL: Duration = Duration::from_millis(300);
 
 /// Minimum gap between attach attempts, so a flapping channel can't spin.
 const RECONNECT_DELAY: Duration = Duration::from_secs(3);
-
-/// How long a refused update's reason stays in the notification.
-const REFUSAL_SHOWN: Duration = Duration::from_secs(8);
 
 /// Everything the service loop reacts to.
 #[derive(Debug)]
@@ -156,8 +152,6 @@ fn service_main(jvm: JavaVM, events: crossbeam_channel::Receiver<Event>) {
     let cache = cache_dir()
         .inspect_err(|e| tracing::warn!("no cache directory for firmware: {e:#}"))
         .ok();
-    // A refused update's reason, shown until then.
-    let mut refused: Option<(Refusal, Instant)> = None;
     // The connect broadcast may predate us (app update, restart): ask.
     if let Err(e) = bluetooth::check_airpods_connected() {
         tracing::warn!("checking for connected AirPods failed: {e:#}");
@@ -173,7 +167,6 @@ fn service_main(jvm: JavaVM, events: crossbeam_channel::Receiver<Event>) {
             notify_at,
             engine.next_wake(),
             (matches!(conn, Conn::Disconnected) && available).then_some(reconnect_at),
-            refused.map(|(_, until)| until),
         ]
         .into_iter()
         .flatten()
@@ -258,15 +251,12 @@ fn service_main(jvm: JavaVM, events: crossbeam_channel::Receiver<Event>) {
                     match engine.prepare_update(release.as_ref().map(|release| release.version)) {
                         Ok(started) => {
                             effects.extend(started);
-                            refused = None;
                             if let Some(release) = release {
                                 fetch_package(&client, release, cache.clone());
                             }
                         }
-                        Err(refusal) => {
-                            tracing::info!(%refusal, "firmware update refused");
-                            refused = Some((refusal, now + REFUSAL_SHOWN));
-                        }
+                        // The engine shows it as the update's status.
+                        Err(refusal) => tracing::info!(%refusal, "firmware update refused"),
                     }
                 }
                 ACTION_CANCEL_UPDATE => effects.extend(engine.cancel_update()),
@@ -354,12 +344,11 @@ fn service_main(jvm: JavaVM, events: crossbeam_channel::Receiver<Event>) {
         if let Some(models) = model.and_then(|model| catalog.due(model, now)) {
             check_catalog(&client, models);
         }
-        refused = refused.filter(|&(_, until)| now < until);
 
         // Post only changes, throttled; a change during the pause is posted
         // when it ends, so the latest state always lands.
         let latest = model.and_then(|model| catalog.latest(model));
-        let content = Content::of(&engine, &conn, latest, refused.map(|(refusal, _)| refusal));
+        let content = Content::of(&engine, &conn, latest);
         match &shown {
             Some((current, _)) if *current == content => notify_at = None,
             Some((_, posted)) if now < *posted + NOTIFY_MIN_INTERVAL => {

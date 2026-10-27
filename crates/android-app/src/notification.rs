@@ -22,7 +22,7 @@ use crate::proto::display::{self, Buds, Component, Place};
 use crate::proto::engine::Engine;
 use crate::proto::firmware::Release;
 use crate::proto::state::PeerUpdate;
-use crate::proto::update::{Refusal, UpdateStatus};
+use crate::proto::update::UpdateStatus;
 use crate::service::Conn;
 
 pub(crate) const CHANNEL_ID: &str = "calvados_persistent";
@@ -122,7 +122,6 @@ impl UpdateAction {
 
 /// The header's line; see [`Content::header`].
 fn header(
-    refused: Option<Refusal>,
     own: Option<UpdateStatus>,
     peer: Option<PeerUpdate>,
     firmware: Option<String>,
@@ -134,31 +133,15 @@ fn header(
             None => format!("Firmware {version}"),
         })
     };
-    refused
-        .map(|refusal| capitalized(&refusal.to_string()))
-        .or_else(|| own.map(display::update))
+    own.map(display::update)
         .or_else(|| peer.map(display::peer_update))
         .or_else(firmware)
         .unwrap_or_default()
 }
 
-fn capitalized(text: &str) -> String {
-    let mut chars = text.chars();
-    chars
-        .next()
-        .map(|first| first.to_uppercase().chain(chars).collect())
-        .unwrap_or_default()
-}
-
 impl Content {
-    /// `latest`: the catalog's release for the pods, once checked;
-    /// `refused`: why an update just asked for wasn't started.
-    pub(crate) fn of(
-        engine: &Engine,
-        conn: &Conn,
-        latest: Option<&Release>,
-        refused: Option<Refusal>,
-    ) -> Self {
+    /// `latest`: the catalog's release for the pods, once checked.
+    pub(crate) fn of(engine: &Engine, conn: &Conn, latest: Option<&Release>) -> Self {
         let state = engine.state();
         let settings = engine.settings();
         let name = state.name.as_deref().unwrap_or("AirPods");
@@ -181,7 +164,6 @@ impl Content {
             buds: connected.then(|| Buds::of(state)),
             noise: display::mode_name(state.noise_mode),
             header: header(
-                refused,
                 // Also while the pods are away: an interrupted update waits.
                 engine.update_status(),
                 state.peer_update,
@@ -519,6 +501,7 @@ fn battery_glyph(component: Component) -> &'static str {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::proto::update::{Failure, Refusal};
 
     #[test]
     fn battery_glyph_follows_the_level() {
@@ -546,23 +529,24 @@ mod tests {
             status: UpdateStatus::Staged,
         };
         let running = Some("7.1.21".to_owned());
-        assert_eq!(header(None, None, None, None, Some(&release)), "");
+        assert_eq!(header(None, None, None, Some(&release)), "");
         assert_eq!(
-            header(None, None, None, running.clone(), Some(&release)),
+            header(None, None, running.clone(), Some(&release)),
             "Firmware 7.1.21 · 9.0.348 available"
         );
         assert_eq!(
-            header(None, None, Some(peer), running.clone(), None),
+            header(None, Some(peer), running.clone(), None),
             "Staged: close the lid · 64:4A:00:11:22:33"
         );
         let own = Some(UpdateStatus::Transferring { percent: 40 });
         assert_eq!(
-            header(None, own, Some(peer), running.clone(), None),
+            header(own, Some(peer), running.clone(), None),
             "Updating firmware… 40 %"
         );
+        let refused = Some(UpdateStatus::Failed(Failure::Refused(Refusal::NotInCase)));
         assert_eq!(
-            header(Some(Refusal::NotInCase), own, None, running, None),
-            "Put both AirPods in the case, and keep the lid open"
+            header(refused, None, running, None),
+            "Update failed: put both AirPods in the case, and keep the lid open"
         );
     }
 

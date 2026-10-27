@@ -162,7 +162,9 @@ build first.
   `MTIC` asset (left unanswered); nothing is solicited.
   Updates: `prepare_update(release)` (refusals: `Refusal`, incl. not
   connected, no release, already running, another host's update running,
-  `update::check`) → `Downloading`; the platform fetches and hands
+  `update::check`; a refusal becomes the update's status,
+  `Failed(Refused)`, not over a running update and not told to peers) →
+  `Downloading`; the platform fetches and hands
   `package(Option<Package>)`, checked again (the release's version, the
   preconditions) → offered once settled. The update survives a session
   drop with the same pods (`disconnected` takes it down; it's offered
@@ -228,8 +230,7 @@ power-on (`LinkChange`). Its length caps at 255, i.e. 15 events.
   `UPDATE_FIRMWARE`, each on a thread that posts `Event::Catalog` /
   `Event::Package`; the package is cached in the app's cache dir
   (`getCacheDir`, `<build>.uarp`). Hence the `INTERNET` permission, the
-  app's only network use. A refusal's reason is kept 8 s for the
-  notification.
+  app's only network use.
 - `link.rs` — the AACP L2CAP socket (connect / send / read thread).
 - `bluetooth.rs` — paired AirPods, local MAC, A2DP routing, and the
   presence scan: a `BluetoothLeScanner` scan (Apple manufacturer data `07`
@@ -262,7 +263,7 @@ power-on (`LinkChange`). Its length caps at 255, i.e. 15 events.
   id. There's no generated `R` class, so ids come from
   `Resources.getIdentifier`. Tiles and rows fire service intents
   (`NOISE:<mode>`, `AUTO_SWITCH`, `AUTO_CONNECT`). The header's subtext is
-  one line (`header`): a refused update's reason, else this phone's update
+  one line (`header`): this phone's update (a refusal included)
   (`display::update`), else a peer's (`display::peer_update`), else the
   firmware and the newer release. The update's start and cancel are a
   `Notification.Action` (`UPDATE_FIRMWARE`, `CANCEL_UPDATE`; no icon, as

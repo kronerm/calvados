@@ -1156,7 +1156,13 @@ impl Engine {
         &mut self,
         release: Option<ExactVersion>,
     ) -> Result<Vec<Effect>, Refusal> {
-        let release = self.may_update(release)?;
+        let release = self.may_update(release).inspect_err(|&refusal| {
+            // Shown as the update's status on both UIs, like a failure; not
+            // over a running update, nor told to peers (it's ours).
+            if !matches!(refusal, Refusal::Running | Refusal::PeerRunning) {
+                self.update = Some(Update::Failed(Failure::Refused(refusal)));
+            }
+        })?;
         tracing::info!(%release, "firmware update: fetching the package");
         self.update = Some(Update::Downloading(release));
         self.told = None;
@@ -2672,13 +2678,22 @@ mod tests {
                 now(),
             );
             assert_eq!(e.prepare_update(release()), Err(Refusal::NotInCase));
+            // Shown as the status, for both UIs, and kept to ourselves.
+            assert_eq!(
+                e.update_status(),
+                Some(UpdateStatus::Failed(Failure::Refused(Refusal::NotInCase)))
+            );
             e.disconnected(now());
             assert_eq!(e.prepare_update(release()), Err(Refusal::NotConnected));
-            assert_eq!(e.update_status(), None);
             let mut e = ready();
             let fx = e.prepare_update(release()).unwrap();
             assert_eq!(told(&fx), [News::Update(UpdateStatus::Downloading)]);
             assert_eq!(e.prepare_update(release()), Err(Refusal::Running));
+            assert_eq!(
+                e.update_status(),
+                Some(UpdateStatus::Downloading),
+                "a refusal doesn't replace a running update"
+            );
         }
 
         #[test]
