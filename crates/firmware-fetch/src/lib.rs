@@ -178,7 +178,11 @@ mod tests {
         let models = catalog.due("A3047", now).unwrap();
         assert_eq!(models, ["A3048", "A2968", "A3047"]);
         // Same product, other model.
-        assert!(catalog.due("A3048", now + Duration::from_secs(60)).is_none());
+        assert!(
+            catalog
+                .due("A3048", now + Duration::from_secs(60))
+                .is_none()
+        );
         assert!(catalog.latest("A3048").is_none());
         assert!(catalog.due("A3048", now + CHECK_INTERVAL).is_some());
     }
