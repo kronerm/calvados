@@ -1,27 +1,33 @@
-//! UARP, Apple's firmware update protocol (docs/uarp.md), as a controller:
-//! the messages calvados sends and understands, their GATT fragments, and
-//! the read-only running-version query. The update itself is
-//! [`crate::update`]. There is no apply request (0x0A) here, by design: the
-//! case applies a staged image once the lid closes.
+//! UARP, Apple's firmware update protocol (docs/uarp.md), as a controller,
+//! carried inside AACP (opcode 0x4F, as Apple hosts do): the messages
+//! calvados sends and understands, their frames, and the running-version
+//! query. The update itself is [`crate::update`]. There is no apply request
+//! (0x0A) here, by design: the case applies a staged image once the lid
+//! closes.
 
+use nom::IResult;
+use nom::Parser as _;
+
+use crate::aacp::frame::data_frame;
 use crate::firmware::{ExactVersion, Version};
 
-/// The GATT characteristic (write, indicate); BlueZ serves it over the
-/// classic link too.
-pub const CHARACTERISTIC: u128 = 0x94110001_6d9b_4225_a4f1_6a4a7f01b0de;
+/// AACP's opcode for UARP: `[len 2 LE]` + one whole message, both ways.
+pub const OPCODE: u16 = 0x4F;
 
-/// The fragment header's bit on a message's last fragment.
-const LAST_FRAGMENT: u8 = 0x01;
+/// The longest message one frame carries [rkof 0x6d6d0].
+pub const MAX_MESSAGE: usize = 1007;
 
-/// The protocol version proposed; 7B21 answers 4 to anything higher.
+/// The protocol version proposed; 7B21 answers 4, 9A348 takes up to 6.
 const PROTOCOL_VERSION: u16 = 4;
 
 /// The header: type, payload length, message id (big-endian u16 each).
 const HEADER_LEN: usize = 6;
 
-/// A write as `uarp_offer.py` sent them, the fragment header included:
-/// within BlueZ's MTU (672), and a 475-byte data response fits whole.
-pub const MAX_WRITE: usize = 501;
+/// A data response's fields before the data.
+const DATA_RESPONSE_FIELDS: usize = 12;
+
+/// The most data one response carries.
+pub const MAX_DATA: u16 = (MAX_MESSAGE - HEADER_LEN - DATA_RESPONSE_FIELDS) as u16;
 
 /// The types sent. Apply (0x0A) is deliberately missing.
 #[derive(Debug, Clone, Copy)]
@@ -166,61 +172,19 @@ fn message(kind: Sent, id: u16, payload: &[u8]) -> Vec<u8> {
         .collect()
 }
 
-/// `message` as writes of at most `max_write` bytes, each with the
-/// fragment header (bit 0 on the last).
-pub fn fragments(message: &[u8], max_write: usize) -> Vec<Vec<u8>> {
-    let chunks = message.chunks(max_write.saturating_sub(1).max(1));
-    let last = chunks.len().saturating_sub(1);
-    chunks
-        .enumerate()
-        .map(|(i, chunk)| {
-            let header = if i == last { LAST_FRAGMENT } else { 0 };
-            [&[header][..], chunk].concat()
-        })
-        .collect()
+/// `message` as an AACP frame. Only on a settled session with the primary:
+/// one reaching a bud that isn't primary aborts it [rkof 0xbea70].
+pub fn frame(message: &[u8]) -> Vec<u8> {
+    debug_assert!(message.len() <= MAX_MESSAGE);
+    let len = u16::try_from(message.len()).expect("a message within u16");
+    data_frame(OPCODE, &[&len.to_le_bytes()[..], message].concat())
 }
 
-/// How UARP messages travel between host and pods; the messages are the
-/// same on both.
-#[derive(Debug, Clone, Copy)]
-pub enum Framing {
-    /// The GATT characteristic (the pods' transport 4): writes of at most
-    /// `max_write` bytes, each with the fragment header.
-    Gatt { max_write: usize },
-    /// AACP opcode 0x4F on the AACP session (their transport 0xd): one whole
-    /// message per frame, `[len 2 LE]` first, no fragment header, at most
-    /// [`AACP_MAX_MESSAGE`] bytes (the pods' requests keep data responses
-    /// within it). Opening it tears down the host's GATT endpoint. Unused
-    /// so far: a 0x4F frame reaching a bud that isn't primary aborts it, so
-    /// only on a settled session with the primary.
-    Aacp,
-}
-
-/// AACP's opcode for UARP.
-const AACP_OPCODE: u16 = 0x4F;
-
-/// The longest message one 0x4F frame carries.
-pub const AACP_MAX_MESSAGE: usize = 1007;
-
-impl Framing {
-    /// As `uarp_offer.py` wrote, the one proven live.
-    pub const GATT: Self = Self::Gatt {
-        max_write: MAX_WRITE,
-    };
-
-    /// `message` as what's written or sent, in order.
-    pub fn frames(self, message: &[u8]) -> Vec<Vec<u8>> {
-        match self {
-            Self::Gatt { max_write } => fragments(message, max_write),
-            Self::Aacp => {
-                let len = u16::try_from(message.len()).expect("a message within u16");
-                vec![crate::aacp::frame::data_frame(
-                    AACP_OPCODE,
-                    &[&len.to_le_bytes()[..], message].concat(),
-                )]
-            }
-        }
-    }
+/// A 0x4F frame's body: the message.
+pub(crate) fn parse_frame(body: &[u8]) -> IResult<&[u8], Vec<u8>> {
+    nom::multi::length_data(nom::number::complete::le_u16)
+        .map(<[u8]>::to_vec)
+        .parse(body)
 }
 
 /// A message from the pods, as far as an updater cares.
@@ -251,7 +215,7 @@ pub enum Received {
     RescindAck {
         asset: u16,
     },
-    /// Downstream Endpoint Added (never seen over GATT).
+    /// Downstream Endpoint Added: over AACP the other bud, unasked.
     DownstreamAdded {
         id: u16,
     },
@@ -344,9 +308,8 @@ impl Received {
     }
 }
 
-/// The writes asking for the running firmware, in order: Sync, version
-/// discovery, the information request. Each is one whole message after
-/// the fragment header.
+/// The messages asking for the running firmware, in order: Sync, version
+/// discovery, the information request.
 pub fn running_version_query() -> [Vec<u8>; 3] {
     [
         Message::Sync.encode(1),
@@ -357,22 +320,6 @@ pub fn running_version_query() -> [Vec<u8>; 3] {
             &(InfoTag::RunningFirmware as u32).to_be_bytes(),
         ),
     ]
-    .map(|message| [&[LAST_FRAGMENT][..], &message].concat())
-}
-
-/// Indications back into messages: each starts with the fragment header.
-#[derive(Debug, Default)]
-pub struct Reassembler {
-    pending: Vec<u8>,
-}
-
-impl Reassembler {
-    /// A whole message once `fragment` was its last.
-    pub fn push(&mut self, fragment: &[u8]) -> Option<Vec<u8>> {
-        let (&header, data) = fragment.split_first()?;
-        self.pending.extend_from_slice(data);
-        (header & LAST_FRAGMENT != 0).then(|| std::mem::take(&mut self.pending))
-    }
 }
 
 /// The running firmware from an information response to
@@ -408,9 +355,9 @@ mod tests {
     #[test]
     fn the_query_is_three_whole_messages() {
         let [sync, discovery, request] = running_version_query();
-        assert_eq!(sync, [0x01, 0, 0, 0, 0, 0, 1]);
-        assert_eq!(discovery, [0x01, 0, 1, 0, 2, 0, 2, 0, 4]);
-        assert_eq!(request, [0x01, 0, 3, 0, 4, 0, 3, 0, 0, 0, 5]);
+        assert_eq!(sync, [0, 0, 0, 0, 0, 1]);
+        assert_eq!(discovery, [0, 1, 0, 2, 0, 2, 0, 4]);
+        assert_eq!(request, [0, 3, 0, 4, 0, 3, 0, 0, 0, 5]);
     }
 
     /// The response 7B21 sent: status 0, tag 5, 16 bytes, `7.1.21.0`.
@@ -438,31 +385,6 @@ mod tests {
             Received::parse(&RESPONSE),
             Some(Received::Other { kind: 4 })
         );
-    }
-
-    #[test]
-    fn fragments_are_reassembled() {
-        let mut reassembler = Reassembler::default();
-        let (first, rest) = RESPONSE.split_at(10);
-        assert_eq!(reassembler.push(&[&[0x00][..], first].concat()), None);
-        let message = reassembler.push(&[&[0x01][..], rest].concat());
-        assert_eq!(message.as_deref(), Some(&RESPONSE[..]));
-        assert_eq!(reassembler.push(&[0x01, 9]).as_deref(), Some(&[9][..]));
-        assert_eq!(reassembler.push(&[]), None);
-    }
-
-    #[test]
-    fn long_messages_are_split_with_the_last_marked() {
-        let message = (0..=9).collect::<Vec<u8>>();
-        let writes = fragments(&message, 5);
-        assert_eq!(
-            writes,
-            [vec![0, 0, 1, 2, 3], vec![0, 4, 5, 6, 7], vec![1, 8, 9]]
-        );
-        let mut reassembler = Reassembler::default();
-        let back = writes.iter().find_map(|write| reassembler.push(write));
-        assert_eq!(back, Some(message));
-        assert_eq!(fragments(&[7], MAX_WRITE), [vec![1, 7]]);
     }
 
     /// As `uarp_offer.py` built them for 9A348.
@@ -559,16 +481,19 @@ mod tests {
     }
 
     #[test]
-    fn aacp_frames_carry_whole_messages() {
+    fn frames_carry_whole_messages() {
         let message = Message::Rescind { asset: 1 }.encode(1);
-        assert_eq!(
-            Framing::Aacp.frames(&message),
-            [hex::decode("040004004f000800000c000200010001").unwrap()]
-        );
-        assert_eq!(
-            Framing::GATT.frames(&message),
-            [[&[1][..], &message].concat()]
-        );
+        let frame = frame(&message);
+        assert_eq!(hex::encode(&frame), "040004004f000800000c000200010001");
+        assert_eq!(parse_frame(&frame[6..]).unwrap().1, message);
+        let response = Message::DataResponse {
+            status: 0,
+            asset: 1,
+            offset: 0,
+            requested: MAX_DATA,
+            data: &[0; MAX_DATA as usize],
+        };
+        assert_eq!(response.encode(1).len(), MAX_MESSAGE);
     }
 
     #[test]

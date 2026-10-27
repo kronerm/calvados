@@ -8,8 +8,8 @@ use std::time::{Duration, Instant};
 
 use crate::MacAddress;
 use crate::aacp::{
-    Activity, AudioSource, ControlCommand, ControlId, DeviceRole, EarDetection, EarStatus, KeyType,
-    NoiseControlMode, Packet, Routing, RoutingResponse,
+    Activity, AudioSource, Bud, ControlCommand, ControlId, DeviceRole, EarDetection, EarStatus,
+    KeyType, NoiseControlMode, Packet, Routing, RoutingResponse,
 };
 use crate::ble;
 use crate::firmware::{ExactVersion, Firmware};
@@ -20,7 +20,7 @@ use crate::protocol::{
 use crate::settings::{Setting, Settings};
 use crate::state::DeviceState;
 use crate::superbinary::Package;
-use crate::uarp::Framing;
+use crate::uarp::{self, Message, Received};
 use crate::update::{self, Failure, News, Output, Refusal, UpdateStatus, Updater};
 
 /// How long after the handshake [`Engine::check_state_burst`] runs.
@@ -154,14 +154,6 @@ pub enum Effect {
     Pause,
     /// Resume the playback [`Effect::Pause`] paused.
     Resume,
-    /// Open the UARP transport (GATT) to the session's pods unless it's
-    /// open, then report [`Engine::uarp_up`]; its end, [`Engine::uarp_down`].
-    OpenUarp,
-    /// One write on it (with response), after the ones before, framed for
-    /// it ([`Engine::uarp_up`]).
-    UarpWrite(Vec<u8>),
-    /// Close it, after the writes before: the update ended.
-    CloseUarp,
 }
 
 /// What we know of this host's MAC, needed for the peer hijack.
@@ -210,7 +202,24 @@ pub struct Engine {
     queried: Option<ExactVersion>,
     /// The update status last told the other hosts.
     told: Option<UpdateStatus>,
+    /// No UARP before this: right after a connect or a primary change (a
+    /// UARP frame reaching a bud that isn't primary aborts it).
+    uarp_hold: Option<Instant>,
+    /// This session's running-version query.
+    version_query: VersionQuery,
+    /// For the engine's own UARP messages (the updater counts its own).
+    uarp_id: u16,
 }
+
+#[derive(Debug, Clone, Copy, Default)]
+enum VersionQuery {
+    #[default]
+    Due,
+    Sent,
+}
+
+/// How long UARP waits after a connect or a primary change.
+const UARP_SETTLE: Duration = Duration::from_secs(5);
 
 /// This host's firmware update.
 #[derive(Debug)]
@@ -371,14 +380,11 @@ impl Engine {
             burst_check: Some(now + STATE_BURST_WAIT),
             local_audio: self.local_audio,
             update,
+            uarp_hold: Some(now + UARP_SETTLE),
             ..Self::new(known, self.settings)
         };
-        // An update the session's drop interrupted resumes.
-        let resume =
-            matches!(&self.update, Some(Update::Running(updater)) if updater.status().is_active());
-        std::iter::once(Effect::Send(handshake()))
-            .chain(resume.then_some(Effect::OpenUarp))
-            .collect()
+        // An update the session's drop interrupted resumes once it settles.
+        vec![Effect::Send(handshake())]
     }
 
     /// What was stored for the session's pods
@@ -390,12 +396,9 @@ impl Engine {
         self.state.firmware = firmware.or_stored(stored);
     }
 
-    /// The pods' exact running version (UARP, asked by the platform): also
-    /// told the other hosts, which can't ask.
-    pub fn exact_firmware(&mut self, pods: MacAddress, exact: ExactVersion) -> Vec<Effect> {
-        if self.pods != Some(pods) {
-            return Vec::new();
-        }
+    /// The pods' exact running version, as our query found it: also told
+    /// the other hosts (they may not have asked).
+    fn exact_firmware(&mut self, exact: ExactVersion) -> Vec<Effect> {
         self.queried = Some(exact);
         self.running_firmware(exact)
             .into_iter()
@@ -448,6 +451,10 @@ impl Engine {
         self.ownership = Ownership::Idle;
         self.stream = Stream::Unwatched;
         self.burst_check = None;
+        // Nothing to tell anyone without a session.
+        if let Some(Update::Running(updater)) = &mut self.update {
+            updater.down(now);
+        }
     }
 
     /// An Apple proximity pairing advertisement from `address`, with its
@@ -505,7 +512,8 @@ impl Engine {
             Some(Update::Running(updater)) => updater.next_wake(),
             _ => None,
         };
-        [self.burst_check, stream, self.redial_at(), update]
+        let uarp = self.uarp_hold.filter(|_| self.uarp_waits());
+        [self.burst_check, stream, self.redial_at(), update, uarp]
             .into_iter()
             .flatten()
             .min()
@@ -531,11 +539,13 @@ impl Engine {
             _ => Vec::new(),
         };
         let update = self.updated(watchdog);
+        let uarp = self.settle_uarp(now);
         burst
             .into_iter()
             .chain(stream)
             .chain(redial)
             .chain(update)
+            .chain(uarp)
             .collect()
     }
 
@@ -587,6 +597,7 @@ impl Engine {
             self.startup = Startup::Answering { retries };
         }
         let previous_ears = self.state.ear_detection;
+        let previous_primary = self.state.primary_bud;
         let was_stowed = self.state.is_stowed();
         let was_in_case = self.state.in_case();
         let firmware = self.state.firmware.clone();
@@ -691,6 +702,15 @@ impl Engine {
                 tracing::info!(?from, streaming, "peer reports its playback");
                 Vec::new()
             }
+            Packet::PrimaryBud(primary)
+                if !matches!(
+                    (previous_primary, primary.bud),
+                    (Some(Bud::Left), Bud::Left) | (Some(Bud::Right), Bud::Right)
+                ) =>
+            {
+                self.primary_changes(now)
+            }
+            Packet::Uarp(message) => self.uarp_received(&message, now),
             Packet::RoutingResponse(RoutingResponse {
                 kind: Routing::News(news),
                 from,
@@ -712,11 +732,12 @@ impl Engine {
             }
             _ => Vec::new(),
         };
-        learned
+        let reaction = reaction
             .into_iter()
-            .chain(reaction)
             .chain(self.notify_peers())
-            .collect()
+            .collect::<Vec<_>>();
+        let uarp = self.settle_uarp(now);
+        learned.into_iter().chain(reaction).chain(uarp).collect()
     }
 
     /// Nobody else is connected to the pods: take the audio. There's no peer
@@ -1180,9 +1201,8 @@ impl Engine {
         match started {
             Ok(package) => {
                 self.update = Some(Update::Running(Updater::new(package, now)));
-                std::iter::once(Effect::OpenUarp)
-                    .chain(self.tell_update(UpdateStatus::Offered))
-                    .collect()
+                let told = self.tell_update(UpdateStatus::Offered);
+                told.into_iter().chain(self.settle_uarp(now)).collect()
             }
             Err(failure) => {
                 tracing::warn!(%failure, "firmware update: not started");
@@ -1205,50 +1225,97 @@ impl Engine {
         self.updated(outputs)
     }
 
-    /// The UARP transport [`Effect::OpenUarp`] asked for is up, framing
-    /// messages as `framing` (the [`Effect::UarpWrite`]s are framed so).
-    pub fn uarp_up(&mut self, framing: Framing, now: Instant) -> Vec<Effect> {
-        let outputs = match &mut self.update {
-            Some(Update::Running(updater)) => updater.up(framing, now),
-            _ => Vec::new(),
-        };
-        self.updated(outputs)
+    /// UARP may be sent: a settled session (acked, the state half of the
+    /// burst in, the primary known) and no connect or primary change fresh.
+    fn uarp_ready(&self, now: Instant) -> bool {
+        self.is_connected()
+            && matches!(self.startup, Startup::Answering { .. })
+            && self.state.battery.is_live()
+            && self.state.primary_bud.is_some()
+            && self.uarp_hold.is_none_or(|hold| now >= hold)
     }
 
-    /// The UARP transport ended, or never opened: opened again while the
-    /// session's up (a few times; the platform paces its attempts).
-    pub fn uarp_down(&mut self, now: Instant) -> Vec<Effect> {
-        let Some(Update::Running(updater)) = &mut self.update else {
+    /// Something to send once UARP may be, in this session.
+    fn uarp_waits(&self) -> bool {
+        let update = match &self.update {
+            Some(Update::Running(updater)) => updater.status().is_active() && !updater.is_up(),
+            _ => false,
+        };
+        self.is_connected() && (update || matches!(self.version_query, VersionQuery::Due))
+    }
+
+    /// Once UARP may be sent: offer (or resume) the update, else ask for
+    /// the running version, once a session.
+    fn settle_uarp(&mut self, now: Instant) -> Vec<Effect> {
+        // Over: it mustn't stay a wake-up.
+        self.uarp_hold = self.uarp_hold.filter(|&hold| now < hold);
+        if !self.uarp_ready(now) || !self.uarp_waits() {
             return Vec::new();
-        };
-        let outputs = updater.down(now);
-        let reopen = updater.status().is_active() && self.is_connected();
-        self.updated(outputs)
-            .into_iter()
-            .chain(reopen.then_some(Effect::OpenUarp))
-            .collect()
+        }
+        match &mut self.update {
+            Some(Update::Running(updater)) if updater.status().is_active() => {
+                let outputs = updater.up(now);
+                self.updated(outputs)
+            }
+            _ => {
+                tracing::info!("asking the pods for their exact firmware");
+                self.version_query = VersionQuery::Sent;
+                uarp::running_version_query()
+                    .iter()
+                    .map(|message| Effect::Send(uarp::frame(message)))
+                    .collect()
+            }
+        }
     }
 
-    /// An indication on the UARP transport.
-    pub fn uarp_received(&mut self, fragment: &[u8], now: Instant) -> Vec<Effect> {
+    /// A new primary bud: hold UARP; an update waits until it settles.
+    fn primary_changes(&mut self, now: Instant) -> Vec<Effect> {
+        self.uarp_hold = Some(now + UARP_SETTLE);
         let outputs = match &mut self.update {
-            Some(Update::Running(updater)) => updater.received(fragment, now),
+            Some(Update::Running(updater)) if updater.is_up() => {
+                tracing::info!("the primary bud changes: the update waits");
+                updater.down(now)
+            }
             _ => Vec::new(),
         };
         self.updated(outputs)
     }
 
-    /// The updater's outputs as effects: its writes, then for a new status
-    /// the news, and the transport closed once it ended.
+    /// A UARP message from the pods: the running version, a downstream
+    /// endpoint (acknowledged, as a controller does), or the update's.
+    /// Their own offers (e.g. a dynamic `MTIC` asset) go unanswered.
+    fn uarp_received(&mut self, message: &[u8], now: Instant) -> Vec<Effect> {
+        if let Some(exact) = uarp::running_version(message) {
+            return self.exact_firmware(exact);
+        }
+        match Received::parse(message) {
+            Some(Received::DownstreamAdded { id }) if self.uarp_ready(now) => {
+                tracing::info!(id, "UARP: downstream endpoint added");
+                self.uarp_id = self.uarp_id.wrapping_add(1);
+                let ack = Message::DownstreamAddedAck { id }.encode(self.uarp_id);
+                vec![Effect::Send(uarp::frame(&ack))]
+            }
+            received => {
+                let outputs = match &mut self.update {
+                    Some(Update::Running(updater)) => updater.received(message, now),
+                    _ => {
+                        tracing::debug!(?received, "UARP: not for us");
+                        Vec::new()
+                    }
+                };
+                self.updated(outputs)
+            }
+        }
+    }
+
+    /// The updater's outputs as effects: its messages, then for a new
+    /// status the news.
     fn updated(&mut self, outputs: Vec<Output>) -> Vec<Effect> {
         outputs
             .into_iter()
             .flat_map(|output| match output {
-                Output::Write(write) => vec![Effect::UarpWrite(write)],
-                Output::Status(status) => {
-                    let close = (!status.is_active()).then_some(Effect::CloseUarp);
-                    self.tell_update(status).into_iter().chain(close).collect()
-                }
+                Output::Write(message) => vec![Effect::Send(uarp::frame(&message))],
+                Output::Status(status) => self.tell_update(status),
             })
             .collect()
     }
@@ -1690,10 +1757,7 @@ mod tests {
         e.stored_firmware(stored.clone());
         assert_eq!(e.state().firmware, stored);
         assert!(e.handle(report(old), now()).is_empty(), "nothing new");
-        assert!(
-            e.exact_firmware(mac(PODS), "7.1.21".parse().unwrap())
-                .is_empty()
-        );
+        assert!(e.running_firmware("7.1.21".parse().unwrap()).is_empty());
         let new = "90.3431000025000000.6807";
         let reported = Firmware {
             model: Some("A3048".into()),
@@ -1708,9 +1772,8 @@ mod tests {
             }]
         );
         let exact = "9.0.348".parse().unwrap();
-        assert!(e.exact_firmware(mac(PEER), exact).is_empty(), "other pods");
         assert_eq!(
-            e.exact_firmware(mac(PODS), exact),
+            e.running_firmware(exact),
             [Effect::LearnedFirmware {
                 pods: mac(PODS),
                 firmware: Firmware {
@@ -2431,7 +2494,7 @@ mod tests {
 
     mod update {
         use super::*;
-        use crate::aacp::{BatteryComponent, BatteryInfo, ChargingStatus};
+        use crate::aacp::{BatteryComponent, BatteryInfo, ChargingStatus, PrimaryBud};
         use crate::superbinary::tests::package;
         use crate::update::{UpdateStatus, WATCHDOG};
 
@@ -2439,27 +2502,70 @@ mod tests {
             "9.0.348".parse().ok()
         }
 
-        /// Both buds in the charging case, on 7.1, with PEER connected too.
+        /// Once a connect has settled.
+        fn later() -> Instant {
+            now() + UARP_SETTLE
+        }
+
+        /// A settled session: acked, the burst in, both buds in the charging
+        /// case, on 7.1, with PEER connected too. Its version query is out.
         fn ready() -> Engine {
             let mut e = engine();
+            e.handle(Packet::HandshakeAck, now());
             feed(&mut e, CONNECTED_DEVICES);
-            e.handle(
+            settle(&mut e, now());
+            e.state.firmware.reported = Some("71.2256000021000000.6663".into());
+            let fx = e.tick(later());
+            assert_eq!(kinds(&fx), [0x00, 0x01, 0x03], "the version query");
+            e
+        }
+
+        /// The state half of a burst, at `at`: buds in the charging case,
+        /// the primary.
+        fn settle(e: &mut Engine, at: Instant) -> Vec<Effect> {
+            let battery = |component, status| BatteryInfo {
+                component,
+                level: 40,
+                status: Some(status),
+            };
+            [
                 Packet::EarDetection(EarDetection {
                     primary: EarStatus::InCase,
                     secondary: EarStatus::InCase,
                 }),
-                now(),
-            );
-            e.handle(
-                Packet::Battery(vec![BatteryInfo {
-                    component: BatteryComponent::Case,
-                    level: 40,
-                    status: Some(ChargingStatus::Charging),
-                }]),
-                now(),
-            );
-            e.state.firmware.reported = Some("71.2256000021000000.6663".into());
-            e
+                Packet::Battery(vec![
+                    battery(BatteryComponent::Left, ChargingStatus::Charging),
+                    battery(BatteryComponent::Right, ChargingStatus::Charging),
+                    battery(BatteryComponent::Case, ChargingStatus::Charging),
+                ]),
+                Packet::PrimaryBud(PrimaryBud {
+                    bud: Bud::Left,
+                    active: false,
+                }),
+            ]
+            .into_iter()
+            .flat_map(|packet| e.handle(packet, at))
+            .collect()
+        }
+
+        /// The UARP messages among `fx`.
+        fn uarp(fx: &[Effect]) -> Vec<Vec<u8>> {
+            fx.iter()
+                .filter_map(|effect| match effect {
+                    Effect::Send(frame) => match Packet::parse(frame) {
+                        Some(Packet::Uarp(message)) => Some(message),
+                        _ => None,
+                    },
+                    _ => None,
+                })
+                .collect()
+        }
+
+        fn kinds(fx: &[Effect]) -> Vec<u16> {
+            uarp(fx)
+                .iter()
+                .map(|message| u16::from_be_bytes([message[0], message[1]]))
+                .collect()
         }
 
         /// The news sent to PEER among `fx`.
@@ -2478,30 +2584,80 @@ mod tests {
                 .collect()
         }
 
-        fn writes(fx: &[Effect]) -> usize {
-            fx.iter()
-                .filter(|e| matches!(e, Effect::UarpWrite(_)))
-                .count()
-        }
-
-        /// A whole message from the pods, as one indication.
-        fn indication(kind: u16, payload: &[u8]) -> Vec<u8> {
+        /// A UARP message from the pods, in its AACP frame.
+        fn from_pods(e: &mut Engine, kind: u16, payload: &[u8], at: Instant) -> Vec<Effect> {
             let len = u16::try_from(payload.len()).unwrap();
-            [
-                &[1][..],
-                &kind.to_be_bytes(),
+            let message = [
+                &kind.to_be_bytes()[..],
                 &len.to_be_bytes(),
                 &[0, 9],
                 payload,
             ]
-            .concat()
+            .concat();
+            feed_at(e, &uarp::frame(&message), at)
+        }
+
+        fn feed_at(e: &mut Engine, bytes: &[u8], at: Instant) -> Vec<Effect> {
+            parse_datagram(bytes)
+                .into_iter()
+                .flat_map(|packet| e.handle(packet, at))
+                .collect()
+        }
+
+        /// The information response naming `version` running.
+        fn running_version(e: &mut Engine, version: [u32; 3]) -> Vec<Effect> {
+            let value = version
+                .into_iter()
+                .chain([0])
+                .flat_map(u32::to_be_bytes)
+                .collect::<Vec<_>>();
+            let payload = [&[0, 0, 0, 0, 0, 5, 0, 0, 0, 16][..], &value].concat();
+            from_pods(e, 4, &payload, later())
         }
 
         fn running(e: &mut Engine) {
             e.prepare_update(release()).unwrap();
-            let fx = e.package(Some(package()), now());
-            assert!(matches!(fx[0], Effect::OpenUarp));
+            let fx = e.package(Some(package()), later());
             assert_eq!(told(&fx), [News::Update(UpdateStatus::Offered)]);
+            assert_eq!(kinds(&fx), [0x00, 0x01, 0x05], "offered at once");
+        }
+
+        #[test]
+        fn uarp_waits_for_a_settled_session() {
+            let mut e = engine();
+            assert_eq!(kinds(&e.handle(Packet::HandshakeAck, now())), []);
+            assert_eq!(kinds(&feed(&mut e, CONNECTED_DEVICES)), []);
+            assert_eq!(kinds(&settle(&mut e, now())), [], "a connect is fresh");
+            assert_eq!(e.next_wake(), Some(now() + STATE_BURST_WAIT));
+            e.tick(now() + STATE_BURST_WAIT);
+            assert_eq!(e.next_wake(), Some(later()));
+            assert_eq!(kinds(&e.tick(later())), [0x00, 0x01, 0x03]);
+            assert_eq!(e.next_wake(), None, "asked once a session");
+            // The pods' own offer goes unanswered; a downstream endpoint is
+            // acknowledged.
+            assert_eq!(kinds(&from_pods(&mut e, 5, &[0; 30], later())), []);
+            assert_eq!(kinds(&from_pods(&mut e, 0x17, &[0, 2], later())), [0x18]);
+            // Without the state half, never.
+            let mut e = engine();
+            e.handle(Packet::HandshakeAck, now());
+            feed(&mut e, CONNECTED_DEVICES);
+            assert_eq!(kinds(&e.tick(later())), []);
+            assert_eq!(kinds(&from_pods(&mut e, 0x17, &[0, 2], later())), []);
+        }
+
+        #[test]
+        fn the_running_version_is_learned_and_shared() {
+            let mut e = ready();
+            let fx = running_version(&mut e, [7, 1, 21]);
+            assert!(matches!(fx[0], Effect::LearnedFirmware { .. }));
+            let exact = "7.1.21".parse().unwrap();
+            assert_eq!(e.state().firmware.exact, Some(exact));
+            assert_eq!(told(&fx), [News::Firmware(exact)]);
+            // A host joining hears it too.
+            assert_eq!(
+                told(&feed(&mut e, CONNECTED_DEVICES)),
+                [News::Firmware(exact)]
+            );
         }
 
         #[test]
@@ -2529,28 +2685,29 @@ mod tests {
         fn an_update_runs_until_staged_and_tells_the_peer() {
             let mut e = ready();
             running(&mut e);
-            let fx = e.uarp_up(Framing::GATT, now());
-            assert_eq!(writes(&fx), 3, "sync, version, offer");
             let ftab = package().ftab();
             let request = [&[0, 1][..], &ftab.start.to_be_bytes(), &[0, 4]].concat();
-            let fx = e.uarp_received(&indication(6, &request), now());
-            assert_eq!(writes(&fx), 1);
+            let fx = from_pods(&mut e, 6, &request, later());
+            assert_eq!(kinds(&fx), [0x07]);
             assert_eq!(
                 told(&fx),
                 [News::Update(UpdateStatus::Transferring { percent: 13 })]
             );
             // No step further: not told again.
-            let fx = e.uarp_received(&indication(6, &request), now());
+            let fx = from_pods(&mut e, 6, &request, later());
             assert_eq!(told(&fx), []);
-            let fx = e.uarp_received(&indication(9, &[0, 1, 0, 1]), now());
-            assert_eq!(writes(&fx), 1, "the processing ack");
+            let fx = from_pods(&mut e, 9, &[0, 1, 0, 1], later());
+            assert_eq!(kinds(&fx), [0x0f]);
             assert_eq!(told(&fx), [News::Update(UpdateStatus::Staged)]);
-            assert!(matches!(fx.last(), Some(Effect::CloseUarp)));
             assert_eq!(e.update_status(), Some(UpdateStatus::Staged));
             // The lid closed, the pods came back on the new firmware.
             reconnect(&mut e, Duration::from_secs(1800));
+            let back = now() + Duration::from_secs(1800);
+            e.handle(Packet::HandshakeAck, back);
             feed(&mut e, CONNECTED_DEVICES);
-            let fx = e.exact_firmware(mac(PODS), "9.0.348".parse().unwrap());
+            settle(&mut e, back);
+            assert_eq!(kinds(&e.tick(back + UARP_SETTLE)), [0x00, 0x01, 0x03]);
+            let fx = running_version(&mut e, [9, 0, 348]);
             let done = UpdateStatus::Done("9.0.348".parse().unwrap());
             assert_eq!(
                 told(&fx),
@@ -2563,26 +2720,39 @@ mod tests {
         }
 
         #[test]
-        fn an_interrupted_update_resumes_with_the_session() {
+        fn an_interrupted_update_resumes_once_settled() {
             let mut e = ready();
             running(&mut e);
-            e.uarp_up(Framing::GATT, now());
-            e.disconnected(now());
-            let fx = e.uarp_down(now());
-            assert!(
-                !fx.iter().any(|e| matches!(e, Effect::OpenUarp)),
-                "no session"
-            );
+            e.disconnected(later());
             assert_eq!(
                 e.update_status(),
                 Some(UpdateStatus::Interrupted { percent: 0 })
             );
-            let fx = e.connected(mac(PODS), now());
-            assert!(matches!(fx[..], [Effect::Send(_), Effect::OpenUarp]));
-            assert_eq!(writes(&e.uarp_up(Framing::GATT, now())), 3);
-            // Dropped while the session stays: opened again at once.
-            let fx = e.uarp_down(now());
-            assert!(matches!(fx.last(), Some(Effect::OpenUarp)));
+            let back = later() + Duration::from_secs(10);
+            let fx = e.connected(mac(PODS), back);
+            assert_eq!(kinds(&fx), []);
+            e.handle(Packet::HandshakeAck, back);
+            feed(&mut e, CONNECTED_DEVICES);
+            assert_eq!(kinds(&settle(&mut e, back)), []);
+            // The identical offer, and no version query meanwhile.
+            assert_eq!(kinds(&e.tick(back + UARP_SETTLE)), [0x00, 0x01, 0x05]);
+            // A primary switch: the update waits for it to settle.
+            let switch = back + UARP_SETTLE;
+            let fx = e.handle(
+                Packet::PrimaryBud(PrimaryBud {
+                    bud: Bud::Right,
+                    active: false,
+                }),
+                switch,
+            );
+            assert_eq!(kinds(&fx), []);
+            assert_eq!(
+                told(&fx),
+                [News::Update(UpdateStatus::Interrupted { percent: 0 })]
+            );
+            let request = [&[0, 1][..], &0u32.to_be_bytes(), &[0, 4]].concat();
+            assert_eq!(kinds(&from_pods(&mut e, 6, &request, switch)), [], "held");
+            assert_eq!(kinds(&e.tick(switch + UARP_SETTLE)), [0x00, 0x01, 0x05]);
             // Other pods: the update is theirs no more.
             e.disconnected(now());
             e.connected(mac(PEER), now());
@@ -2593,20 +2763,17 @@ mod tests {
         fn the_watchdog_and_cancelling_rescind() {
             let mut e = ready();
             running(&mut e);
-            e.uarp_up(Framing::GATT, now());
-            assert!(e.next_wake().is_some_and(|wake| wake <= now() + WATCHDOG));
-            let fx = e.tick(now() + WATCHDOG);
-            assert_eq!(writes(&fx), 1, "the rescind");
-            assert!(matches!(fx.last(), Some(Effect::CloseUarp)));
+            assert!(e.next_wake().is_some_and(|wake| wake <= later() + WATCHDOG));
+            let fx = e.tick(later() + WATCHDOG);
+            assert_eq!(kinds(&fx), [0x0c]);
             assert_eq!(
                 e.update_status(),
                 Some(UpdateStatus::Failed(Failure::NotStarted))
             );
             let mut e = ready();
             running(&mut e);
-            e.uarp_up(Framing::GATT, now());
             let fx = e.cancel_update();
-            assert_eq!(writes(&fx), 1);
+            assert_eq!(kinds(&fx), [0x0c]);
             assert_eq!(
                 told(&fx),
                 [News::Update(UpdateStatus::Failed(Failure::Cancelled))]
@@ -2615,14 +2782,14 @@ mod tests {
             let mut e = ready();
             e.prepare_update(release()).unwrap();
             e.cancel_update();
-            assert_eq!(e.package(Some(package()), now()), []);
+            assert_eq!(e.package(Some(package()), later()), []);
         }
 
         #[test]
         fn a_package_is_checked_again() {
             let mut e = ready();
             e.prepare_update("9.0.349".parse().ok()).unwrap();
-            e.package(Some(package()), now());
+            e.package(Some(package()), later());
             assert_eq!(
                 e.update_status(),
                 Some(UpdateStatus::Failed(Failure::Download)),
@@ -2631,14 +2798,14 @@ mod tests {
             let mut e = ready();
             e.prepare_update(release()).unwrap();
             e.state.firmware.exact = release();
-            e.package(Some(package()), now());
+            e.package(Some(package()), later());
             assert_eq!(
                 e.update_status(),
                 Some(UpdateStatus::Failed(Failure::Refused(Refusal::NotNewer)))
             );
             let mut e = ready();
             e.prepare_update(release()).unwrap();
-            let fx = e.package(None, now());
+            let fx = e.package(None, later());
             assert_eq!(
                 told(&fx),
                 [News::Update(UpdateStatus::Failed(Failure::Download))]
@@ -2676,23 +2843,6 @@ mod tests {
             );
             assert!(e.state().peer_update.is_none());
             assert!(e.prepare_update(release()).is_ok());
-        }
-
-        #[test]
-        fn the_exact_firmware_is_shared_with_hosts_that_join() {
-            let mut e = engine();
-            let exact = "7.1.21".parse().unwrap();
-            assert_eq!(
-                told(&e.exact_firmware(mac(PODS), exact)),
-                [],
-                "no hosts known"
-            );
-            let fx = feed(&mut e, CONNECTED_DEVICES);
-            assert_eq!(told(&fx), [News::Firmware(exact)]);
-            assert_eq!(
-                told(&e.exact_firmware(mac(PODS), exact)),
-                [News::Firmware(exact)]
-            );
         }
     }
 }

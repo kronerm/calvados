@@ -15,7 +15,7 @@ use crate::aacp::ChargingStatus;
 use crate::firmware::{ExactVersion, Version};
 use crate::state::DeviceState;
 use crate::superbinary::Package;
-use crate::uarp::{Framing, Message, Processing, Reassembler, Received, UNKNOWN_ASSET};
+use crate::uarp::{MAX_DATA, Message, Processing, Received, UNKNOWN_ASSET};
 
 /// Our offer's asset id, as `uarp_offer.py` used.
 const ASSET: u16 = 1;
@@ -207,11 +207,11 @@ pub fn check(state: &DeviceState, version: ExactVersion) -> Result<(), Refusal> 
     }
 }
 
-/// What the platform does for an [`Updater`].
+/// What an [`Updater`] asks for.
 #[derive(Debug, Clone)]
 #[cfg_attr(test, derive(PartialEq, Eq))]
 pub enum Output {
-    /// One GATT write (with response), in order, one at a time.
+    /// Send this UARP message, after the ones before.
     Write(Vec<u8>),
     /// The status changed.
     Status(UpdateStatus),
@@ -227,17 +227,18 @@ enum Phase {
     Failed(Failure),
 }
 
+/// Whether UARP may be sent: the session's settled (the engine decides).
 #[derive(Debug, Clone, Copy)]
 enum Transport {
     /// Not up yet.
     Opening,
-    Up(Framing),
+    Up,
     /// Was up, dropped.
     Lost,
 }
 
-/// One update of one pair: open the UARP transport, report it with
-/// [`Updater::up`], feed it indications and [`Updater::tick`] at
+/// One update of one pair: report the transport with [`Updater::up`] and
+/// [`Updater::down`], feed it the pods' messages and [`Updater::tick`] at
 /// [`Updater::next_wake`], perform the [`Output`]s.
 #[derive(Debug)]
 pub struct Updater {
@@ -245,7 +246,6 @@ pub struct Updater {
     phase: Phase,
     transport: Transport,
     next_id: u16,
-    reassembler: Reassembler,
     /// When the watchdog fires, while active.
     deadline: Instant,
     /// Transport drops since the last request served.
@@ -262,7 +262,6 @@ impl Updater {
             phase: Phase::Offered,
             transport: Transport::Opening,
             next_id: 1,
-            reassembler: Reassembler::default(),
             deadline: now + WATCHDOG,
             drops: 0,
             position: 0,
@@ -290,14 +289,19 @@ impl Updater {
         }
     }
 
+    /// Whether it may send.
+    pub fn is_up(&self) -> bool {
+        matches!(self.transport, Transport::Up)
+    }
+
     /// When [`Self::tick`] is due.
     pub fn next_wake(&self) -> Option<Instant> {
         self.status().is_active().then_some(self.deadline)
     }
 
-    /// The transport is up (again), framing messages as `framing`: offer. Re-offering the identical package
+    /// UARP may be sent (again): offer. Re-offering the identical package
     /// within the pods' boot continues where they were (docs/update-host.md).
-    pub fn up(&mut self, framing: Framing, now: Instant) -> Vec<Output> {
+    pub fn up(&mut self, now: Instant) -> Vec<Output> {
         if !self.status().is_active() {
             return Vec::new();
         }
@@ -306,8 +310,7 @@ impl Updater {
             "firmware update: offering"
         );
         self.change(|updater| {
-            updater.transport = Transport::Up(framing);
-            updater.reassembler = Reassembler::default();
+            updater.transport = Transport::Up;
             updater.next_id = 1;
             updater.deadline = now + WATCHDOG;
             if let Phase::Deferred = updater.phase {
@@ -326,9 +329,11 @@ impl Updater {
         })
     }
 
-    /// The transport dropped (or never came up): wait for it, a few times.
+    /// UARP may not be sent any more (the session dropped, the primary
+    /// changes): wait for it, a few times.
     pub fn down(&mut self, now: Instant) -> Vec<Output> {
         if !self.status().is_active() {
+            self.transport = Transport::Lost;
             return Vec::new();
         }
         self.change(|updater| {
@@ -343,17 +348,9 @@ impl Updater {
         })
     }
 
-    /// What arrived on the transport: over GATT an indication (a fragment,
-    /// with its header), over AACP a whole message.
-    pub fn received(&mut self, bytes: &[u8], now: Instant) -> Vec<Output> {
-        let message = match self.transport {
-            Transport::Up(Framing::Aacp) => Some(bytes.to_vec()),
-            _ => self.reassembler.push(bytes),
-        };
-        let Some(message) = message else {
-            return Vec::new();
-        };
-        let Some(received) = Received::parse(&message) else {
+    /// A message from the pods.
+    pub fn received(&mut self, message: &[u8], now: Instant) -> Vec<Output> {
+        let Some(received) = Received::parse(message) else {
             tracing::warn!(
                 len = message.len(),
                 "firmware update: malformed UARP message"
@@ -397,10 +394,6 @@ impl Updater {
                 };
                 vec![ack]
             }
-            Received::DownstreamAdded { id } => {
-                tracing::info!(id, "firmware update: downstream endpoint added");
-                vec![self.encode(Message::DownstreamAddedAck { id })]
-            }
             Received::Version { status, version } => {
                 tracing::info!(status, version, "firmware update: protocol version");
                 Vec::new()
@@ -412,12 +405,13 @@ impl Updater {
         }
     }
 
-    /// Exactly what's asked, from the package; an unknown asset or an
-    /// offset past the end gets [`UNKNOWN_ASSET`] (the pods then abandon).
+    /// What's asked, from the package, as much as fits a message (the
+    /// pods ask on from where it ends); an unknown asset or an offset past
+    /// the end gets [`UNKNOWN_ASSET`] (the pods then abandon).
     fn serve(&mut self, asset: u16, offset: u32, length: u16, now: Instant) -> Vec<u8> {
         let id = self.take_id();
         let data = match asset {
-            ASSET => self.package.read(offset, length),
+            ASSET => self.package.read(offset, length.min(MAX_DATA)),
             _ => None,
         };
         let Some(data) = data else {
@@ -500,7 +494,7 @@ impl Updater {
     fn fail(&mut self, failure: Failure) -> Vec<Vec<u8>> {
         self.phase = Phase::Failed(failure);
         match self.transport {
-            Transport::Up(_) => vec![self.encode(Message::Rescind { asset: ASSET })],
+            Transport::Up => vec![self.encode(Message::Rescind { asset: ASSET })],
             Transport::Opening | Transport::Lost => Vec::new(),
         }
     }
@@ -522,11 +516,7 @@ impl Updater {
         let messages = step(self);
         let after = self.status();
         let writes = match self.transport {
-            Transport::Up(framing) => messages
-                .iter()
-                .flat_map(|message| framing.frames(message))
-                .map(Output::Write)
-                .collect(),
+            Transport::Up => messages.into_iter().map(Output::Write).collect(),
             Transport::Opening | Transport::Lost => Vec::new(),
         };
         if after != before {
@@ -689,19 +679,19 @@ fn failure_of(code: u8, argument: u8) -> Option<Failure> {
 mod tests {
     use super::*;
     use crate::aacp::{BatteryComponent, BatteryInfo, EarDetection, EarStatus, Packet};
-    use crate::superbinary::tests::{package, package_bytes};
+    use crate::superbinary::tests::{package, package_bytes, package_bytes_with};
+    use crate::uarp;
 
     fn now() -> Instant {
         static NOW: std::sync::LazyLock<Instant> = std::sync::LazyLock::new(Instant::now);
         *NOW
     }
 
-    /// A whole message from the pods, as one indication.
-    fn indication(kind: u16, id: u16, payload: &[u8]) -> Vec<u8> {
+    /// A message from the pods.
+    fn from_pods(kind: u16, id: u16, payload: &[u8]) -> Vec<u8> {
         let len = u16::try_from(payload.len()).unwrap();
         [
-            &[1][..],
-            &kind.to_be_bytes(),
+            &kind.to_be_bytes()[..],
             &len.to_be_bytes(),
             &id.to_be_bytes(),
             payload,
@@ -710,7 +700,7 @@ mod tests {
     }
 
     fn request(offset: u32, length: u16) -> Vec<u8> {
-        indication(
+        from_pods(
             6,
             9,
             &[
@@ -723,7 +713,7 @@ mod tests {
     }
 
     fn processing(flags: u16) -> Vec<u8> {
-        indication(
+        from_pods(
             9,
             9,
             &[&1u16.to_be_bytes()[..], &flags.to_be_bytes()].concat(),
@@ -735,7 +725,7 @@ mod tests {
         outputs
             .iter()
             .filter_map(|output| match output {
-                Output::Write(write) => Some(u16::from_be_bytes([write[1], write[2]])),
+                Output::Write(write) => Some(u16::from_be_bytes([write[0], write[1]])),
                 Output::Status(_) => None,
             })
             .collect()
@@ -756,7 +746,7 @@ mod tests {
         outputs
             .iter()
             .find_map(|output| match output {
-                Output::Write(write) if write[1..3] == [0, 7] => Some(write[19..].to_vec()),
+                Output::Write(write) if write[0..2] == [0, 7] => Some(write[18..].to_vec()),
                 _ => None,
             })
             .unwrap()
@@ -764,7 +754,7 @@ mod tests {
 
     fn started() -> Updater {
         let mut updater = Updater::new(package(), now());
-        updater.up(Framing::GATT, now());
+        updater.up(now());
         updater
     }
 
@@ -775,13 +765,13 @@ mod tests {
         let mut updater = Updater::new(package(), now());
         assert_eq!(updater.status(), UpdateStatus::Offered);
         let mut sent = Vec::new();
-        let offered = updater.up(Framing::GATT, now());
+        let offered = updater.up(now());
         assert_eq!(kinds(&offered), [0x00, 0x01, 0x05]);
         sent.extend(offered);
         // The offer acknowledged: deferred until the first request.
         let mut echo = [0; 30];
         echo[7] = 1;
-        let ack = indication(0x0d, 1, &echo);
+        let ack = from_pods(0x0d, 1, &echo);
         assert_eq!(
             statuses(&updater.received(&ack, now())),
             [UpdateStatus::Deferred]
@@ -848,8 +838,8 @@ mod tests {
             Output::Write(write) => write.clone(),
             Output::Status(_) => panic!("a write first"),
         };
-        assert_eq!(write[7..9], UNKNOWN_ASSET.to_be_bytes());
-        let other = indication(6, 9, &[0, 2, 0, 0, 0, 0, 0, 4]);
+        assert_eq!(write[6..8], UNKNOWN_ASSET.to_be_bytes());
+        let other = from_pods(6, 9, &[0, 2, 0, 0, 0, 0, 0, 4]);
         let outputs = updater.received(&other, now());
         assert_eq!(kinds(&outputs), [0x07]);
         assert_eq!(
@@ -873,7 +863,7 @@ mod tests {
         }
         // Another asset's notification is only acknowledged.
         let mut updater = started();
-        let other = indication(9, 9, &[0, 2, 0, 1]);
+        let other = from_pods(9, 9, &[0, 2, 0, 1]);
         assert_eq!(kinds(&updater.received(&other, now())), [0x0f]);
         assert_eq!(updater.status(), UpdateStatus::Offered);
     }
@@ -913,8 +903,8 @@ mod tests {
         );
         assert_eq!(kinds(&outputs), []);
         // Back: Sync, version, the identical offer, still transferring.
-        let first = Updater::new(package(), now()).up(Framing::GATT, now());
-        let again = updater.up(Framing::GATT, now());
+        let first = Updater::new(package(), now()).up(now());
+        let again = updater.up(now());
         assert_eq!(kinds(&again), [0x00, 0x01, 0x05]);
         assert_eq!(again[..3], first[..3]);
         assert_eq!(updater.status(), UpdateStatus::Transferring { percent: 13 });
@@ -950,48 +940,32 @@ mod tests {
     }
 
     #[test]
-    fn long_responses_are_fragmented() {
-        let mut updater = Updater::new(package(), now());
-        updater.up(Framing::Gatt { max_write: 8 }, now());
-        let outputs = updater.received(&request(0, 0x2c), now());
-        let writes = outputs
-            .iter()
-            .filter_map(|output| match output {
-                Output::Write(write) => Some(write.clone()),
-                Output::Status(_) => None,
-            })
-            .collect::<Vec<_>>();
-        assert!(writes.iter().all(|write| write.len() <= 8));
-        let mut reassembler = Reassembler::default();
-        let message = writes
-            .iter()
-            .find_map(|write| reassembler.push(write))
-            .unwrap();
-        assert_eq!(message.len(), 18 + 0x2c);
-        assert_eq!(writes.iter().filter(|write| write[0] & 1 == 1).count(), 1);
-    }
-
-    #[test]
-    fn over_aacp_messages_are_whole() {
-        let mut updater = Updater::new(package(), now());
-        let offered = updater.up(Framing::Aacp, now());
-        assert!(offered.iter().all(|output| match output {
-            Output::Write(frame) => frame[..6] == [4, 0, 4, 0, 0x4f, 0],
-            Output::Status(_) => true,
-        }));
-        // No fragment header on what arrives.
-        let outputs = updater.received(&request(0, 0x2c)[1..], now());
+    fn large_requests_are_served_as_far_as_a_message_goes() {
+        let large = Package::parse(package_bytes_with(&[7; 4096])).unwrap();
+        let mut updater = Updater::new(large, now());
+        updater.up(now());
+        let outputs = updater.received(&request(0, u16::MAX), now());
+        let Output::Write(response) = &outputs[0] else {
+            panic!("a response");
+        };
+        assert_eq!(response.len(), uarp::MAX_MESSAGE);
         assert_eq!(
-            statuses(&outputs),
-            [UpdateStatus::Transferring { percent: 0 }]
+            response[14..16],
+            u16::MAX.to_be_bytes(),
+            "the request echoed"
         );
+        assert_eq!(response[16..18], uarp::MAX_DATA.to_be_bytes());
     }
 
     #[test]
-    fn downstream_endpoints_are_acknowledged() {
-        let mut updater = started();
-        let outputs = updater.received(&indication(0x17, 1, &[0, 3]), now());
-        assert_eq!(kinds(&outputs), [0x18]);
+    fn nothing_is_sent_while_down() {
+        let mut updater = Updater::new(package(), now());
+        assert_eq!(kinds(&updater.received(&request(0, 4), now())), []);
+        updater.up(now());
+        updater.down(now());
+        assert!(!updater.is_up());
+        assert_eq!(kinds(&updater.received(&request(0, 4), now())), []);
+        assert_eq!(kinds(&updater.cancel()), []);
     }
 
     fn state(left: EarStatus, case: ChargingStatus, reported: &str) -> DeviceState {

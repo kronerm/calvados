@@ -372,9 +372,6 @@ fn execute_effect(conn: &Conn, effect: Effect, in_call: bool) -> bool {
                 tracing::warn!("failed to persist local MAC: {e:#}");
             }
         }
-        // No UARP transport on Android yet: the engine starts no update
-        // without a package, and only the platform fetches one.
-        Effect::OpenUarp | Effect::UarpWrite(_) | Effect::CloseUarp => {}
         Effect::Pause => log_media("pause", media::pause()),
         Effect::Resume => log_media("resume", media::resume()),
     }

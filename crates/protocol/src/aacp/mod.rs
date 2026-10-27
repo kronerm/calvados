@@ -75,6 +75,8 @@ pub enum Packet {
     ProximityKeys(Vec<proximity_keys::ProximityKey>),
     RoutingResponse(RoutingResponse),
     StemPress(StemPress),
+    /// One UARP message (opcode 0x4F; [`crate::uarp`]).
+    Uarp(Vec<u8>),
     Opaque(Opaque),
 }
 
@@ -175,6 +177,7 @@ impl Packet {
                 map(smart_routing::parse_response, Self::RoutingResponse).parse(body)
             }
             stem_press::OPCODE => map(stem_press::parse, Self::StemPress).parse(body),
+            crate::uarp::OPCODE => map(crate::uarp::parse_frame, Self::Uarp).parse(body),
             _ => Err(nom::Err::Error(nom::error::Error::new(
                 body,
                 nom::error::ErrorKind::Switch,

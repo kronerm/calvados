@@ -241,13 +241,18 @@ pub(crate) mod tests {
     /// digest and `0xCCD28112` = 1, then 7 trailing bytes past the binary
     /// length (Apple's files have some).
     pub(crate) fn package_bytes() -> Vec<u8> {
+        package_bytes_with(FTAB_DATA)
+    }
+
+    /// The same with `ftab` as FTAB's data.
+    pub(crate) fn package_bytes_with(ftab: &[u8]) -> Vec<u8> {
         let payloads = 2u32;
         let headers_at = HEADER_LEN;
         let metadata_at = headers_at + payloads * PAYLOAD_HEADER_LEN;
         let ftab_metadata = [
             &DIGEST.to_be_bytes()[..],
             &32u32.to_be_bytes(),
-            &Sha256::digest(FTAB_DATA),
+            &Sha256::digest(ftab),
             &0xCCD2_8112u32.to_be_bytes(),
             &2u32.to_be_bytes(),
             &[0, 1],
@@ -256,7 +261,7 @@ pub(crate) mod tests {
         let metadata_len = ftab_metadata.len() as u32;
         let auch_at = metadata_at + metadata_len;
         let ftab_at = auch_at + AUCH_DATA.len() as u32;
-        let length = ftab_at + FTAB_DATA.len() as u32;
+        let length = ftab_at + ftab.len() as u32;
         let be = |words: &[u32]| {
             words
                 .iter()
@@ -297,11 +302,11 @@ pub(crate) mod tests {
                 b"FTAB",
                 [90, 224_854_016, 26_214_400, 6807],
                 [metadata_at, metadata_len],
-                [ftab_at, FTAB_DATA.len() as u32],
+                [ftab_at, ftab.len() as u32],
             ),
             ftab_metadata,
             AUCH_DATA.to_vec(),
-            FTAB_DATA.to_vec(),
+            ftab.to_vec(),
             b"trailer".to_vec(),
         ]
         .concat()

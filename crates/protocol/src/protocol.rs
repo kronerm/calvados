@@ -123,6 +123,8 @@ fn frame_length(frame: &[u8]) -> Length {
         0x4E => Length::Known(HEADER + 8),        // all zeros, once per session
         // `[len 2]` + body; 0x52 is `03 00 02 01 xx` before ear changes
         0x4C | 0x52 | 0x57 => prefixed(HEADER, HEADER + 2),
+        // UARP: one whole message
+        crate::uarp::OPCODE => prefixed(HEADER, HEADER + 2),
         // device information: `02 [len 2]`, counting from its own byte 3
         0x1D => prefixed(HEADER + 1, HEADER + 3),
         // `01 [x] [len] 00` + body
