@@ -507,6 +507,13 @@ and 13:34:01). Not prevented, recovered from:
   only allow multipoint handoff to Apple hosts. Linux sets it in BlueZ's
   config; Android needs the LSPosed hook.
 
+## Firmware
+
+`docs/firmware.md` is what the pods' firmware says, by build, image and
+offset (fetched and unpacked by `tools/firmware/`, never committed). Add to
+it whatever new RE shows, with how each landmark was found, and update the
+README's credits when work from elsewhere is used.
+
 ## Conventions
 
 - Keep comments short; put rationale in commit messages.

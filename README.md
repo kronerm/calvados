@@ -160,4 +160,27 @@ its properties signal changes.
   while the other bud takes over; both devices reconnect, and what's shown
   stays meanwhile.
 
+## Credits
+
+Calvados builds on others' work:
+
+- [LibrePods]: most of what's known about the AirPods protocol (battery,
+  ear detection, noise control, conversational awareness, smart routing
+  and the handoff, device information, the proximity keys), the BLE
+  advertisement (lid and in-case bits, the encrypted case level), the case
+  charging sounds command, and the Android approach: the two hooks into the
+  system Bluetooth stack (Apple's Device ID, the L2CAP mode check).
+- [openulla]: the AirPods firmware's AAP framing and AACP command table
+  ([`docs/firmware.md`](docs/firmware.md) continues from it).
+- [uarp-dump], [ftab-dump] and [linden/uarp]: the firmware's container
+  formats.
+- [Tabler Icons] (MIT): the icons on Android and in the Noctalia plugin.
+
+[LibrePods]: https://github.com/librepods-org/librepods
+[openulla]: https://github.com/mstampfli/openulla
+[uarp-dump]: https://github.com/19h/uarp-dump
+[ftab-dump]: https://github.com/19h/ftab-dump
+[linden/uarp]: https://github.com/linden/uarp
+[Tabler Icons]: https://tabler.io/icons
+
 Developer notes live in [`AGENTS.md`](AGENTS.md).
