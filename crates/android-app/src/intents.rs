@@ -19,6 +19,12 @@ pub(crate) const ACTION_AUTO_SWITCH: &str = "AUTO_SWITCH";
 /// Flip connecting the pods when they show up nearby.
 pub(crate) const ACTION_AUTO_CONNECT: &str = "AUTO_CONNECT";
 
+/// Update the pods to the catalog's release (the notification's action).
+pub(crate) const ACTION_UPDATE_FIRMWARE: &str = "UPDATE_FIRMWARE";
+
+/// Withdraw this phone's firmware update.
+pub(crate) const ACTION_CANCEL_UPDATE: &str = "CANCEL_UPDATE";
+
 /// The pods' ACL link came up (from the ACL broadcast): attach if idle.
 pub(crate) const ACTION_AIRPODS_AVAILABLE: &str = "AIRPODS_AVAILABLE";
 

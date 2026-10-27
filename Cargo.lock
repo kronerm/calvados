@@ -35,6 +35,7 @@ dependencies = [
  "anyhow",
  "bitflags",
  "crossbeam-channel",
+ "firmware-fetch",
  "hex",
  "jni",
  "num_enum",

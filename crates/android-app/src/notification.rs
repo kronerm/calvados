@@ -3,10 +3,13 @@
 use jni::JavaVM;
 use jni::objects::JObject;
 
-use crate::intents::{self, ACTION_AUTO_CONNECT, ACTION_AUTO_SWITCH, ACTION_NOISE_PREFIX};
+use crate::intents::{
+    self, ACTION_AUTO_CONNECT, ACTION_AUTO_SWITCH, ACTION_CANCEL_UPDATE, ACTION_NOISE_PREFIX,
+    ACTION_UPDATE_FIRMWARE,
+};
 use crate::jni::android::app::activity_thread::ActivityThread;
 use crate::jni::android::app::notification::{
-    DecoratedCustomViewStyle, Importance, Notification, NotificationChannel,
+    Action, DecoratedCustomViewStyle, Importance, Notification, NotificationChannel,
 };
 use crate::jni::android::app::pending_intent::{Flags, PendingIntent};
 use crate::jni::android::app::service::Service;
@@ -17,6 +20,9 @@ use crate::jni::android::widget::remote_views::{RemoteViews, Visibility};
 use crate::proto::aacp::NoiseControlMode;
 use crate::proto::display::{self, Buds, Component, Place};
 use crate::proto::engine::Engine;
+use crate::proto::firmware::Release;
+use crate::proto::state::PeerUpdate;
+use crate::proto::update::{Refusal, UpdateStatus};
 use crate::service::Conn;
 
 pub(crate) const CHANNEL_ID: &str = "calvados_persistent";
@@ -55,9 +61,12 @@ pub(crate) struct Content {
     buds: Option<Buds>,
     /// [`display::mode_name`]: empty while unknown.
     noise: &'static str,
-    /// `Firmware 7.1 (6663)` while connected and known; else empty. Only the
-    /// running version: unlike Linux, no catalog check (no internet).
-    firmware: String,
+    /// The header's one line: a refused update's reason, else an update's
+    /// progress (ours, else another host's), else `Firmware 7.1.21 · 9.0.348
+    /// available` while connected; empty for none.
+    header: String,
+    /// The button under the expanded view, while there's one to offer.
+    update_action: Option<UpdateAction>,
     auto_switch: bool,
     auto_connect: bool,
 }
@@ -69,12 +78,92 @@ const MODES: [(NoiseControlMode, &str); 3] = [
     (NoiseControlMode::Adaptive, "tile_adaptive"),
 ];
 
+/// Start or cancel this phone's firmware update.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum UpdateAction {
+    Start,
+    Cancel,
+}
+
+impl UpdateAction {
+    /// Cancel while ours runs; Start while connected, a newer release is
+    /// known, and no update runs or waits for the lid, here or elsewhere.
+    fn of(
+        own: Option<UpdateStatus>,
+        peer: Option<PeerUpdate>,
+        newer: bool,
+        connected: bool,
+    ) -> Option<Self> {
+        let busy =
+            |status: UpdateStatus| status.is_active() || matches!(status, UpdateStatus::Staged);
+        match own {
+            Some(status) if status.is_active() => Some(Self::Cancel),
+            _ if !connected || !newer => None,
+            Some(status) if busy(status) => None,
+            _ if peer.is_some_and(|peer| busy(peer.status)) => None,
+            _ => Some(Self::Start),
+        }
+    }
+
+    fn label(self) -> &'static str {
+        match self {
+            Self::Start => "Update firmware",
+            Self::Cancel => "Cancel update",
+        }
+    }
+
+    fn intent(self) -> &'static str {
+        match self {
+            Self::Start => ACTION_UPDATE_FIRMWARE,
+            Self::Cancel => ACTION_CANCEL_UPDATE,
+        }
+    }
+}
+
+/// The header's line; see [`Content::header`].
+fn header(
+    refused: Option<Refusal>,
+    own: Option<UpdateStatus>,
+    peer: Option<PeerUpdate>,
+    firmware: Option<String>,
+    latest: Option<&Release>,
+) -> String {
+    let firmware = || {
+        firmware.map(|version| match latest {
+            Some(latest) => format!("Firmware {version} · {} available", latest.version),
+            None => format!("Firmware {version}"),
+        })
+    };
+    refused
+        .map(|refusal| capitalized(&refusal.to_string()))
+        .or_else(|| own.map(display::update))
+        .or_else(|| peer.map(display::peer_update))
+        .or_else(firmware)
+        .unwrap_or_default()
+}
+
+fn capitalized(text: &str) -> String {
+    let mut chars = text.chars();
+    chars
+        .next()
+        .map(|first| first.to_uppercase().chain(chars).collect())
+        .unwrap_or_default()
+}
+
 impl Content {
-    pub(crate) fn of(engine: &Engine, conn: &Conn) -> Self {
+    /// `latest`: the catalog's release for the pods, once checked;
+    /// `refused`: why an update just asked for wasn't started.
+    pub(crate) fn of(
+        engine: &Engine,
+        conn: &Conn,
+        latest: Option<&Release>,
+        refused: Option<Refusal>,
+    ) -> Self {
         let state = engine.state();
         let settings = engine.settings();
         let name = state.name.as_deref().unwrap_or("AirPods");
         let connected = matches!(conn, Conn::Connected { .. });
+        let newer = latest.filter(|latest| latest.is_newer_than(&state.firmware));
         let text = match conn {
             Conn::Disconnected => "Not connected",
             Conn::Connecting { .. } => "Connecting…",
@@ -91,10 +180,20 @@ impl Content {
             text: text.to_owned(),
             buds: connected.then(|| Buds::of(state)),
             noise: display::mode_name(state.noise_mode),
-            firmware: display::firmware(&state.firmware)
-                .filter(|_| connected)
-                .map(|version| format!("Firmware {version}"))
-                .unwrap_or_default(),
+            header: header(
+                refused,
+                // Also while the pods are away: an interrupted update waits.
+                engine.update_status(),
+                state.peer_update,
+                display::firmware(&state.firmware).filter(|_| connected),
+                newer,
+            ),
+            update_action: UpdateAction::of(
+                engine.update_status(),
+                state.peer_update,
+                newer.is_some(),
+                connected,
+            ),
             auto_switch: settings.auto_switch,
             auto_connect: settings.auto_connect,
         }
@@ -107,7 +206,8 @@ impl Content {
             text: "Starting…".into(),
             buds: None,
             noise: "",
-            firmware: String::new(),
+            header: String::new(),
+            update_action: None,
             auto_switch: true,
             auto_connect: true,
         }
@@ -150,14 +250,26 @@ impl Content {
         let style = DecoratedCustomViewStyle::new(env)?;
         let icon = res.get(env, "ic_stat_airpods", "drawable")?;
         // Title and text also serve the lock screen's and accessibility's
-        // plain rendering. The firmware goes in the header: the expanded
-        // layout has no height to spare (Android cuts custom views off).
+        // plain rendering. The firmware and the update go in the header, the
+        // update's button under the view: the expanded layout has no height
+        // to spare (Android cuts custom views off).
         let builder = Notification::builder(env, context.as_obj(), CHANNEL_ID)?
             .set_content_title(env, &self.title)?
             .set_content_text(env, &self.text)?;
-        let builder = match self.firmware.is_empty() {
+        let builder = match self.header.is_empty() {
             true => builder,
-            false => builder.set_sub_text(env, &self.firmware)?,
+            false => builder.set_sub_text(env, &self.header)?,
+        };
+        let builder = match self.update_action {
+            Some(action) => {
+                let intent = intents::service_intent(env, context, action.intent())?;
+                let flags = Flags::IMMUTABLE | Flags::UPDATE_CURRENT;
+                let pending =
+                    PendingIntent::get_foreground_service(env, context, 20, &intent, flags)?;
+                let action = Action::new(env, action.label(), &pending)?;
+                builder.add_action(env, &action)?
+            }
+            None => builder,
         };
         builder
             .set_small_icon(env, icon)?
@@ -420,5 +532,65 @@ mod tests {
         assert_eq!(battery_glyph(at(90, false)), "ic_battery_4");
         assert_eq!(battery_glyph(at(12, false)), "ic_battery");
         assert_eq!(battery_glyph(at(12, true)), "ic_battery_charging");
+    }
+
+    #[test]
+    fn the_header_says_the_most_pressing_first() {
+        let release = Release {
+            version: "9.0.348".parse().unwrap(),
+            build: "9A348".into(),
+            package: None,
+        };
+        let peer = PeerUpdate {
+            host: "64:4a:00:11:22:33".parse().unwrap(),
+            status: UpdateStatus::Staged,
+        };
+        let running = Some("7.1.21".to_owned());
+        assert_eq!(header(None, None, None, None, Some(&release)), "");
+        assert_eq!(
+            header(None, None, None, running.clone(), Some(&release)),
+            "Firmware 7.1.21 · 9.0.348 available"
+        );
+        assert_eq!(
+            header(None, None, Some(peer), running.clone(), None),
+            "Staged: close the lid · 64:4A:00:11:22:33"
+        );
+        let own = Some(UpdateStatus::Transferring { percent: 40 });
+        assert_eq!(
+            header(None, own, Some(peer), running.clone(), None),
+            "Updating firmware… 40 %"
+        );
+        assert_eq!(
+            header(Some(Refusal::NotInCase), own, None, running, None),
+            "Put both AirPods in the case, and keep the lid open"
+        );
+    }
+
+    #[test]
+    fn the_update_button() {
+        let action = |own, peer, newer, connected| UpdateAction::of(own, peer, newer, connected);
+        assert!(matches!(
+            action(None, None, true, true),
+            Some(UpdateAction::Start)
+        ));
+        assert!(action(None, None, false, true).is_none());
+        assert!(action(None, None, true, false).is_none());
+        let running = Some(UpdateStatus::Deferred);
+        // Cancellable also while the pods are away.
+        assert!(matches!(
+            action(running, None, true, false),
+            Some(UpdateAction::Cancel)
+        ));
+        assert!(action(Some(UpdateStatus::Staged), None, true, true).is_none());
+        let failed = Some(UpdateStatus::Failed(crate::proto::update::Failure::Stalled));
+        assert!(matches!(
+            action(failed, None, true, true),
+            Some(UpdateAction::Start)
+        ));
+        let peer = PeerUpdate {
+            host: "64:4a:00:11:22:33".parse().unwrap(),
+            status: UpdateStatus::Transferring { percent: 5 },
+        };
+        assert!(action(None, Some(peer), true, true).is_none());
     }
 }

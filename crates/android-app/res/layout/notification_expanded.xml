@@ -1,7 +1,7 @@
 <?xml version="1.0" encoding="utf-8"?>
 <!-- The expanded notification, like the Linux panel: batteries (a dot by the
      primary bud), the noise mode as tiles and the two settings (the
-     firmware is in the header). Filled by notification.rs; tiles and
+     firmware and its update are in the header, the update's button below). Filled by notification.rs; tiles and
      settings rows are tappable. -->
 <LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
     android:layout_width="match_parent"

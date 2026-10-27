@@ -5,6 +5,7 @@ use jni::{
 };
 use num_enum::IntoPrimitive;
 
+use crate::jni::android::app::pending_intent::PendingIntent;
 use crate::jni::android::widget::remote_views::RemoteViews;
 
 pub struct Notification<R>(pub R);
@@ -141,6 +142,19 @@ impl<'object_scope, 'env_scope, R: Reference + AsRef<JObject<'object_scope>>> Bu
         )?;
         Ok(self)
     }
+    pub fn add_action<'a>(
+        self,
+        env: &mut Env<'env_scope>,
+        action: &Action<impl Reference + AsRef<JObject<'a>>>,
+    ) -> anyhow::Result<Self> {
+        env.call_method(
+            &self.0,
+            jni_str!("addAction"),
+            jni_sig!("(Landroid/app/Notification$Action;)Landroid/app/Notification$Builder;"),
+            &[JValue::Object(action.0.as_ref())],
+        )?;
+        Ok(self)
+    }
 }
 impl<'env_scope> Builder<JObject<'env_scope>> {
     pub fn build(
@@ -157,6 +171,41 @@ impl<'env_scope> Builder<JObject<'env_scope>> {
             .l()?;
 
         Ok(Notification(notification))
+    }
+}
+
+/// `android.app.Notification.Action`: a button under the expanded
+/// notification. No icon: since Android 7 actions show none (AndroidX
+/// passes `null` too).
+pub struct Action<R>(R);
+impl<'env_scope> Action<JObject<'env_scope>> {
+    pub fn new<'p>(
+        env: &mut Env<'env_scope>,
+        title: &str,
+        intent: &PendingIntent<impl Reference + AsRef<JObject<'p>>>,
+    ) -> anyhow::Result<Self> {
+        let title = JString::new(env, title)?;
+        let class = env.find_class(jni_str!("android/app/Notification$Action$Builder"))?;
+        let builder = env.new_object(
+            &class,
+            jni_sig!(
+                "(Landroid/graphics/drawable/Icon;Ljava/lang/CharSequence;Landroid/app/PendingIntent;)V"
+            ),
+            &[
+                JValue::Object(&JObject::null()),
+                JValue::Object(&title),
+                JValue::Object(intent.as_obj()),
+            ],
+        )?;
+        let action = env
+            .call_method(
+                &builder,
+                jni_str!("build"),
+                jni_sig!("()Landroid/app/Notification$Action;"),
+                &[],
+            )?
+            .l()?;
+        Ok(Self(action))
     }
 }
 

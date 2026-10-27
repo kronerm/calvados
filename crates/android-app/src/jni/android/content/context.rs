@@ -68,6 +68,22 @@ impl<'object_scope, 'env_scope, R: Reference + AsRef<JObject<'object_scope>>> Co
         ))
     }
 
+    /// `getCacheDir()`: the app's private cache, which the system may clear.
+    pub fn get_cache_dir(
+        &self,
+        env: &mut Env<'env_scope>,
+    ) -> anyhow::Result<File<JObject<'env_scope>>> {
+        Ok(File(
+            env.call_method(
+                &self.0,
+                jni_str!("getCacheDir"),
+                jni_sig!("()Ljava/io/File;"),
+                &[],
+            )?
+            .l()?,
+        ))
+    }
+
     fn get_system_service(
         &self,
         env: &mut Env<'env_scope>,

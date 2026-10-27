@@ -44,6 +44,7 @@ hex = "0.4"
 crossbeam-channel = "0.5"
 jni = "0.22"
 num_enum = "0.7"
+firmware-fetch = { path = "../firmware-fetch" }
 protocol = { path = "../protocol" }
 parking_lot = "0.12"
 tracing = "0.1"

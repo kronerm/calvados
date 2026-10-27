@@ -1,23 +1,29 @@
 //! The service loop: one event channel driving the AACP link and the shared
 //! [`Engine`], with the notification as output.
 
+use std::path::PathBuf;
 use std::sync::Mutex;
 use std::thread;
 use std::time::{Duration, Instant};
 
+use anyhow::Context as _;
+use firmware_fetch::{Catalog, Client};
 use jni::JavaVM;
 
 use crate::intents::{
     ACTION_AIRPODS_AVAILABLE, ACTION_AIRPODS_GONE, ACTION_AUTO_CONNECT, ACTION_AUTO_SWITCH,
-    ACTION_BLUETOOTH_ON, ACTION_NOISE_PREFIX,
+    ACTION_BLUETOOTH_ON, ACTION_CANCEL_UPDATE, ACTION_NOISE_PREFIX, ACTION_UPDATE_FIRMWARE,
 };
 use crate::link::{self, BluetoothEvent};
 use crate::notification::Content;
 use crate::proto::MacAddress;
 use crate::proto::display;
 use crate::proto::engine::{Effect, Engine, LocalAudio};
+use crate::proto::firmware::Release;
 use crate::proto::protocol::Decoder;
 use crate::proto::settings::{Setting, Settings};
+use crate::proto::superbinary::Package;
+use crate::proto::update::Refusal;
 use crate::{bluetooth, media};
 
 /// Android sheds notification updates beyond ~5/s; stay well under that.
@@ -25,6 +31,9 @@ const NOTIFY_MIN_INTERVAL: Duration = Duration::from_millis(300);
 
 /// Minimum gap between attach attempts, so a flapping channel can't spin.
 const RECONNECT_DELAY: Duration = Duration::from_secs(3);
+
+/// How long a refused update's reason stays in the notification.
+const REFUSAL_SHOWN: Duration = Duration::from_secs(8);
 
 /// Everything the service loop reacts to.
 #[derive(Debug)]
@@ -41,6 +50,11 @@ pub(crate) enum Event {
     PhoneCall(bool),
     /// Apple devices advertising nearby: address and manufacturer data.
     Nearby(Vec<(String, Vec<u8>)>),
+    /// A firmware catalog check for these models (a product's): its
+    /// current release, `None` when it failed.
+    Catalog(Vec<String>, Option<Release>),
+    /// The release's package for the update, `None` when it couldn't be had.
+    Package(Option<Package>),
     Stop,
 }
 
@@ -136,6 +150,14 @@ fn service_main(jvm: JavaVM, events: crossbeam_channel::Receiver<Event>) {
     // When to (re)post the notification: now, to replace the "Starting…"
     // placeholder, and later for a change held back by NOTIFY_MIN_INTERVAL.
     let mut notify_at = Some(Instant::now());
+    // Apple's catalog, checked off the loop; packages cached in the app's cache.
+    let mut catalog = Catalog::default();
+    let client = Client::default();
+    let cache = cache_dir()
+        .inspect_err(|e| tracing::warn!("no cache directory for firmware: {e:#}"))
+        .ok();
+    // A refused update's reason, shown until then.
+    let mut refused: Option<(Refusal, Instant)> = None;
     // The connect broadcast may predate us (app update, restart): ask.
     if let Err(e) = bluetooth::check_airpods_connected() {
         tracing::warn!("checking for connected AirPods failed: {e:#}");
@@ -151,6 +173,7 @@ fn service_main(jvm: JavaVM, events: crossbeam_channel::Receiver<Event>) {
             notify_at,
             engine.next_wake(),
             (matches!(conn, Conn::Disconnected) && available).then_some(reconnect_at),
+            refused.map(|(_, until)| until),
         ]
         .into_iter()
         .flatten()
@@ -175,6 +198,8 @@ fn service_main(jvm: JavaVM, events: crossbeam_channel::Receiver<Event>) {
 
         match event {
             None | Some(Event::Playback { .. } | Event::PhoneCall(_)) => {}
+            Some(Event::Catalog(models, release)) => catalog.found(models, release),
+            Some(Event::Package(package)) => effects.extend(engine.package(package, now)),
             Some(Event::Nearby(advertisers)) => {
                 let keys = bluetooth::stored_keys()
                     .inspect_err(|e| tracing::warn!("reading the AirPods' keys: {e:#}"))
@@ -222,6 +247,29 @@ fn service_main(jvm: JavaVM, events: crossbeam_channel::Receiver<Event>) {
                 }
                 ACTION_AUTO_SWITCH => toggle(&mut engine, Setting::AutoSwitch),
                 ACTION_AUTO_CONNECT => toggle(&mut engine, Setting::AutoConnect),
+                ACTION_UPDATE_FIRMWARE => {
+                    let release = engine
+                        .state()
+                        .firmware
+                        .model
+                        .as_deref()
+                        .and_then(|model| catalog.latest(model))
+                        .cloned();
+                    match engine.prepare_update(release.as_ref().map(|release| release.version)) {
+                        Ok(started) => {
+                            effects.extend(started);
+                            refused = None;
+                            if let Some(release) = release {
+                                fetch_package(&client, release, cache.clone());
+                            }
+                        }
+                        Err(refusal) => {
+                            tracing::info!(%refusal, "firmware update refused");
+                            refused = Some((refusal, now + REFUSAL_SHOWN));
+                        }
+                    }
+                }
+                ACTION_CANCEL_UPDATE => effects.extend(engine.cancel_update()),
                 other => match other
                     .strip_prefix(ACTION_NOISE_PREFIX)
                     .and_then(display::parse_mode)
@@ -302,9 +350,16 @@ fn service_main(jvm: JavaVM, events: crossbeam_channel::Receiver<Event>) {
             }
         }
 
+        let model = engine.state().firmware.model.as_deref();
+        if let Some(models) = model.and_then(|model| catalog.due(model, now)) {
+            check_catalog(&client, models);
+        }
+        refused = refused.filter(|&(_, until)| now < until);
+
         // Post only changes, throttled; a change during the pause is posted
         // when it ends, so the latest state always lands.
-        let content = Content::of(&engine, &conn);
+        let latest = model.and_then(|model| catalog.latest(model));
+        let content = Content::of(&engine, &conn, latest, refused.map(|(refusal, _)| refusal));
         match &shown {
             Some((current, _)) if *current == content => notify_at = None,
             Some((_, posted)) if now < *posted + NOTIFY_MIN_INTERVAL => {
@@ -317,6 +372,41 @@ fn service_main(jvm: JavaVM, events: crossbeam_channel::Receiver<Event>) {
             }
         }
     }
+}
+
+/// The app's cache directory, for the firmware package.
+fn cache_dir() -> anyhow::Result<PathBuf> {
+    crate::jni::with_env(|env| {
+        crate::jni::app_context(env)?
+            .get_cache_dir(env)?
+            .get_absolute_path(env)
+    })
+    .map(PathBuf::from)
+}
+
+/// Ask the catalog for `models` on a thread; the answer comes back as
+/// [`Event::Catalog`].
+fn check_catalog(client: &Client, models: Vec<String>) {
+    let client = client.clone();
+    thread::spawn(move || {
+        let release = client.release(&models);
+        post(Event::Catalog(models, release));
+    });
+}
+
+/// `release`'s package, cached or downloaded, on a thread; reported as
+/// [`Event::Package`].
+fn fetch_package(client: &Client, release: Release, cache: Option<PathBuf>) {
+    let client = client.clone();
+    thread::spawn(move || {
+        let package = cache
+            .context("no cache directory")
+            .and_then(|cache| client.package(&release, &cache))
+            .inspect(|package| tracing::info!(?package, "firmware package ready"))
+            .inspect_err(|e| tracing::warn!(%release, "firmware package: {e:#}"))
+            .ok();
+        post(Event::Package(package));
+    });
 }
 
 /// Perform one engine [`Effect`]; `false` if the link is dead.
