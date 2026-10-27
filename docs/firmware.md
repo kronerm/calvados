@@ -213,5 +213,9 @@ RTP BTM DSP1 DSP2`) that Apple hosts use for analytics.
 - UARP: see the open list in [uarp.md](uarp.md).
 - How a host reads a crash log.
 - What 0x62/0x63 carry, and the `0x02` record ids.
-- The handoff path: the `0x09` (`0x6d886`) and `0x10` (`0x6d91c`) handlers,
-  towards the reboots during takeovers (AGENTS.md "Pod reboots").
+- The takeover reboots (AGENTS.md "Pod reboots"): [ownership.md](ownership.md)
+  has the ownership arbiter, the AudioSource mask, and the aborts on those
+  paths (a two-host record pool that never checks for duplicates, a
+  connection tracker that aborts on a third host), none yet tied to a
+  takeover; who accepts a second host's AVDTP Start and suspends the first
+  is not found.

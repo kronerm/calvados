@@ -340,6 +340,19 @@ texts are written twice. A change to one side needs the other:
   switch to any host that starts streaming A2DP, even while the other plays
   (no takeover frames needed), and that source change precedes the revoke
   (`OwnsConnection = 0`) by ~30 ms.
+- What the firmware does with these (docs/ownership.md): `OwnsConnection`
+  goes to an arbiter that keeps one record per host; the last host to write
+  1 wins at once (it outranks a streaming host), writing 0 hands it to the
+  other, and the pods send `OwnsConnection` only when the owner changes
+  (1 to the new, 0 to the old). Nothing there touches A2DP. So after
+  letting go without a write (another host streamed), the pods still count
+  us as owner and a later claim gets no answer: the engine remembers what
+  they last said (`PodsOwner`) and routes at once then, likely the Oct 9
+  silence. The smart-routing frames (0x10) are relayed verbatim as 0x11,
+  never parsed. `AudioSource` (0x0E) is the host whose audio changed last
+  plus one activity mask over all hosts (`Activity`: 0x01 call, 0x02 media,
+  other bits unknown), so one host stopping can report nothing playing while
+  the other streams.
 - A session can get only the settings half of the startup burst (the 0x02
   reply, `DeviceInformation`, settings, EQ) and not the state half (battery,
   ear detection, `PrimaryBud`, `DeviceConnection`s, `ConnectedDevices`):
