@@ -26,8 +26,11 @@ use protocol::engine::{Effect, Engine, LocalAudio};
 use protocol::firmware::{ExactVersion, Release};
 use protocol::protocol::parse_datagram;
 use protocol::settings::{Setting, Settings};
+use protocol::superbinary::Package;
+use protocol::uarp::Framing;
+use protocol::update::UpdateStatus;
 use tokio::signal::unix::{SignalKind, signal};
-use tokio::sync::{mpsc, watch};
+use tokio::sync::{mpsc, oneshot, watch};
 use tracing_subscriber::{EnvFilter, layer::SubscriberExt as _, util::SubscriberInitExt as _};
 
 use crate::bluez::Link;
@@ -67,6 +70,13 @@ enum Input {
     Catalog(Vec<String>, Option<Release>),
     /// The pods' exact running firmware, asked over UARP.
     ExactFirmware(MacAddress, ExactVersion),
+    /// Update the pods to the catalog's release; refused with a reason.
+    StartUpdate(oneshot::Sender<Result<(), String>>),
+    CancelUpdate,
+    /// The release's package for the update, `None` when it couldn't be had.
+    Package(Option<Package>),
+    /// From the update's transport of that generation.
+    Uarp(u64, uarp::Event),
 }
 
 impl Daemon {
@@ -173,6 +183,7 @@ async fn run(daemon: &Daemon, mut engine: Engine, inputs: &mut mpsc::UnboundedRe
     let mut attach_after = Duration::ZERO;
     let mut playback = daemon.media.as_ref().map(mpris::Media::playback);
     let mut catalog = firmware::Catalog::new();
+    let mut uarp = uarp::Uarp::default();
     loop {
         let model = engine.state().firmware.model.as_deref();
         if let Some(model) = model {
@@ -192,7 +203,10 @@ async fn run(daemon: &Daemon, mut engine: Engine, inputs: &mut mpsc::UnboundedRe
                 match attached {
                     Ok(new) => {
                         let pods = MacAddress::new(new.device.address().0);
-                        uarp::spawn(new.device.clone(), daemon.inputs.clone());
+                        // An update resuming has the transport instead.
+                        if !engine.update_status().is_some_and(UpdateStatus::is_active) {
+                            uarp.query(new.device.clone(), &daemon.inputs);
+                        }
                         session = Some(new);
                         let effects = engine.connected(pods, Instant::now());
                         engine.stored_firmware(firmware::stored(pods));
@@ -239,6 +253,40 @@ async fn run(daemon: &Daemon, mut engine: Engine, inputs: &mut mpsc::UnboundedRe
                     Vec::new()
                 }
                 Input::ExactFirmware(pods, exact) => engine.exact_firmware(pods, exact),
+                Input::StartUpdate(reply) => {
+                    let release = engine
+                        .state()
+                        .firmware
+                        .model
+                        .as_deref()
+                        .and_then(|model| catalog.latest(model))
+                        .cloned();
+                    let prepared = engine.prepare_update(release.as_ref().map(|release| release.version));
+                    let (answer, effects) = match (prepared, release) {
+                        (Ok(effects), Some(release)) => {
+                            catalog.fetch_package(release, &daemon.inputs);
+                            (Ok(()), effects)
+                        }
+                        (Ok(effects), None) => (Ok(()), effects),
+                        (Err(refusal), _) => {
+                            tracing::info!(%refusal, "firmware update refused");
+                            (Err(refusal.to_string()), Vec::new())
+                        }
+                    };
+                    // The caller may have given up waiting.
+                    let _ = reply.send(answer);
+                    effects
+                }
+                Input::CancelUpdate => engine.cancel_update(),
+                Input::Package(package) => engine.package(package, Instant::now()),
+                Input::Uarp(generation, event) => match uarp.event(generation, event) {
+                    Some(uarp::Event::Up) => engine.uarp_up(Framing::GATT, Instant::now()),
+                    Some(uarp::Event::Received(fragment)) => {
+                        engine.uarp_received(&fragment, Instant::now())
+                    }
+                    Some(uarp::Event::Down) => engine.uarp_down(Instant::now()),
+                    None => Vec::new(),
+                },
             },
             Some(playing) = playback_change(&mut playback) => engine.local_audio(match playing {
                 true => LocalAudio::Media,
@@ -246,7 +294,7 @@ async fn run(daemon: &Daemon, mut engine: Engine, inputs: &mut mpsc::UnboundedRe
             }),
         };
         for effect in effects {
-            if let Err(e) = perform(daemon, session.as_ref(), effect).await {
+            if let Err(e) = perform(daemon, session.as_ref(), &mut uarp, effect).await {
                 end(&mut engine, &mut session, &e);
                 attach_after = RECONNECT_DELAY;
                 break;
@@ -290,7 +338,12 @@ async fn receive(session: Option<&mut Session>) -> anyhow::Result<Vec<Packet>> {
 }
 
 /// Perform one engine [`Effect`]; an error ends the session.
-async fn perform(daemon: &Daemon, session: Option<&Session>, effect: Effect) -> anyhow::Result<()> {
+async fn perform(
+    daemon: &Daemon,
+    session: Option<&Session>,
+    uarp: &mut uarp::Uarp,
+    effect: Effect,
+) -> anyhow::Result<()> {
     let pods = session.map(|session| session.device.address());
     match effect {
         Effect::Send(bytes) => {
@@ -322,7 +375,13 @@ async fn perform(daemon: &Daemon, session: Option<&Session>, effect: Effect) -> 
         Effect::LearnedLocalMac(_) => {}
         Effect::LearnedKey { pods, kind, key } => presence::save_key(pods, kind, key),
         Effect::LearnedFirmware { pods, firmware } => firmware::save(pods, &firmware),
-        Effect::OpenUarp | Effect::UarpWrite(_) | Effect::CloseUarp => {}
+        Effect::OpenUarp => {
+            if let Some(session) = session {
+                uarp.open(session.device.clone(), &daemon.inputs);
+            }
+        }
+        Effect::UarpWrite(write) => uarp.write(write),
+        Effect::CloseUarp => uarp.close(),
         Effect::Pause => daemon.media.iter().for_each(mpris::Media::pause),
         Effect::Resume => daemon.media.iter().for_each(mpris::Media::resume),
     }

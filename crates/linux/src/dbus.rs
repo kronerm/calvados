@@ -1,6 +1,6 @@
 //! The `dev.kroner.Calvados1` session-bus object: status properties, which
-//! signal `PropertiesChanged` (no polling needed), and the two remembered
-//! settings.
+//! signal `PropertiesChanged` (no polling needed), the two remembered
+//! settings, and the firmware update's methods.
 
 use std::sync::Arc;
 use std::time::Duration;
@@ -9,7 +9,8 @@ use protocol::display::{self, Buds, Place, mode_name, parse_mode};
 use protocol::engine::Engine;
 use protocol::firmware::Release;
 use protocol::settings::Setting;
-use tokio::sync::watch;
+use protocol::update::UpdateStatus;
+use tokio::sync::{oneshot, watch};
 use zbus::fdo::{RequestNameFlags, RequestNameReply};
 use zbus::object_server::InterfaceRef;
 
@@ -48,6 +49,21 @@ fn wire_buds(buds: Buds) -> Vec<WireComponent> {
     .collect()
 }
 
+/// `Update`: state (empty without one, else `downloading`, `offered`,
+/// `deferred`, `transferring`, `interrupted`, `staged`, `done`, `failed`),
+/// percent of the transfer, detail (the failure's reason, or the version
+/// done).
+pub type WireUpdate = (String, u8, String);
+
+/// `PeerUpdate`: the updating host's address, then as [`WireUpdate`].
+pub type WirePeerUpdate = (String, String, u8, String);
+
+fn wire_update(status: Option<UpdateStatus>) -> WireUpdate {
+    status.map_or_else(WireUpdate::default, |status| {
+        (status.name().to_owned(), status.percent(), status.detail())
+    })
+}
+
 /// What the D-Bus properties expose.
 #[derive(Clone, Default, PartialEq, Eq)]
 pub struct Status {
@@ -61,6 +77,8 @@ pub struct Status {
     firmware: String,
     latest_firmware: String,
     firmware_update: bool,
+    update: WireUpdate,
+    peer_update: WirePeerUpdate,
     auto_switch: bool,
     auto_connect: bool,
 }
@@ -78,6 +96,8 @@ impl Status {
             },
         };
         Self {
+            // Also while the pods are away: an interrupted update waits.
+            update: wire_update(engine.update_status()),
             auto_switch: settings.auto_switch,
             auto_connect: settings.auto_connect,
             ..session
@@ -115,6 +135,17 @@ impl Status {
             firmware: display::firmware(&state.firmware).unwrap_or_default(),
             latest_firmware: latest.map(Release::to_string).unwrap_or_default(),
             firmware_update: latest.is_some_and(|latest| latest.is_newer_than(&state.firmware)),
+            peer_update: state
+                .peer_update
+                .map_or_else(WirePeerUpdate::default, |peer| {
+                    let (state, percent, detail) = wire_update(Some(peer.status));
+                    (
+                        peer.host.to_hex_string().to_uppercase(),
+                        state,
+                        percent,
+                        detail,
+                    )
+                }),
             ..Self::default()
         }
     }
@@ -212,6 +243,44 @@ impl CalvadosService {
         self.snapshot().firmware_update
     }
 
+    /// This host's firmware update; see [`WireUpdate`].
+    #[zbus(property)]
+    fn update(&self) -> WireUpdate {
+        self.snapshot().update
+    }
+
+    /// Another calvados host's, as it tells; see [`WirePeerUpdate`].
+    #[zbus(property)]
+    fn peer_update(&self) -> WirePeerUpdate {
+        self.snapshot().peer_update
+    }
+
+    /// Update the pods to `LatestFirmware`: both buds in the open case,
+    /// the case charging. Fails with the reason when it can't start;
+    /// `Update` follows it from there. The pods are never told to apply:
+    /// the case does once the lid closes.
+    async fn start_update(&self) -> zbus::fdo::Result<()> {
+        tracing::info!("D-Bus: start the firmware update");
+        let (reply, answer) = oneshot::channel();
+        self.0
+            .inputs
+            .send(Input::StartUpdate(reply))
+            .map_err(|_| stopping())?;
+        answer
+            .await
+            .map_err(|_| stopping())?
+            .map_err(zbus::fdo::Error::Failed)
+    }
+
+    /// Withdraw the offer; what was transferred is dropped.
+    fn cancel_update(&self) -> zbus::fdo::Result<()> {
+        tracing::info!("D-Bus: cancel the firmware update");
+        self.0
+            .inputs
+            .send(Input::CancelUpdate)
+            .map_err(|_| stopping())
+    }
+
     /// Takes effect once the pods echo it back (the property changes then).
     #[zbus(property)]
     fn set_noise_mode(&self, name: String) -> zbus::fdo::Result<()> {
@@ -250,6 +319,10 @@ impl CalvadosService {
     async fn set_auto_connect(&self, enabled: bool) -> zbus::fdo::Result<()> {
         self.set(Setting::AutoConnect, enabled).await
     }
+}
+
+fn stopping() -> zbus::fdo::Error {
+    zbus::fdo::Error::Failed("the daemon is stopping".into())
 }
 
 /// Keep the returned connection alive to stay registered.
@@ -312,6 +385,12 @@ async fn signal_changes(iface: InterfaceRef<CalvadosService>, mut status: watch:
         }
         if now.firmware_update != last.firmware_update {
             signalled = signalled.and(service.firmware_update_changed(emitter).await);
+        }
+        if now.update != last.update {
+            signalled = signalled.and(service.update_changed(emitter).await);
+        }
+        if now.peer_update != last.peer_update {
+            signalled = signalled.and(service.peer_update_changed(emitter).await);
         }
         if let Err(e) = signalled {
             tracing::warn!("D-Bus PropertiesChanged: {e}");

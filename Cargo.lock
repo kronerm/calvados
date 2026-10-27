@@ -980,6 +980,7 @@ dependencies = [
  "tracing-subscriber",
  "ureq",
  "zbus",
+ "zip",
 ]
 
 [[package]]
