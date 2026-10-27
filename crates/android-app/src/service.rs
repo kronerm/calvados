@@ -12,7 +12,8 @@ use jni::JavaVM;
 
 use crate::intents::{
     ACTION_AIRPODS_AVAILABLE, ACTION_AIRPODS_GONE, ACTION_AUTO_CONNECT, ACTION_AUTO_SWITCH,
-    ACTION_BLUETOOTH_ON, ACTION_CANCEL_UPDATE, ACTION_NOISE_PREFIX, ACTION_UPDATE_FIRMWARE,
+    ACTION_BLUETOOTH_ON, ACTION_CANCEL_UPDATE, ACTION_CYCLE_PREFIX, ACTION_NOISE_PREFIX,
+    ACTION_UPDATE_FIRMWARE,
 };
 use crate::link::{self, BluetoothEvent};
 use crate::notification::Content;
@@ -260,11 +261,8 @@ fn service_main(jvm: JavaVM, events: crossbeam_channel::Receiver<Event>) {
                     }
                 }
                 ACTION_CANCEL_UPDATE => effects.extend(engine.cancel_update()),
-                other => match other
-                    .strip_prefix(ACTION_NOISE_PREFIX)
-                    .and_then(display::parse_mode)
-                {
-                    Some(mode) => effects.extend(engine.set_noise_mode(mode)),
+                other => match tile_action(&mut engine, other) {
+                    Some(tapped) => effects.extend(tapped),
                     None => tracing::warn!(action = other, "unknown action"),
                 },
             },
@@ -481,6 +479,24 @@ fn log_media(action: &str, result: anyhow::Result<()>) {
     match result {
         Ok(()) => tracing::info!("media: {action}"),
         Err(e) => tracing::warn!("media {action} failed: {e:#}"),
+    }
+}
+
+/// A noise tile's: `NOISE:<mode>` sets the mode, `CYCLE:<mode>` adds it to
+/// the press-and-hold cycle or removes it (never below two); `None` for
+/// another action.
+fn tile_action(engine: &mut Engine, action: &str) -> Option<Vec<Effect>> {
+    let mode = |prefix| action.strip_prefix(prefix).and_then(display::parse_mode);
+    match (mode(ACTION_NOISE_PREFIX), mode(ACTION_CYCLE_PREFIX)) {
+        (Some(mode), _) => Some(engine.set_noise_mode(mode)),
+        (_, Some(mode)) => Some(match display::toggle_cycle(engine.state().cycle, mode) {
+            Some(cycle) => engine.set_cycle(cycle),
+            None => {
+                tracing::info!(?mode, "press and hold keeps two modes at least");
+                Vec::new()
+            }
+        }),
+        _ => None,
     }
 }
 

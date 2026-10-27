@@ -4,8 +4,8 @@ use jni::JavaVM;
 use jni::objects::JObject;
 
 use crate::intents::{
-    self, ACTION_AUTO_CONNECT, ACTION_AUTO_SWITCH, ACTION_CANCEL_UPDATE, ACTION_NOISE_PREFIX,
-    ACTION_UPDATE_FIRMWARE,
+    self, ACTION_AUTO_CONNECT, ACTION_AUTO_SWITCH, ACTION_CANCEL_UPDATE, ACTION_CYCLE_PREFIX,
+    ACTION_NOISE_PREFIX, ACTION_UPDATE_FIRMWARE,
 };
 use crate::jni::android::app::activity_thread::ActivityThread;
 use crate::jni::android::app::notification::{
@@ -17,8 +17,8 @@ use crate::jni::android::content::context::Context;
 use crate::jni::android::content::res::Resources;
 use crate::jni::android::text::html;
 use crate::jni::android::widget::remote_views::{RemoteViews, Visibility};
-use crate::proto::aacp::NoiseControlMode;
-use crate::proto::display::{self, Buds, Component, Place};
+use crate::proto::aacp::{Cycle, NoiseControlMode};
+use crate::proto::display::{self, Buds, Component, CycleMark, Place};
 use crate::proto::engine::Engine;
 use crate::proto::firmware::Release;
 use crate::proto::state::PeerUpdate;
@@ -61,6 +61,8 @@ pub(crate) struct Content {
     buds: Option<Buds>,
     /// [`display::mode_name`]: empty while unknown.
     noise: &'static str,
+    /// The press-and-hold cycle; `None` until set from here.
+    cycle: Option<Cycle>,
     /// The header's one line: a refused update's reason, else an update's
     /// progress (ours, else another host's), else `Firmware 7.1.21 · 9.0.348
     /// available` while connected; empty for none.
@@ -71,7 +73,7 @@ pub(crate) struct Content {
     auto_connect: bool,
 }
 
-/// The tiles: mode, view id.
+/// The tiles: mode, view id (its cycle dot's is `<id>_cycle`).
 const MODES: [(NoiseControlMode, &str); 3] = [
     (NoiseControlMode::NoiseCancellation, "tile_anc"),
     (NoiseControlMode::Transparency, "tile_transparency"),
@@ -163,6 +165,7 @@ impl Content {
             text: text.to_owned(),
             buds: connected.then(|| Buds::of(state)),
             noise: display::mode_name(state.noise_mode),
+            cycle: state.cycle,
             header: header(
                 // Also while the pods are away: an interrupted update waits.
                 engine.update_status(),
@@ -188,6 +191,7 @@ impl Content {
             text: "Starting…".into(),
             buds: None,
             noise: "",
+            cycle: None,
             header: String::new(),
             update_action: None,
             auto_switch: true,
@@ -337,8 +341,23 @@ impl Content {
             let id = ui.id(env, tile)?;
             views.set_int(env, id, "setBackgroundResource", background)?;
             views.set_float(env, id, "setAlpha", if connected { 1.0 } else { 0.5 })?;
-            let action = format!("{ACTION_NOISE_PREFIX}{}", display::mode_name(Some(mode)));
-            ui.on_click(env, context, tile, request_code, &action)?;
+            let name = display::mode_name(Some(mode));
+            ui.on_click(
+                env,
+                context,
+                tile,
+                request_code,
+                &format!("{ACTION_NOISE_PREFIX}{name}"),
+            )?;
+            // The dot's own click, over the tile's; one of the last two is
+            // refused by the service.
+            let dot = format!("{tile}_cycle");
+            let (glyph, alpha) = cycle_dot(CycleMark::of(self.cycle, mode));
+            ui.image(env, &dot, glyph)?;
+            let id = ui.id(env, &dot)?;
+            views.set_int(env, id, "setImageAlpha", alpha)?;
+            let action = format!("{ACTION_CYCLE_PREFIX}{name}");
+            ui.on_click(env, context, &dot, 30 + request_code, &action)?;
         }
         for (request_code, (row, enabled, action)) in (10..).zip([
             ("setting_switch", self.auto_switch, ACTION_AUTO_SWITCH),
@@ -483,6 +502,16 @@ impl<'local> Ui<'_, 'local> {
         let pending =
             PendingIntent::get_foreground_service(env, context, request_code, &intent, flags)?;
         self.views.set_on_click_pending_intent(env, id, &pending)
+    }
+}
+
+/// A tile's cycle dot and its alpha, as the Linux panel's: filled when in,
+/// outlined when out, dimmed while unknown.
+fn cycle_dot(mark: CycleMark) -> (&'static str, i32) {
+    match mark {
+        CycleMark::In => ("ic_point", 255),
+        CycleMark::Out => ("ic_point_outline", 255),
+        CycleMark::Unknown => ("ic_point", 102),
     }
 }
 

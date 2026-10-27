@@ -1,8 +1,10 @@
 <?xml version="1.0" encoding="utf-8"?>
 <!-- The expanded notification, like the Linux panel: batteries (a dot by the
-     primary bud), the noise mode as tiles and the two settings (the
-     firmware and its update are in the header, the update's button below). Filled by notification.rs; tiles and
-     settings rows are tappable. -->
+     primary bud), the noise mode as tiles (a dot over each one's corner for
+     the press-and-hold cycle, adding no height) and the two settings (the
+     firmware and its update are in the header, the update's button below).
+     Filled by notification.rs; tiles, their dots and settings rows are
+     tappable. -->
 <LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
     android:layout_width="match_parent"
     android:layout_height="wrap_content"
@@ -234,85 +236,127 @@
         android:layout_marginTop="6dp"
         android:orientation="horizontal">
 
-        <LinearLayout
+        <FrameLayout
             android:id="@+id/tile_anc"
             android:layout_width="0dp"
             android:layout_height="wrap_content"
             android:layout_weight="1"
-            android:background="@drawable/tile"
-            android:gravity="center_horizontal"
-            android:orientation="vertical"
-            android:paddingTop="10dp"
-            android:paddingBottom="10dp">
+            android:background="@drawable/tile">
+
+            <LinearLayout
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:gravity="center_horizontal"
+                android:orientation="vertical"
+                android:paddingTop="10dp"
+                android:paddingBottom="10dp">
+
+                <ImageView
+                    android:layout_width="20dp"
+                    android:layout_height="20dp"
+                    android:src="@drawable/ic_ear_off" />
+
+                <TextView
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="4dp"
+                    android:singleLine="true"
+                    android:text="ANC"
+                    android:textAppearance="@android:style/TextAppearance.Material.Notification.Info"
+                    android:textColor="@color/notification_text_secondary" />
+            </LinearLayout>
 
             <ImageView
-                android:layout_width="20dp"
-                android:layout_height="20dp"
-                android:src="@drawable/ic_ear_off" />
+                android:id="@+id/tile_anc_cycle"
+                android:layout_width="32dp"
+                android:layout_height="32dp"
+                android:layout_gravity="top|end"
+                android:padding="10dp"
+                android:src="@drawable/ic_point"
+                android:tint="@color/notification_text" />
+        </FrameLayout>
 
-            <TextView
-                android:layout_width="wrap_content"
-                android:layout_height="wrap_content"
-                android:layout_marginTop="4dp"
-                android:singleLine="true"
-                android:text="ANC"
-                android:textAppearance="@android:style/TextAppearance.Material.Notification.Info"
-                android:textColor="@color/notification_text_secondary" />
-        </LinearLayout>
-
-        <LinearLayout
+        <FrameLayout
             android:id="@+id/tile_transparency"
             android:layout_width="0dp"
             android:layout_marginStart="8dp"
             android:layout_height="wrap_content"
             android:layout_weight="1"
-            android:background="@drawable/tile"
-            android:gravity="center_horizontal"
-            android:orientation="vertical"
-            android:paddingTop="10dp"
-            android:paddingBottom="10dp">
+            android:background="@drawable/tile">
+
+            <LinearLayout
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:gravity="center_horizontal"
+                android:orientation="vertical"
+                android:paddingTop="10dp"
+                android:paddingBottom="10dp">
+
+                <ImageView
+                    android:layout_width="20dp"
+                    android:layout_height="20dp"
+                    android:src="@drawable/ic_ear" />
+
+                <TextView
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="4dp"
+                    android:singleLine="true"
+                    android:text="Transparency"
+                    android:textAppearance="@android:style/TextAppearance.Material.Notification.Info"
+                    android:textColor="@color/notification_text_secondary" />
+            </LinearLayout>
 
             <ImageView
-                android:layout_width="20dp"
-                android:layout_height="20dp"
-                android:src="@drawable/ic_ear" />
+                android:id="@+id/tile_transparency_cycle"
+                android:layout_width="32dp"
+                android:layout_height="32dp"
+                android:layout_gravity="top|end"
+                android:padding="10dp"
+                android:src="@drawable/ic_point"
+                android:tint="@color/notification_text" />
+        </FrameLayout>
 
-            <TextView
-                android:layout_width="wrap_content"
-                android:layout_height="wrap_content"
-                android:layout_marginTop="4dp"
-                android:singleLine="true"
-                android:text="Transparency"
-                android:textAppearance="@android:style/TextAppearance.Material.Notification.Info"
-                android:textColor="@color/notification_text_secondary" />
-        </LinearLayout>
-
-        <LinearLayout
+        <FrameLayout
             android:id="@+id/tile_adaptive"
             android:layout_width="0dp"
             android:layout_marginStart="8dp"
             android:layout_height="wrap_content"
             android:layout_weight="1"
-            android:background="@drawable/tile"
-            android:gravity="center_horizontal"
-            android:orientation="vertical"
-            android:paddingTop="10dp"
-            android:paddingBottom="10dp">
+            android:background="@drawable/tile">
+
+            <LinearLayout
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:gravity="center_horizontal"
+                android:orientation="vertical"
+                android:paddingTop="10dp"
+                android:paddingBottom="10dp">
+
+                <ImageView
+                    android:layout_width="20dp"
+                    android:layout_height="20dp"
+                    android:src="@drawable/ic_ear_scan" />
+
+                <TextView
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="4dp"
+                    android:singleLine="true"
+                    android:text="Adaptive"
+                    android:textAppearance="@android:style/TextAppearance.Material.Notification.Info"
+                    android:textColor="@color/notification_text_secondary" />
+            </LinearLayout>
 
             <ImageView
-                android:layout_width="20dp"
-                android:layout_height="20dp"
-                android:src="@drawable/ic_ear_scan" />
-
-            <TextView
-                android:layout_width="wrap_content"
-                android:layout_height="wrap_content"
-                android:layout_marginTop="4dp"
-                android:singleLine="true"
-                android:text="Adaptive"
-                android:textAppearance="@android:style/TextAppearance.Material.Notification.Info"
-                android:textColor="@color/notification_text_secondary" />
-        </LinearLayout>
+                android:id="@+id/tile_adaptive_cycle"
+                android:layout_width="32dp"
+                android:layout_height="32dp"
+                android:layout_gravity="top|end"
+                android:padding="10dp"
+                android:src="@drawable/ic_point"
+                android:tint="@color/notification_text" />
+        </FrameLayout>
     </LinearLayout>
 
     <LinearLayout

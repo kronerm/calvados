@@ -13,6 +13,10 @@ use crate::service::Event;
 /// ([`crate::proto::display::mode_name`]).
 pub(crate) const ACTION_NOISE_PREFIX: &str = "NOISE:";
 
+/// Add a mode to the press-and-hold cycle or remove it: `CYCLE:` and its
+/// name.
+pub(crate) const ACTION_CYCLE_PREFIX: &str = "CYCLE:";
+
 /// Flip automatic switching (media and calls here take the audio).
 pub(crate) const ACTION_AUTO_SWITCH: &str = "AUTO_SWITCH";
 
