@@ -1,7 +1,8 @@
 //! The pods' Bluetooth traffic from the kernel's HCI monitor channel (what
 //! `btmon` reads; needs `CAP_NET_RAW`), logged next to the engine's lines:
-//! link events, AVDTP and AVRCP signaling, A2DP media starting to flow, and
-//! the AACP frames we send.
+//! link events, AVDTP and AVRCP signaling, A2DP media starting to flow,
+//! delivery stalls and flushes (the pods out of reach), and the AACP frames
+//! we send.
 //!
 //! The pods' link is the one carrying AACP, learned from our AACP channel
 //! request. L2CAP channels opened before the daemon started (e.g. A2DP's)
@@ -28,6 +29,9 @@ const MON_ACL_RX: u16 = 5;
 const PSM_AVCTP: u16 = 0x0017;
 const PSM_AVDTP: u16 = 0x0019;
 const CID_SIGNALING: u16 = 0x0001;
+
+/// A delivery gap worth a line; packets normally complete within ~0.2 s.
+const STALL: Duration = Duration::from_millis(500);
 
 /// Open the monitor channel and log on a thread; without the capability,
 /// say so once and carry on.
@@ -122,13 +126,27 @@ fn log(note: &Note) {
             handle,
             reason,
             silent_for,
+            undelivered,
         } => tracing::debug!(
             handle,
             reason = %Hex(*reason),
             meaning = hci_error(*reason),
             silent_for = ?silent_for,
+            undelivered = undelivered.map(|(packets, _)| packets),
+            undelivered_for = ?undelivered.map(|(_, since)| since),
             "hci: pods link down"
         ),
+        Note::Stalled {
+            stalled_for,
+            outstanding,
+            completed,
+        } => tracing::debug!(
+            stalled_for = ?stalled_for,
+            outstanding,
+            completed,
+            "hci: delivery to the pods resumed"
+        ),
+        Note::Flushed => tracing::debug!("hci: undelivered packets to the pods flushed"),
         Note::Role { central, status } => {
             tracing::debug!(central, status, "hci: pods link role")
         }
@@ -225,7 +243,19 @@ enum Note {
         /// Since the pods' last packet: dates a crash, as a timeout comes
         /// only after the supervision timeout of silence.
         silent_for: Option<Duration>,
+        /// Packets the controller hadn't delivered, and since when it
+        /// had delivered none.
+        undelivered: Option<(u32, Duration)>,
     },
+    /// The controller delivered packets again after a gap of `stalled_for`
+    /// with `outstanding` waiting (out of reach, or the pods busy).
+    Stalled {
+        stalled_for: Duration,
+        outstanding: u32,
+        completed: u16,
+    },
+    /// The controller dropped packets it couldn't deliver in time.
+    Flushed,
     Role {
         central: bool,
         status: u8,
@@ -274,6 +304,15 @@ struct Monitor {
     flowing: HashSet<(u16, Dir)>,
     /// When each link last received a packet.
     last_rx: HashMap<u16, Instant>,
+    /// Packets sent on each link the controller hasn't reported delivered.
+    delivery: HashMap<u16, Undelivered>,
+}
+
+#[derive(Debug, Clone, Copy)]
+struct Undelivered {
+    packets: u32,
+    /// The last delivery, or the first packet sent after all were.
+    since: Instant,
 }
 
 impl Monitor {
@@ -281,7 +320,12 @@ impl Monitor {
         match opcode {
             MON_COMMAND => self.command(data).into_iter().collect(),
             MON_EVENT => self.event(data, now).into_iter().collect(),
-            MON_ACL_TX => self.acl(Dir::Tx, data),
+            MON_ACL_TX => {
+                if let Some(flags) = u16_at(data, 0) {
+                    self.sent(flags & 0x0fff, now);
+                }
+                self.acl(Dir::Tx, data)
+            }
             MON_ACL_RX => {
                 if let Some(flags) = u16_at(data, 0) {
                     self.last_rx.insert(flags & 0x0fff, now);
@@ -308,6 +352,8 @@ impl Monitor {
         const DISCONNECTION_COMPLETE: u8 = 0x05;
         const ROLE_CHANGE: u8 = 0x12;
         const MODE_CHANGE: u8 = 0x14;
+        const FLUSH_OCCURRED: u8 = 0x11;
+        const NUMBER_OF_COMPLETED_PACKETS: u8 = 0x13;
         const ACL: u8 = 0x01;
         let (&code, params) = data.split_first()?;
         let params = params.get(1..)?;
@@ -334,10 +380,16 @@ impl Monitor {
                     .last_rx
                     .remove(&handle)
                     .map(|last| now.saturating_duration_since(last));
+                let undelivered = self
+                    .delivery
+                    .remove(&handle)
+                    .filter(|u| u.packets > 0)
+                    .map(|u| (u.packets, now.saturating_duration_since(u.since)));
                 self.pods.remove(&handle).then_some(Note::LinkDown {
                     handle,
                     reason,
                     silent_for,
+                    undelivered,
                 })
             }
             ROLE_CHANGE => {
@@ -355,8 +407,48 @@ impl Monitor {
                 };
                 self.pods.contains(&handle).then_some(note)
             }
+            FLUSH_OCCURRED => self.pods.contains(&handle_at(0)?).then_some(Note::Flushed),
+            NUMBER_OF_COMPLETED_PACKETS => self.completed(params, now),
             _ => None,
         }
+    }
+
+    fn sent(&mut self, handle: u16, now: Instant) {
+        let undelivered = self.delivery.entry(handle).or_insert(Undelivered {
+            packets: 0,
+            since: now,
+        });
+        if undelivered.packets == 0 {
+            undelivered.since = now;
+        }
+        undelivered.packets += 1;
+    }
+
+    /// `Number_of_Completed_Packets`: (handle, count) pairs; a stall noted
+    /// for the pods' link (at most one per event).
+    fn completed(&mut self, params: &[u8], now: Instant) -> Option<Note> {
+        let (&count, pairs) = params.split_first()?;
+        pairs
+            .as_chunks::<4>()
+            .0
+            .iter()
+            .take(usize::from(count))
+            .filter_map(|pair| {
+                let (handle, completed) = (u16_at(pair, 0)? & 0x0fff, u16_at(pair, 2)?);
+                let undelivered = self.delivery.get_mut(&handle)?;
+                let stalled_for = now.saturating_duration_since(undelivered.since);
+                let outstanding = undelivered.packets;
+                undelivered.packets = outstanding.saturating_sub(completed.into());
+                undelivered.since = now;
+                (self.pods.contains(&handle) && outstanding > 0 && stalled_for >= STALL).then_some(
+                    Note::Stalled {
+                        stalled_for,
+                        outstanding,
+                        completed,
+                    },
+                )
+            })
+            .last()
     }
 
     fn is_pods_mac(&self, mac: MacAddress) -> bool {
@@ -741,5 +833,41 @@ mod tests {
             [Note::LinkDown { reason: 0x08, silent_for: Some(silent), .. }] if silent.as_secs() == 5
         ));
         assert!(m.channels.is_empty() && m.pods.is_empty());
+    }
+
+    fn completed(count: u16) -> Vec<u8> {
+        event(
+            0x13,
+            &[&[1][..], &HANDLE.to_le_bytes(), &count.to_le_bytes()].concat(),
+        )
+    }
+
+    #[test]
+    fn delivery_stalls_are_noted_when_they_end() {
+        let mut m = monitor();
+        let start = Instant::now();
+        let at = |ms| start + Duration::from_millis(ms);
+        // The setup's two signaling packets.
+        m.packet(MON_EVENT, &completed(2), start);
+        // Delivered in time: nothing.
+        m.packet(MON_ACL_TX, &acl(0x41, &[0x00]), at(0));
+        assert!(m.packet(MON_EVENT, &completed(1), at(100)).is_empty());
+        // Two sent, delivered 2 s after the first.
+        m.packet(MON_ACL_TX, &acl(0x41, &[0x00]), at(1000));
+        m.packet(MON_ACL_TX, &acl(0x41, &[0x00]), at(1500));
+        let notes = m.packet(MON_EVENT, &completed(2), at(3000));
+        assert!(matches!(
+            notes[..],
+            [Note::Stalled { outstanding: 2, completed: 2, stalled_for }]
+                if stalled_for == Duration::from_secs(2)
+        ));
+        // One left undelivered at the link's end.
+        m.packet(MON_ACL_TX, &acl(0x41, &[0x00]), at(4000));
+        let down = [&[0][..], &HANDLE.to_le_bytes(), &[0x08]].concat();
+        let notes = m.packet(MON_EVENT, &event(0x05, &down), at(9000));
+        assert!(matches!(
+            notes[..],
+            [Note::LinkDown { undelivered: Some((1, since)), .. }] if since.as_secs() == 5
+        ));
     }
 }
