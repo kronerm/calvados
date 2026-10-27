@@ -1,12 +1,9 @@
 //! `$XDG_STATE_HOME/calvados` (else `~/.local/state/calvados`): the AirPods'
-//! identity keys (see `presence`), the remembered D-Bus settings, and the
-//! press-and-hold cycle last set, one file each.
+//! identity keys (see `presence`) and the remembered D-Bus settings, one
+//! file each.
 
 use std::path::PathBuf;
 
-use protocol::MacAddress;
-use protocol::aacp::Cycle;
-use protocol::display;
 use protocol::settings::Setting;
 
 pub fn dir() -> Option<PathBuf> {
@@ -32,29 +29,5 @@ pub fn save(setting: Setting, enabled: bool) {
         std::fs::create_dir_all(&dir).and_then(|()| std::fs::write(dir.join(setting.key()), value));
     if let Err(e) = saved {
         tracing::warn!(?setting, "remembering the setting: {e}");
-    }
-}
-
-/// `<address>.cycle`: the modes' names, comma-separated; empty while unknown.
-fn cycle_path(pods: MacAddress) -> Option<PathBuf> {
-    let pods = bluer::Address(pods.to_array());
-    Some(dir()?.join(format!("{pods}.cycle")))
-}
-
-pub fn stored_cycle(pods: MacAddress) -> Option<Cycle> {
-    let stored = std::fs::read_to_string(cycle_path(pods)?).ok()?;
-    display::parse_cycle(stored.trim().split(','))
-}
-
-pub fn save_cycle(pods: MacAddress, cycle: Option<Cycle>) {
-    let Some(path) = cycle_path(pods) else {
-        return;
-    };
-    let saved = path
-        .parent()
-        .map_or(Ok(()), std::fs::create_dir_all)
-        .and_then(|()| std::fs::write(&path, display::cycle_names(cycle).join(",")));
-    if let Err(e) = saved {
-        tracing::warn!(%pods, "storing the press-and-hold cycle: {e}");
     }
 }

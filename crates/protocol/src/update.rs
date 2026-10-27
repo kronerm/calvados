@@ -11,6 +11,7 @@
 use std::fmt;
 use std::time::{Duration, Instant};
 
+use crate::aacp::control_command::Cycle;
 use crate::firmware::{ExactVersion, Version};
 use crate::state::DeviceState;
 use crate::superbinary::Package;
@@ -535,8 +536,8 @@ impl Updater {
 
 /// What calvados hosts tell each other through the pods' smart-routing
 /// relay (sent as 0x10 to a peer, arriving as 0x11): only a host that asks
-/// UARP knows the exact firmware (Linux), and only the updating host knows
-/// the update's progress. Starts with [`News::MAGIC`], so nothing else's
+/// UARP knows the exact firmware (Linux), only the updating host knows
+/// the update's progress, and the pods never report the cycle. Starts with [`News::MAGIC`], so nothing else's
 /// frames are taken for ours.
 #[derive(Debug, Clone, Copy)]
 #[cfg_attr(test, derive(PartialEq, Eq))]
@@ -545,6 +546,8 @@ pub enum News {
     Firmware(ExactVersion),
     /// The sender's update.
     Update(UpdateStatus),
+    /// The press-and-hold cycle, as a host set it.
+    Cycle(Cycle),
 }
 
 impl News {
@@ -552,8 +555,9 @@ impl News {
     /// This encoding's version: a host ignores another's.
     const FORMAT: u8 = 1;
 
-    /// `MAGIC`, `FORMAT`, then `1` + version (3 × u32 BE), or `2` + state +
-    /// two arguments + version (zero unless done).
+    /// `MAGIC`, `FORMAT`, then `1` + version (3 × u32 BE), `2` + state +
+    /// two arguments + version (zero unless done), or `3` + the cycle's
+    /// mask.
     pub fn encode(self) -> Vec<u8> {
         let version = |version: ExactVersion| {
             [
@@ -587,6 +591,7 @@ impl News {
                 };
                 [&[2, state, a, b][..], &version(done)].concat()
             }
+            Self::Cycle(cycle) => vec![3, cycle.modes().bits()],
         };
         [&Self::MAGIC[..], &[Self::FORMAT], &body].concat()
     }
@@ -627,6 +632,7 @@ impl News {
                 (8, &code) => UpdateStatus::Failed(failure_of(code, *b)?),
                 _ => return None,
             })),
+            [3, modes] => Cycle::from_bits(*modes).map(Self::Cycle),
             _ => None,
         }
     }
@@ -1036,7 +1042,7 @@ mod tests {
         let news = statuses
             .into_iter()
             .map(News::Update)
-            .chain([News::Firmware(version)]);
+            .chain([News::Firmware(version), News::Cycle(Cycle::OFFERED)]);
         for news in news {
             assert_eq!(News::decode(&news.encode()), Some(news));
         }
@@ -1047,6 +1053,7 @@ mod tests {
         future[8] = 2;
         assert_eq!(News::decode(&future), None, "another format");
         assert_eq!(News::decode(b"\x01\xe5\x4alocalscore"), None);
+        assert_eq!(News::decode(b"calvados\x01\x03\x02"), None, "one mode");
         let mut unknown = News::Update(UpdateStatus::Staged).encode();
         unknown[10] = 99;
         assert_eq!(News::decode(&unknown), None);

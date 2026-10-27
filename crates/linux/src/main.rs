@@ -198,10 +198,7 @@ async fn run(daemon: &Daemon, mut engine: Engine, inputs: &mut mpsc::UnboundedRe
                     Ok(new) => {
                         let pods = MacAddress::new(new.device.address().0);
                         session = Some(new);
-                        let effects = engine.connected(pods, Instant::now());
-                        engine.stored_firmware(firmware::stored(pods));
-                        engine.stored_cycle(state::stored_cycle(pods));
-                        effects
+                        engine.connected(pods, Instant::now())
                     }
                     Err(e) => {
                         tracing::info!("attaching failed: {e:#}");
@@ -352,8 +349,6 @@ async fn perform(daemon: &Daemon, session: Option<&Session>, effect: Effect) -> 
         // BlueZ always knows our MAC.
         Effect::LearnedLocalMac(_) => {}
         Effect::LearnedKey { pods, kind, key } => presence::save_key(pods, kind, key),
-        Effect::LearnedFirmware { pods, firmware } => firmware::save(pods, &firmware),
-        Effect::LearnedCycle { pods, cycle } => state::save_cycle(pods, cycle),
         Effect::Pause => daemon.media.iter().for_each(mpris::Media::pause),
         Effect::Resume => daemon.media.iter().for_each(mpris::Media::resume),
     }

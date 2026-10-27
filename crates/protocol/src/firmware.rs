@@ -101,62 +101,11 @@ impl Firmware {
         self.reported = reported.or(self.reported.take());
     }
 
-    /// Fill in what this session doesn't know yet from what was stored,
-    /// unless it already reported another version.
-    pub fn or_stored(self, stored: Self) -> Self {
-        let other = self
-            .reported
-            .as_ref()
-            .is_some_and(|known| stored.reported.as_ref() != Some(known));
-        match other {
-            true => self,
-            false => Self {
-                model: self.model.or(stored.model),
-                reported: self.reported.or(stored.reported),
-                exact: self.exact.or(stored.exact),
-            },
-        }
-    }
-
     /// The major.minor, exact or reported.
     pub fn version(&self) -> Option<Version> {
         self.exact
             .map(|exact| exact.version)
             .or_else(|| Version::of_running(self.reported.as_deref()?))
-    }
-
-    /// For storage: `key=value` lines, those known.
-    pub fn to_stored(&self) -> String {
-        [
-            ("model", self.model.clone()),
-            ("reported", self.reported.clone()),
-            ("exact", self.exact.map(|exact| exact.to_string())),
-        ]
-        .into_iter()
-        .filter_map(|(key, value)| Some(format!("{key}={}\n", value?)))
-        .collect()
-    }
-
-    /// What [`Self::to_stored`] wrote; unknown lines are skipped.
-    pub fn from_stored(stored: &str) -> Self {
-        stored.lines().filter_map(|line| line.split_once('=')).fold(
-            Self::default(),
-            |firmware, (key, value)| match key {
-                "model" => Self {
-                    model: Some(value.to_owned()),
-                    ..firmware
-                },
-                "reported" => Self {
-                    reported: Some(value.to_owned()),
-                    ..firmware
-                },
-                "exact" => Self {
-                    exact: value.parse().ok(),
-                    ..firmware
-                },
-                _ => firmware,
-            },
-        )
     }
 }
 
@@ -303,23 +252,6 @@ mod tests {
         assert_eq!(firmware.model.as_deref(), Some("A3048"));
         firmware.reported(None, Some("90.3431000025000000.6807".into()));
         assert_eq!(firmware.exact, None);
-    }
-
-    #[test]
-    fn the_stored_firmware_fills_in_unless_another_is_reported() {
-        let stored = Firmware {
-            model: Some("A3048".into()),
-            reported: Some("71.2256000021000000.6663".into()),
-            exact: "7.1.21".parse().ok(),
-        };
-        assert_eq!(Firmware::from_stored(&stored.to_stored()), stored);
-        assert_eq!(Firmware::from_stored("junk\nexact=7"), Firmware::default());
-        assert_eq!(Firmware::default().or_stored(stored.clone()), stored);
-        let newer = Firmware {
-            reported: Some("90.3431000025000000.6807".into()),
-            ..Firmware::default()
-        };
-        assert_eq!(newer.clone().or_stored(stored), newer);
     }
 
     #[test]

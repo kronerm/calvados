@@ -160,6 +160,17 @@ are 16 binary bytes (+ NUL), so a string parser must stop before them
 7 the updater's bundle id (`com.apple.accessory.updater.app.71`), 8 and 9
 the buds' serials, 10 a number (7 digits).
 
+Control (0x09) frames all go out through `0x6e804(session, id, value)`,
+the only sender of opcode 9 (no other `0x6e55c` call passes it). It is
+called directly with ids `0x06 0x0D 0x1D 0x1F 0x24 0x27 0x2E`, and through
+`0x87354(id, value, …)`, which sends to every session, with ids `0x17 0x1B
+0x23 0x25 0x26 0x28 0x29 0x2C 0x2D 0x2F 0x33 0x35 0x3E` (each id the
+immediate loaded before the call; no pointer to either function in the
+image, so no indirect calls). So the pods never send `0x1A`, the
+press-and-hold cycle (`ListeningModeConfigs`), though they keep it: Known
+for 9A348, and Observed (no `0x1A` received, also right after setting it,
+and none in the `0x02` records).
+
 ## GATT
 
 The pods serve GATT over classic Bluetooth too (ATT on PSM 0x1F), and BlueZ

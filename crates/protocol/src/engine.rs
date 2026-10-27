@@ -12,7 +12,7 @@ use crate::aacp::{
     EarStatus, KeyType, NoiseControlMode, Packet, Routing, RoutingResponse,
 };
 use crate::ble;
-use crate::firmware::{ExactVersion, Firmware};
+use crate::firmware::ExactVersion;
 use crate::protocol::{
     self, handshake, hijack_sequence, request_notifications, session_setup_frames, set_cycle,
     set_noise_control, set_ownership,
@@ -143,19 +143,6 @@ pub enum Effect {
         pods: MacAddress,
         kind: KeyType,
         key: [u8; 16],
-    },
-    /// What the pods run changed (a `0x1D` report, or UARP's exact
-    /// version): persist it per pods, for [`Engine::stored_firmware`].
-    LearnedFirmware {
-        pods: MacAddress,
-        firmware: Firmware,
-    },
-    /// The press-and-hold cycle was set or reported, or is unknown again
-    /// (`None`: the firmware changed, which resets it): persist it per pods,
-    /// for [`Engine::stored_cycle`].
-    LearnedCycle {
-        pods: MacAddress,
-        cycle: Option<Cycle>,
     },
     /// Pause local media playback (a bud left an ear).
     Pause,
@@ -407,21 +394,6 @@ impl Engine {
         vec![Effect::Send(handshake())]
     }
 
-    /// What was stored for the session's pods
-    /// ([`Effect::LearnedFirmware`]), right after [`Engine::connected`]:
-    /// shown until they report, so the line doesn't vanish in a session
-    /// without `0x1D`. A report wins.
-    pub fn stored_firmware(&mut self, stored: Firmware) {
-        let firmware = std::mem::take(&mut self.state.firmware);
-        self.state.firmware = firmware.or_stored(stored);
-    }
-
-    /// What was stored for the session's pods ([`Effect::LearnedCycle`]),
-    /// right after [`Engine::connected`]. A report wins.
-    pub fn stored_cycle(&mut self, stored: Option<Cycle>) {
-        self.state.cycle = self.state.cycle.or(stored);
-    }
-
     /// The pods' exact running version, as our query found it: also told
     /// the other hosts (they may not have asked).
     fn exact_firmware(&mut self, exact: ExactVersion) -> Vec<Effect> {
@@ -435,26 +407,15 @@ impl Engine {
     /// The exact running version, from our query or a peer's news; ends a
     /// staged update once it's the new one.
     fn running_firmware(&mut self, exact: ExactVersion) -> Vec<Effect> {
-        let learned = match self.state.firmware.exact == Some(exact) {
-            true => None,
-            false => {
-                tracing::info!(%exact, "running firmware");
-                self.state.firmware.exact = Some(exact);
-                self.learned_firmware()
-            }
-        };
+        if self.state.firmware.exact != Some(exact) {
+            tracing::info!(%exact, "running firmware");
+            self.state.firmware.exact = Some(exact);
+        }
         let done = match &mut self.update {
             Some(Update::Running(updater)) => updater.running(exact),
             _ => Vec::new(),
         };
-        learned.into_iter().chain(self.updated(done)).collect()
-    }
-
-    fn learned_firmware(&self) -> Option<Effect> {
-        Some(Effect::LearnedFirmware {
-            pods: self.pods?,
-            firmware: self.state.firmware.clone(),
-        })
+        self.updated(done)
     }
 
     /// The AACP session ended. Unless both buds were put away (the case
@@ -616,8 +577,8 @@ impl Engine {
         vec![Effect::Send(set_noise_control(mode))]
     }
 
-    /// Set the modes press and hold cycles through. The pods don't report
-    /// it, so it's shown as set.
+    /// Set the modes press and hold cycles through. The pods never report
+    /// it, so it's shown as set and told the other hosts.
     pub fn set_cycle(&mut self, cycle: Cycle) -> Vec<Effect> {
         if !self.is_connected() {
             return Vec::new();
@@ -625,15 +586,8 @@ impl Engine {
         tracing::info!(?cycle, "setting the press-and-hold cycle");
         self.state.cycle = Some(cycle);
         std::iter::once(Effect::Send(set_cycle(cycle)))
-            .chain(self.learned_cycle())
+            .chain(self.tell(News::Cycle(cycle)))
             .collect()
-    }
-
-    fn learned_cycle(&self) -> Option<Effect> {
-        Some(Effect::LearnedCycle {
-            pods: self.pods?,
-            cycle: self.state.cycle,
-        })
     }
 
     pub fn handle(&mut self, packet: Packet, now: Instant) -> Vec<Effect> {
@@ -646,27 +600,13 @@ impl Engine {
         let previous_primary = self.state.primary_bud;
         let was_stowed = self.state.is_stowed();
         let was_in_case = self.state.in_case();
-        let firmware = self.state.firmware.clone();
-        let cycle = self.state.cycle;
+        let reported = self.state.firmware.reported.clone();
         self.state.apply(&packet);
         // Updated pods start from the default cycle again.
-        if firmware.reported.is_some() && self.state.firmware.reported != firmware.reported {
+        if reported.is_some() && self.state.firmware.reported != reported {
             self.state.cycle = None;
         }
-        let learned = self
-            .learn_local_mac(&packet)
-            .map(Effect::LearnedLocalMac)
-            .into_iter()
-            .chain(
-                (self.state.firmware != firmware)
-                    .then(|| self.learned_firmware())
-                    .flatten(),
-            )
-            .chain(
-                (self.state.cycle != cycle)
-                    .then(|| self.learned_cycle())
-                    .flatten(),
-            );
+        let learned = self.learn_local_mac(&packet).map(Effect::LearnedLocalMac);
         let reaction = match packet {
             // The firmware's word on who owns the link is final.
             Packet::Control(ControlCommand {
@@ -775,7 +715,7 @@ impl Engine {
                 match news {
                     News::Firmware(exact) => self.running_firmware(exact),
                     // Kept by the state, for display.
-                    News::Update(_) => Vec::new(),
+                    News::Update(_) | News::Cycle(_) => Vec::new(),
                 }
             }
             Packet::RoutingResponse(RoutingResponse {
@@ -1393,13 +1333,14 @@ impl Engine {
         self.tell(News::Update(status))
     }
 
-    /// What a host joining should know: the exact firmware we queried, and
-    /// our update.
+    /// What a host joining should know: the exact firmware we queried, our
+    /// update, and the cycle if known.
     fn share(&self) -> Vec<Effect> {
         self.queried
             .map(News::Firmware)
             .into_iter()
             .chain(self.update_status().map(News::Update))
+            .chain(self.state.cycle.map(News::Cycle))
             .flat_map(|news| self.tell(news))
             .collect()
     }
@@ -1802,53 +1743,7 @@ mod tests {
     }
 
     #[test]
-    fn the_firmware_is_learned_and_stored_firmware_shown_until_reported() {
-        let report = |firmware: &str| {
-            Packet::DeviceInformation(DeviceInformation {
-                model: Some("A3048".into()),
-                firmware: Some(firmware.into()),
-                ..Default::default()
-            })
-        };
-        let old = "71.2256000021000000.6663";
-        let mut e = engine();
-        let stored = Firmware {
-            model: Some("A3048".into()),
-            reported: Some(old.into()),
-            exact: "7.1.21".parse().ok(),
-        };
-        e.stored_firmware(stored.clone());
-        assert_eq!(e.state().firmware, stored);
-        assert!(e.handle(report(old), now()).is_empty(), "nothing new");
-        assert!(e.running_firmware("7.1.21".parse().unwrap()).is_empty());
-        let new = "90.3431000025000000.6807";
-        let reported = Firmware {
-            model: Some("A3048".into()),
-            reported: Some(new.into()),
-            exact: None,
-        };
-        assert_eq!(
-            e.handle(report(new), now()),
-            [Effect::LearnedFirmware {
-                pods: mac(PODS),
-                firmware: reported.clone()
-            }]
-        );
-        let exact = "9.0.348".parse().unwrap();
-        assert_eq!(
-            e.running_firmware(exact),
-            [Effect::LearnedFirmware {
-                pods: mac(PODS),
-                firmware: Firmware {
-                    exact: Some(exact),
-                    ..reported
-                }
-            }]
-        );
-    }
-
-    #[test]
-    fn the_cycle_is_shown_as_set_or_stored_until_reported_or_updated() {
+    fn the_cycle_is_shown_as_set_until_reported_or_updated() {
         use crate::aacp::{ListeningModes, NoiseControlMode};
         let report = |firmware: &str| {
             Packet::DeviceInformation(DeviceInformation {
@@ -1860,49 +1755,27 @@ mod tests {
         let mut idle = Engine::new(None, Settings::default());
         assert!(idle.set_cycle(two).is_empty(), "nothing without a session");
         let mut e = engine();
-        e.stored_firmware(Firmware {
-            reported: Some("1.0".into()),
-            ..Firmware::default()
-        });
-        e.stored_cycle(Some(Cycle::OFFERED));
-        assert_eq!(e.state().cycle, Some(Cycle::OFFERED));
-        assert_eq!(
-            e.set_cycle(two),
-            [
-                Effect::Send(protocol::set_cycle(two)),
-                Effect::LearnedCycle {
-                    pods: mac(PODS),
-                    cycle: Some(two)
-                }
-            ]
-        );
+        e.handle(report("1.0"), now());
+        assert_eq!(e.state().cycle, None, "unknown until set");
+        assert_eq!(e.set_cycle(two), [Effect::Send(protocol::set_cycle(two))]);
         assert_eq!(e.state().cycle, Some(two));
-        // An echo of it changes nothing; a report wins.
-        let reported = |modes: ListeningModes| {
+        // A report wins.
+        let others = ListeningModes::TRANSPARENCY | ListeningModes::ADAPTIVE;
+        e.handle(
             Packet::Control(ControlCommand {
                 id: ControlId::ListeningModeConfigs,
-                value: [modes.bits(), 0, 0, 0],
-            })
-        };
-        assert!(e.handle(reported(two.modes()), now()).is_empty());
-        let others = ListeningModes::TRANSPARENCY | ListeningModes::ADAPTIVE;
-        assert_eq!(
-            e.handle(reported(others), now()),
-            [Effect::LearnedCycle {
-                pods: mac(PODS),
-                cycle: Cycle::new(others)
-            }]
+                value: [others.bits(), 0, 0, 0],
+            }),
+            now(),
         );
+        assert_eq!(e.state().cycle, Cycle::new(others));
+        // Kept over a reconnect, as shown.
+        e.disconnected(now());
+        e.connected(mac(PODS), now() + Duration::from_secs(1));
+        assert_eq!(e.state().cycle, Cycle::new(others));
         assert!(e.handle(report("1.0"), now()).is_empty());
         // Updated pods start from the default again.
-        let fx = e.handle(report("2.0"), now());
-        assert!(matches!(
-            fx[..],
-            [
-                Effect::LearnedFirmware { .. },
-                Effect::LearnedCycle { cycle: None, .. }
-            ]
-        ));
+        e.handle(report("2.0"), now());
         assert_eq!(e.state().cycle, None);
     }
 
@@ -2771,7 +2644,6 @@ mod tests {
         fn the_running_version_is_learned_and_shared() {
             let mut e = ready();
             let fx = running_version(&mut e, [7, 1, 21]);
-            assert!(matches!(fx[0], Effect::LearnedFirmware { .. }));
             let exact = "7.1.21".parse().unwrap();
             assert_eq!(e.state().firmware.exact, Some(exact));
             assert_eq!(told(&fx), [News::Firmware(exact)]);
@@ -2779,6 +2651,19 @@ mod tests {
             assert_eq!(
                 told(&feed(&mut e, CONNECTED_DEVICES)),
                 [News::Firmware(exact)]
+            );
+        }
+
+        #[test]
+        fn the_cycle_set_is_told_and_shared() {
+            use crate::aacp::NoiseControlMode;
+            let mut e = ready();
+            let two = Cycle::OFFERED.toggled(NoiseControlMode::Adaptive).unwrap();
+            assert_eq!(told(&e.set_cycle(two)), [News::Cycle(two)]);
+            assert_eq!(
+                told(&feed(&mut e, CONNECTED_DEVICES)),
+                [News::Cycle(two)],
+                "to a host joining"
             );
         }
 
@@ -2976,8 +2861,10 @@ mod tests {
                 &mut e,
                 &from_peer(News::Firmware("7.1.21".parse().unwrap())),
             );
-            assert!(matches!(fx[..], [Effect::LearnedFirmware { .. }]));
+            assert!(fx.is_empty());
             assert_eq!(e.state().firmware.exact, "7.1.21".parse().ok());
+            feed(&mut e, &from_peer(News::Cycle(Cycle::OFFERED)));
+            assert_eq!(e.state().cycle, Some(Cycle::OFFERED));
             let progress = UpdateStatus::Transferring { percent: 40 };
             feed(&mut e, &from_peer(News::Update(progress)));
             let peer = e.state().peer_update.unwrap();

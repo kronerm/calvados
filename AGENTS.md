@@ -83,13 +83,13 @@ main as the rolling pre-release `testing`: a release is
 - `aacp/control_command.rs` — also `Cycle`, the modes press and hold
   cycles through: control `0x1A`, a bitmask (`ListeningModes`: off `01`,
   ANC `02`, transparency `04`, adaptive `08`; value `[mask, 0, 0, 0]`), two
-  modes at least (the pods require it). The pods never reported it to us,
-  not even in the startup burst, so a host can only set it
-  (`Engine::set_cycle`, shown as set); `Effect::LearnedCycle` persists the
-  last one per pods, handed back by `Engine::stored_cycle` on connect. A
-  report would win. A firmware update resets it on the pods, so a changed
-  firmware version forgets it (`LearnedCycle` with `None`). Off is never
-  offered (`AllowOffOption`, `0x34`, isn't set).
+  modes at least (the pods require it). The pods keep it but never send
+  it (no 0x09 sender in 9A348 has id 0x1A, docs/firmware.md), so it's
+  known only once a host sets it (`Engine::set_cycle`): shown as set, told
+  the other hosts as `News::Cycle` (also to hosts that join), carried over
+  a reconnect like the noise mode, and unknown after a restart. A firmware
+  update resets it on the pods, so a changed firmware version forgets it.
+  Off is never offered (`AllowOffOption`, `0x34`, isn't set).
 - `protocol.rs` — framing (`Decoder` for byte streams, `parse_datagram` for
   message-preserving reads; both share `step()`), and command builders.
 - `state.rs` — `DeviceState`, display-only state accumulated from packets.
@@ -106,7 +106,7 @@ main as the rolling pre-release `testing`: a release is
 - `display.rs` — what both platforms show, so they read the same: `Buds`
   (per component: level, charging, last known, place, primary), the
   ownership label, the noise modes' names (D-Bus `NoiseMode`, the Android
-  actions), and the cycle's: its names (D-Bus `Cycle`, the CLI, both stores), a
+  actions), and the cycle's: its names (D-Bus `Cycle`, the CLI), a
   tile's `CycleMark` and `toggle_cycle` (from all three while unknown,
   never below two).
 - `ble.rs` — the proximity pairing advertisement: IRK resolution, the lid
@@ -127,14 +127,11 @@ main as the rolling pre-release `testing`: a release is
   is `90.…`; 7B19–7B21 all read 7.1), so `Release::is_newer_than`
   compares exactly when UARP told, else major.minor only.
   `DeviceState::firmware` (`Firmware`: model, 0x1D string, exact version)
-  is carried over a reconnect like the name, and remembered per pair: the
-  engine emits `Effect::LearnedFirmware` when it changes, the platforms
-  store `Firmware::to_stored` (Linux `<address>.firmware` in the state
-  directory, Android the preference `firmware:<MAC>`) and hand it back
-  right after `connected` (`Engine::stored_firmware`), since a session
+  is carried over a reconnect like the name, never stored: a session
   joining while another host is connected often gets no 0x1D (the phone,
-  usually). A 0x1D report wins; the exact version is dropped only when the
-  reported string changes. `display::firmware`: `7.1.21` when exact, else
+  usually), and then has only the exact version (its own query or a
+  peer's `News::Firmware`), no model, so no catalog check. The exact
+  version is dropped only when the reported string changes. `display::firmware`: `7.1.21` when exact, else
   `7.1 (6663)` (the build counter), else the raw string.
 - `uarp.rs` — UARP as a controller (docs/uarp.md), carried in AACP as
   opcode 0x4F (`[len 2 LE]` + one whole message, ≤ 1007 bytes, no
@@ -175,8 +172,9 @@ main as the rolling pre-release `testing`: a release is
   buds in the case and the release newer than the
   running firmware, exactly when known, else by major.minor (equal is not
   newer: the pods refuse equal and older anyway). `News`: calvados to
-  calvados, `calvados` + format 1 + `1` exact firmware (3 × u32 BE) or
-  `2` + update state, two arguments, a version; carried by smart routing
+  calvados, `calvados` + format 1 + `1` exact firmware (3 × u32 BE),
+  `2` + update state, two arguments, a version, or `3` + the cycle's mask;
+  carried by smart routing
   (`protocol::news`: 0x10 to a host, `[mac] [len 2 LE]` + news, arriving
   as 0x11 `Routing::News`). Apple's frames start `01 e5`; whether Apple
   hosts ignore ours, and whether the pods relay it unchanged, is untested.
@@ -296,8 +294,7 @@ power-on (`LinkChange`). Its length caps at 255, i.e. 15 events.
   `Resources.getIdentifier`. Tiles and rows fire service intents
   (`NOISE:<mode>`, `AUTO_SWITCH`, `AUTO_CONNECT`); a tile's cycle dot is
   its own view over the tile's corner (a `FrameLayout`, adding no height)
-  with its own intent, `CYCLE:<mode>`. The cycle is stored in the
-  preference `cycle:<MAC>`. The header's subtext is
+  with its own intent, `CYCLE:<mode>`. The header's subtext is
   one line (`header`): this phone's update (a refusal included)
   (`display::update`), else a peer's (`display::peer_update`), else the
   firmware and the newer release. The update's start and cancel are a
@@ -356,8 +353,7 @@ power-on (`LinkChange`). Its length caps at 255, i.e. 15 events.
   keeps it (a failed check keeps the last answer; logged at debug/info).
   On D-Bus: `Firmware` (`7.1.21`, or `7.1 (6663)` without UARP),
   `LatestFirmware` (`9.0.348 (9A348)`, empty until checked) and
-  `FirmwareUpdate`. Also the stored firmware
-  (`<address>.firmware`), and the update's package: the release's zip
+  `FirmwareUpdate`. Also the update's package: the release's zip
   (`__BaseURL` + `__RelativePath`), `AssetData/Firmware.acsw/firmware.uarp`
   read with `zip` (pure Rust inflate), checked (`Package::parse`, the
   release's version) and cached as `$XDG_CACHE_HOME/calvados/<build>.uarp`
@@ -390,8 +386,7 @@ power-on (`LinkChange`). Its length caps at 255, i.e. 15 events.
   (its log names the range when it refuses a plugin), while the published API
   definitions run ahead (container tooltips are API 32). The plugin needs 24
   (`runAsync` with an argv table).
-- `state.rs` — the state directory, the press-and-hold cycle last set
-  (`<address>.cycle`, the modes' names), and the two remembered settings
+- `state.rs` — the state directory and the two remembered settings
   (`protocol::settings`; files `auto_switch`/`auto_connect`, `on`/`off`,
   default on), the same two as the Android notification's Switch and
   Connect buttons (preferences under the same keys).
@@ -749,6 +744,10 @@ README's credits when work from elsewhere is used.
 ## Conventions
 
 - Keep comments short; put rationale in commit messages.
+- The pods are the store: nothing they hold (firmware, the cycle, modes)
+  is persisted on a host; what they don't report is shown only once set
+  or told, in memory. Persisted are only the host's own (settings, local
+  MAC) and the keys presence needs before any session.
 - Prefer enums over flags; make invalid states unrepresentable where it's cheap.
 - Prefer iterator/combinator style over mutable accumulation.
 - Test enum variants with `matches!`/`match`/`if let`, not `==`. Derive

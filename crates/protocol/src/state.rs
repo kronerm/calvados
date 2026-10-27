@@ -27,8 +27,8 @@ pub struct DeviceState {
     /// one out: the pods fall back to Transparency by themselves while a bud
     /// is out, and return to the chosen one when it's back.
     worn_noise_modes: WornNoiseModes,
-    /// The press-and-hold cycle: as the pods report it, else as last set
-    /// (stored per pods). They haven't reported it unasked so far.
+    /// The press-and-hold cycle as a host set it this session (ours, or a
+    /// peer's news): the pods never report it (docs/firmware.md).
     pub cycle: Option<Cycle>,
     pub audio_source: Option<AudioSource>,
     /// Peer MACs seen this session: the hijack targets.
@@ -74,9 +74,9 @@ pub struct Battery {
 
 impl DeviceState {
     /// What a new session with the same pods starts from: what's only shown
-    /// (name, model, firmware, noise mode, battery as last known) until the
-    /// pods report it, which after a reconnect can take ~20 s (the settings
-    /// half of the burst is held back). Routing state starts empty.
+    /// (name, model, firmware, noise mode, cycle, battery as last known)
+    /// until the pods report it, which after a reconnect can take ~20 s (the
+    /// settings half of the burst is held back). Routing state starts empty.
     pub fn carried_over(&self) -> Self {
         let last_known = |info: Option<BatteryInfo>| {
             info.map(|info| BatteryInfo {
@@ -90,6 +90,7 @@ impl DeviceState {
             noise_mode: self.noise_mode,
             noise_source: NoiseSource::Expected,
             worn_noise_modes: self.worn_noise_modes,
+            cycle: self.cycle,
             battery: Battery {
                 left: last_known(self.battery.left),
                 right: last_known(self.battery.right),
@@ -218,6 +219,13 @@ impl DeviceState {
                     host: *host,
                     status: *status,
                 });
+            }
+            Packet::RoutingResponse(RoutingResponse {
+                from: Some(host),
+                kind: Routing::News(News::Cycle(cycle)),
+            }) => {
+                self.record_peer(*host);
+                self.cycle = Some(*cycle);
             }
             Packet::RoutingResponse(response) => response
                 .from

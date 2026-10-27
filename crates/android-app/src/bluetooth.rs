@@ -21,10 +21,8 @@ use crate::jni::android::content::intent::Intent;
 use crate::jni::java::util::list::List;
 use crate::jni::{app_context, with_env};
 use crate::proto::MacAddress;
-use crate::proto::aacp::{Cycle, KeyType};
+use crate::proto::aacp::KeyType;
 use crate::proto::ble::{APPLE_COMPANY_ID, Pattern, PodsKeys};
-use crate::proto::display;
-use crate::proto::firmware::Firmware;
 use crate::proto::settings::Setting;
 
 pub(crate) const PREFS_NAME: &str = "calvados_prefs";
@@ -102,61 +100,6 @@ pub(crate) fn stored_keys() -> anyhow::Result<Option<(MacAddress, PodsKeys)>> {
     };
     let encryption = read(KeyType::EncryptionKey)?;
     Ok(Some((pods, PodsKeys { irk, encryption })))
-}
-
-/// The pods' firmware preference: `firmware:<MAC>`.
-fn firmware_preference(pods: MacAddress) -> String {
-    format!("firmware:{}", address(pods))
-}
-
-pub(crate) fn save_firmware(pods: MacAddress, firmware: &Firmware) -> anyhow::Result<()> {
-    with_env(|env| {
-        app_context(env)?
-            .get_shared_preferences(env, PREFS_NAME)?
-            .edit(env)?
-            .put_string(env, &firmware_preference(pods), &firmware.to_stored())?
-            .apply(env)
-    })
-}
-
-/// What was stored for `pods`; nothing when never stored.
-pub(crate) fn stored_firmware(pods: MacAddress) -> anyhow::Result<Firmware> {
-    let stored = with_env(|env| {
-        app_context(env)?
-            .get_shared_preferences(env, PREFS_NAME)?
-            .get_string(env, &firmware_preference(pods), "")
-    })?;
-    Ok(Firmware::from_stored(&stored))
-}
-
-/// The press-and-hold cycle's preference: `cycle:<MAC>`, the modes' names
-/// comma-separated, empty while unknown.
-fn cycle_preference(pods: MacAddress) -> String {
-    format!("cycle:{}", address(pods))
-}
-
-pub(crate) fn save_cycle(pods: MacAddress, cycle: Option<Cycle>) -> anyhow::Result<()> {
-    with_env(|env| {
-        app_context(env)?
-            .get_shared_preferences(env, PREFS_NAME)?
-            .edit(env)?
-            .put_string(
-                env,
-                &cycle_preference(pods),
-                &display::cycle_names(cycle).join(","),
-            )?
-            .apply(env)
-    })
-}
-
-/// What was last set for `pods`; nothing when never set.
-pub(crate) fn stored_cycle(pods: MacAddress) -> anyhow::Result<Option<Cycle>> {
-    let stored = with_env(|env| {
-        app_context(env)?
-            .get_shared_preferences(env, PREFS_NAME)?
-            .get_string(env, &cycle_preference(pods), "")
-    })?;
-    Ok(display::parse_cycle(stored.split(',')))
 }
 
 /// Start or stop watching for Apple proximity pairing advertisements
