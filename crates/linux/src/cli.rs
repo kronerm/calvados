@@ -38,6 +38,12 @@ trait Calvados {
     #[zbus(property)]
     fn set_noise_mode(&self, name: &str) -> zbus::Result<()>;
     #[zbus(property)]
+    fn firmware(&self) -> zbus::Result<String>;
+    #[zbus(property)]
+    fn latest_firmware(&self) -> zbus::Result<String>;
+    #[zbus(property)]
+    fn firmware_update(&self) -> zbus::Result<bool>;
+    #[zbus(property)]
     fn auto_switch(&self) -> zbus::Result<bool>;
     #[zbus(property)]
     fn set_auto_switch(&self, enabled: bool) -> zbus::Result<()>;
@@ -132,11 +138,18 @@ async fn snapshot(proxy: &CalvadosProxy<'_>) -> Value {
             proxy.noise_mode().await?,
             proxy.auto_switch().await?,
             proxy.auto_connect().await?,
+            (
+                proxy.firmware().await?,
+                proxy.latest_firmware().await?,
+                proxy.firmware_update().await?,
+            ),
         ))
     };
-    let Ok((connected, name, phase, buds, noise, auto_switch, auto_connect)) = read.await else {
+    let Ok((connected, name, phase, buds, noise, auto_switch, auto_connect, firmware)) = read.await
+    else {
         return json!({ "running": false });
     };
+    let (firmware, latest_firmware, firmware_update) = firmware;
     json!({
         "running": true,
         "connected": connected,
@@ -145,6 +158,9 @@ async fn snapshot(proxy: &CalvadosProxy<'_>) -> Value {
         "noise_mode": noise,
         "auto_switch": auto_switch,
         "auto_connect": auto_connect,
+        "firmware": firmware,
+        "latest_firmware": latest_firmware,
+        "firmware_update": firmware_update,
         "buds": buds.iter().map(|(component, level, charging, last_known, place, primary)| json!({
             "component": component,
             "level": level,

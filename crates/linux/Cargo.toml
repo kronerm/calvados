@@ -15,7 +15,7 @@ path = "src/main.rs"
 [dependencies]
 anyhow = "1"
 bluer = { version = "0.17", features = ["full"] }
-protocol = { path = "../protocol" }
+protocol = { path = "../protocol", features = ["catalog"] }
 tokio = { version = "1.53", features = ["full", "signal"] }
 tracing = "0.1"
 zbus = { version = "5.19", default-features = false, features = ["tokio"] }
@@ -25,3 +25,5 @@ hex = "0.4"
 serde_json = "1"
 libc = "0.2"
 pipewire = "0.10"
+reqwest = { version = "0.13", default-features = false, features = ["rustls-no-provider"] }
+rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12"] }

@@ -5,8 +5,9 @@
 use std::sync::Arc;
 use std::time::Duration;
 
-use protocol::display::{Buds, Place, mode_name, parse_mode};
+use protocol::display::{self, Buds, Place, mode_name, parse_mode};
 use protocol::engine::Engine;
+use protocol::firmware::{Release, Version};
 use protocol::settings::Setting;
 use tokio::sync::watch;
 use zbus::fdo::{RequestNameFlags, RequestNameReply};
@@ -57,15 +58,19 @@ pub struct Status {
     name: String,
     noise_mode: String,
     buds: Vec<WireComponent>,
+    firmware: String,
+    latest_firmware: String,
+    firmware_update: bool,
     auto_switch: bool,
     auto_connect: bool,
 }
 
 impl Status {
-    pub fn of(engine: &Engine) -> Self {
+    /// `latest`: the catalog's release for the pods, once checked.
+    pub fn of(engine: &Engine, latest: Option<&Release>) -> Self {
         let settings = engine.settings();
         let session = match engine.is_connected() {
-            true => Self::connected(engine),
+            true => Self::connected(engine, latest),
             false => Self {
                 ownership: "not-owning".into(),
                 summary: "disconnected".into(),
@@ -79,7 +84,7 @@ impl Status {
         }
     }
 
-    fn connected(engine: &Engine) -> Self {
+    fn connected(engine: &Engine, latest: Option<&Release>) -> Self {
         let state = engine.state();
         let ownership = engine.ownership().to_string();
         let peers = engine
@@ -107,6 +112,15 @@ impl Status {
             name: state.name.clone().unwrap_or_default(),
             noise_mode: mode_name(state.noise_mode).to_owned(),
             buds: wire_buds(Buds::of(state)),
+            firmware: state
+                .firmware
+                .as_deref()
+                .map(display::firmware)
+                .unwrap_or_default(),
+            latest_firmware: latest.map(Release::to_string).unwrap_or_default(),
+            firmware_update: latest
+                .zip(state.firmware.as_deref().and_then(Version::of_running))
+                .is_some_and(|(latest, running)| latest.is_newer_than(running)),
             ..Self::default()
         }
     }
@@ -183,6 +197,25 @@ impl CalvadosService {
     #[zbus(property)]
     fn noise_mode(&self) -> String {
         self.snapshot().noise_mode
+    }
+
+    /// The running firmware, e.g. `7.1`; empty until reported.
+    #[zbus(property)]
+    fn firmware(&self) -> String {
+        self.snapshot().firmware
+    }
+
+    /// Apple's current release for the pods, e.g. `9.0.348 (9A348)`; empty
+    /// until checked (daily).
+    #[zbus(property)]
+    fn latest_firmware(&self) -> String {
+        self.snapshot().latest_firmware
+    }
+
+    /// `LatestFirmware` is newer than `Firmware`.
+    #[zbus(property)]
+    fn firmware_update(&self) -> bool {
+        self.snapshot().firmware_update
     }
 
     /// Takes effect once the pods echo it back (the property changes then).
@@ -276,6 +309,15 @@ async fn signal_changes(iface: InterfaceRef<CalvadosService>, mut status: watch:
         }
         if now.noise_mode != last.noise_mode {
             signalled = signalled.and(service.noise_mode_changed(emitter).await);
+        }
+        if now.firmware != last.firmware {
+            signalled = signalled.and(service.firmware_changed(emitter).await);
+        }
+        if now.latest_firmware != last.latest_firmware {
+            signalled = signalled.and(service.latest_firmware_changed(emitter).await);
+        }
+        if now.firmware_update != last.firmware_update {
+            signalled = signalled.and(service.firmware_update_changed(emitter).await);
         }
         if let Err(e) = signalled {
             tracing::warn!("D-Bus PropertiesChanged: {e}");

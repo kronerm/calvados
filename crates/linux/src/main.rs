@@ -5,6 +5,7 @@
 mod bluez;
 mod cli;
 mod dbus;
+mod firmware;
 mod hci;
 mod mpris;
 mod pipewire;
@@ -21,6 +22,7 @@ use protocol::MacAddress;
 use protocol::aacp::{NoiseControlMode, Packet};
 use protocol::connection::AIRPODS_PSM;
 use protocol::engine::{Effect, Engine, LocalAudio};
+use protocol::firmware::Release;
 use protocol::protocol::parse_datagram;
 use protocol::settings::{Setting, Settings};
 use tokio::signal::unix::{SignalKind, signal};
@@ -59,6 +61,9 @@ enum Input {
     /// An Apple device advertising nearby, with its manufacturer data (from
     /// the type byte).
     Nearby(bluer::Address, Vec<u8>),
+    /// A firmware catalog check for these models (a product's): its
+    /// current release, `None` when it failed.
+    Catalog(Vec<String>, Option<Release>),
 }
 
 impl Daemon {
@@ -119,7 +124,7 @@ async fn daemon() -> anyhow::Result<()> {
     let daemon = Arc::new(Daemon {
         adapter,
         inputs,
-        status: watch::Sender::new(Status::of(&engine)),
+        status: watch::Sender::new(Status::of(&engine, None)),
         media,
         audio: pipewire::Audio::spawn(),
     });
@@ -164,8 +169,16 @@ async fn run(daemon: &Daemon, mut engine: Engine, inputs: &mut mpsc::UnboundedRe
     let mut attaching = None;
     let mut attach_after = Duration::ZERO;
     let mut playback = daemon.media.as_ref().map(mpris::Media::playback);
+    let mut catalog = firmware::Catalog::new();
     loop {
-        daemon.publish(Status::of(&engine));
+        let model = engine.state().model.as_deref();
+        if let Some(model) = model {
+            catalog.check(model, &daemon.inputs, Instant::now());
+        }
+        daemon.publish(Status::of(
+            &engine,
+            model.and_then(|model| catalog.latest(model)),
+        ));
         if session.is_none() && attaching.is_none() {
             attaching = Some(Box::pin(attach(daemon, attach_after)));
         }
@@ -215,6 +228,10 @@ async fn run(daemon: &Daemon, mut engine: Engine, inputs: &mut mpsc::UnboundedRe
                     presence::stored_keys(),
                     Instant::now(),
                 ),
+                Input::Catalog(models, release) => {
+                    catalog.found(models, release);
+                    Vec::new()
+                }
             },
             Some(playing) = playback_change(&mut playback) => engine.local_audio(match playing {
                 true => LocalAudio::Media,
