@@ -66,7 +66,10 @@ the same, so updates go 0.1.0 < 0.1.0.r43.g… < 0.1.1alpha1 < 0.1.1. The
 PKGBUILD computes `pkgver` from it when read (no `pkgver()`, which would
 rewrite the file); CI writes it into the app's manifest, which keeps
 `versionCode 1` / `dev` for local builds. `.github/workflows/release.yml`
-publishes a tag as a release (alphas as pre-releases) and every push to
+(the key reaches only its signing step, `apksigner` alone: the build signs
+with a throwaway key; only the release job may write to the repo; GitHub's
+own actions pinned by commit, the runner's SDK, NDK and JDK) publishes a
+tag as a release (alphas as pre-releases) and every push to
 main as the rolling pre-release `testing`: a release is
 `git tag -a v0.2.0 && git push --tags`.
 

@@ -5,8 +5,13 @@
 #   0.1.1.r3.g1a2b3c4).
 # The version comes from the tags (tools/version.sh), the same for pacman
 # and Android, so updates go release < testing < next alpha < next release.
+#
 # Secrets: ANDROID_KEYSTORE (the release keystore, base64) and
-# ANDROID_KEYSTORE_PASSWORD.
+# ANDROID_KEYSTORE_PASSWORD, seen only by the signing step, which runs
+# apksigner and nothing else: the build (dependencies' build scripts
+# included) signs with a throwaway key. Only the release job may write to
+# the repo. Actions are GitHub's own, pinned by commit; the SDK, NDK and
+# JDK are the runner's.
 name: Release
 
 on:
@@ -16,7 +21,7 @@ on:
   workflow_dispatch:
 
 permissions:
-  contents: write
+  contents: read
 
 jobs:
   version:
@@ -25,7 +30,7 @@ jobs:
       version: ${{ steps.version.outputs.version }}
       code: ${{ steps.version.outputs.code }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
           fetch-depth: 0
       - id: version
@@ -38,31 +43,29 @@ jobs:
   android:
     needs: version
     runs-on: ubuntu-24.04
+    env:
+      VERSION: ${{ needs.version.outputs.version }}
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-java@v4
-        with:
-          distribution: temurin
-          java-version: 21
-      - uses: android-actions/setup-android@v3
-      - run: sdkmanager "platforms;android-35" "build-tools;35.0.0"
-      - id: ndk
-        uses: nttld/setup-ndk@v1
-        with:
-          ndk-version: r28c
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - name: SDK, NDK, JDK
+        run: |
+          yes | "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" --licenses > /dev/null
+          "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" "platforms;android-35" "build-tools;35.0.0"
+          echo "ANDROID_NDK_ROOT=$ANDROID_NDK_LATEST_HOME" >> "$GITHUB_ENV"
+          echo "JAVA_HOME=$JAVA_HOME_21_X64" >> "$GITHUB_ENV"
+          echo "$ANDROID_HOME/build-tools/35.0.0" >> "$GITHUB_PATH"
+          echo "$JAVA_HOME_21_X64/bin" >> "$GITHUB_PATH"
       - run: cargo install cargo-apk2 --version 1.4.2 --locked
       - name: Build
         env:
-          VERSION: ${{ needs.version.outputs.version }}
           CODE: ${{ needs.version.outputs.code }}
-          ANDROID_NDK_ROOT: ${{ steps.ndk.outputs.ndk-path }}
-          KEYSTORE: ${{ secrets.ANDROID_KEYSTORE }}
-          CARGO_APK_RELEASE_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
         run: |
-          [ -n "$KEYSTORE" ] || { echo "::error::no ANDROID_KEYSTORE secret"; exit 1; }
-          export CARGO_APK_RELEASE_KEYSTORE="$RUNNER_TEMP/release.keystore"
-          base64 -d <<< "$KEYSTORE" > "$CARGO_APK_RELEASE_KEYSTORE"
-          export PATH="$ANDROID_HOME/build-tools/35.0.0:$PATH"
+          # cargo-apk2 won't build a release unsigned: a throwaway key.
+          export CARGO_APK_RELEASE_KEYSTORE="$RUNNER_TEMP/build.keystore"
+          export CARGO_APK_RELEASE_KEYSTORE_PASSWORD=build
+          keytool -genkeypair -storetype PKCS12 -keystore "$CARGO_APK_RELEASE_KEYSTORE" \
+            -alias build -keyalg EC -groupname secp256r1 -validity 1 \
+            -storepass build -keypass build -dname CN=build
           sed -i "s/android:versionCode=\"[0-9]*\"/android:versionCode=\"$CODE\"/; s/android:versionName=\"[^\"]*\"/android:versionName=\"$VERSION\"/" \
             crates/android-app/AndroidManifest.xml
           cargo apk2 build -p android-app --release
@@ -70,7 +73,20 @@ jobs:
           mkdir out
           cp target/release/apk/calvados.apk "out/calvados-$VERSION.apk"
           cp target/release/calvados-xposed.apk "out/calvados-xposed-$VERSION.apk"
-      - uses: actions/upload-artifact@v4
+      - name: Sign
+        env:
+          KEYSTORE: ${{ secrets.ANDROID_KEYSTORE }}
+          PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+        run: |
+          [ -n "$KEYSTORE" ] || { echo "::error::no ANDROID_KEYSTORE secret"; exit 1; }
+          keystore="$RUNNER_TEMP/release.keystore"
+          base64 -d <<< "$KEYSTORE" > "$keystore"
+          for apk in out/*.apk; do
+            apksigner sign --ks "$keystore" --ks-pass env:PASSWORD --key-pass env:PASSWORD "$apk"
+            apksigner verify --print-certs "$apk" | grep 'SHA-256'
+          done
+          rm "$keystore"
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: android
           path: out/
@@ -81,7 +97,7 @@ jobs:
     container: archlinux:base-devel
     steps:
       - run: pacman -Syu --noconfirm --needed git rust clang bluez dbus libpipewire libcap
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
           fetch-depth: 0
       - name: Build
@@ -91,7 +107,7 @@ jobs:
           sudo -u builder git config --global --add safe.directory "$PWD"
           sudo -u builder makepkg --noconfirm
           mkdir out && cp ./*.pkg.tar.zst out/
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: arch
           path: out/
@@ -99,8 +115,10 @@ jobs:
   release:
     needs: [version, android, arch]
     runs-on: ubuntu-24.04
+    permissions:
+      contents: write
     steps:
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
         with:
           path: out
           merge-multiple: true
