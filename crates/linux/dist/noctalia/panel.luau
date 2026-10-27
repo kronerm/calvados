@@ -134,7 +134,7 @@ local function noiseControl()
       end or nil,
     }, {
       ui.row({ align = "start" }, {
-        ui.box({ width = 16, height = 16 }),
+        ui.row({ width = 16, height = 16 }),
         ui.row({ flexGrow = 1, justify = "center" }, {
           ui.glyph({ name = mode.glyph, size = 20, color = color }),
         }),
