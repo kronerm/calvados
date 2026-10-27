@@ -103,14 +103,74 @@ build first.
   usually). A 0x1D report wins; the exact version is dropped only when the
   reported string changes. `display::firmware`: `7.1.21` when exact, else
   `7.1 (6663)` (the build counter), else the raw string.
-- `uarp.rs` — the read-only UARP query for the exact running version
-  (docs/uarp.md): framing (`[type 2] [len 2] [id 2]`, big-endian), the
-  GATT fragment header (one byte, bit 0 on a message's last fragment;
-  `Reassembler` for indications), the writes Sync, version discovery (4)
-  and the information request for tag 5, and the response's parsing
-  (`[status 2] [tag 4] [len 4]`, four u32: 7.1.21.0). Nothing that offers,
-  transfers or applies firmware; keep it that way.
+- `uarp.rs` — UARP as a controller (docs/uarp.md), carried in AACP as
+  opcode 0x4F (`[len 2 LE]` + one whole message, ≤ 1007 bytes, no
+  fragment header; `Packet::Uarp`; Apple hosts' route, the pods' transport
+  0xd). Messages `[type 2] [len 2] [id 2]`, big-endian: `Message` out
+  (Sync, version discovery proposing 4, the offer 0x05, data response
+  0x07, rescind 0x0C, the acks 0x0F and 0x18), `Received` in (0x00,
+  0x02, 0x06, 0x09 with `Processing` flags: low byte 1 staged, 2 denied,
+  3 abandoned, 4 corrupt, the reason above; 0x0D, 0x10, 0x17), the
+  running-version query (tag 5: `[status 2] [tag 4] [len 4]`, four u32).
+  **No apply (0x0A) message exists; keep it that way.** The GATT
+  characteristic (`94110001-…`, one-byte fragment header) is what the
+  Python tools use; calvados doesn't.
+- `superbinary.rs` — `Package`: a `firmware.uarp` checked as the pods
+  check it (format ≤ 4, header length 0x2c, binary length within the
+  file, every metadata/payload range within it) and `FTAB`'s data against
+  its metadata TLV `0xCCD28107` (SHA-256, `sha2`), before it's offered.
+  Offer fields from the header (version, binary length, payload count).
+- `update.rs` — the update, sans-IO. `Updater` (one per update): `up`
+  (Sync, version, the offer: asset 1, tag 0, flags 1), `received`, `down`,
+  `tick`, `cancel`, `running`; `Output::Write` (a message) and
+  `Output::Status` on a change. It serves exactly what's asked, cut to
+  what fits a message (`MAX_DATA`; the pods ask on from there; an unknown
+  asset or an offset past the end gets status 0x11), and acks processing
+  notifications. `UpdateStatus`: `Downloading` (the engine's, while the
+  platform fetches), `Offered`, `Deferred` (offer acked, nothing asked
+  yet), `Transferring`/`Interrupted { percent }` (of `FTAB`'s data, by the
+  position of the pods' last request in it), `Staged`, `Done(version)`
+  (the running version reached it), `Failed` (`Failure`). Watchdog
+  (`WATCHDOG`, 60 s): nothing asked since the offer or the last request →
+  rescind, `NotStarted` or `Stalled` (the pods have no timeout of their
+  own). Down (session dropped, primary changing) → `Interrupted`; `up`
+  again re-offers the identical package, which within the pods' boot
+  continues at their offset (docs/update-host.md); more than 3 drops
+  without a request in between, or 5 minutes down → `Lost`. Staged is the
+  end: never an apply; with both buds in the closed case, the case copies
+  the image to the other bud and applies both (~30 min). `check`: both
+  buds in the case, the case `Charging`, and the release newer than the
+  running firmware, exactly when known, else by major.minor (equal is not
+  newer: the pods refuse equal and older anyway). `News`: calvados to
+  calvados, `calvados` + format 1 + `1` exact firmware (3 × u32 BE) or
+  `2` + update state, two arguments, a version; carried by smart routing
+  (`protocol::news`: 0x10 to a host, `[mac] [len 2 LE]` + news, arriving
+  as 0x11 `Routing::News`). Apple's frames start `01 e5`; whether Apple
+  hosts ignore ours, and whether the pods relay it unchanged, is untested.
 - `connection.rs` — L2CAP PSM and service UUID.
+- UARP in the engine. **A 0x4F frame reaching a bud that isn't primary
+  aborts it** [rkof 0xbea70], so nothing UARP goes out unless the session
+  is settled (`uarp_ready`: handshake acked and answering, a live battery,
+  the primary known) and `UARP_SETTLE` (5 s) has passed since the connect
+  or the last primary change (`uarp_hold`). Once settled, each session
+  asks for the running version (`VersionQuery`), unless an update is to
+  be offered; the answer is `exact_firmware`. The pods also announce the
+  other bud as downstream (0x17, acked with 0x18) and offer a dynamic
+  `MTIC` asset (left unanswered); nothing is solicited.
+  Updates: `prepare_update(release)` (refusals: `Refusal`, incl. not
+  connected, no release, already running, another host's update running,
+  `update::check`) → `Downloading`; the platform fetches and hands
+  `package(Option<Package>)`, checked again (the release's version, the
+  preconditions) → offered once settled. The update survives a session
+  drop with the same pods (`disconnected` takes it down; it's offered
+  again once the new session settles) and waits out a primary change the
+  same way. `cancel_update` rescinds. Every status change is told the
+  other hosts (`DeviceState::hosts`, not us) as `News::Update`, progress
+  in 5 % steps; the exact firmware from our own query as
+  `News::Firmware`, also to hosts that join (a `ConnectedDevices` list).
+  Received: `News::Firmware` sets the exact version; `News::Update` is
+  `DeviceState::peer_update` (cleared when that host leaves).
+  `display::update` / `display::peer_update` are the lines.
 
 ### How sure we are
 
@@ -245,18 +305,17 @@ power-on (`LinkChange`). Its length caps at 255, i.e. 15 events.
   `LatestFirmware` (`9.0.348 (9A348)`, empty until checked) and
   `FirmwareUpdate`. Android doesn't check (no INTERNET permission): it
   shows the running version only. Also the stored firmware
-  (`<address>.firmware`).
-- `uarp.rs` — the exact running firmware, once per AACP session, in a
-  spawned task reporting `Input::ExactFirmware`: BlueZ serves the pods'
-  GATT over the classic link, so the UARP characteristic
-  (`94110001-6d9b-4225-a4f1-6a4a7f01b0de`) is found under the device,
-  subscribed, and written `protocol::uarp::running_version_query` (write
-  requests, 300 ms apart); the tag 5 response is the answer. Read-only:
-  never an offer, data or apply. A refused first write ("Not connected",
-  right after a reconnect) is retried once 3 s later; 10 s per try. Without
-  GATT or an answer, a debug line and the 0x1D version. Android doesn't
-  ask (not implemented): it shows the 0x1D version.
-- `cli.rs` — `calvados watch` / `calvados set …`: a zbus proxy client of
+  (`<address>.firmware`), and the update's package: the release's zip
+  (`__BaseURL` + `__RelativePath`), `AssetData/Firmware.acsw/firmware.uarp`
+  read with `zip` (pure Rust inflate), checked (`Package::parse`, the
+  release's version) and cached as `$XDG_CACHE_HOME/calvados/<build>.uarp`
+  (written aside, renamed), reused while it checks out; `Input::Package`.
+  D-Bus: `StartUpdate` (fails with the refusal's text; the package is
+  fetched after it returns), `CancelUpdate`, `Update`
+  (`(state, percent, detail)`) and `PeerUpdate` (the host first).
+- `cli.rs` — `calvados watch` / `calvados set …` / `calvados firmware
+  status|update|cancel` (`update` follows `Update` until staged, then says
+  to close the lid; Ctrl-C leaves the update running): a zbus proxy client of
   the daemon's own D-Bus object (no daemon logic), for shells without
   D-Bus. `watch` prints JSON lines on `PropertiesChanged` and on the bus
   name's owner changes: the D-Bus properties, as data (the plugin does its
@@ -344,6 +403,9 @@ texts are written twice. A change to one side needs the other:
   `format.firmware`; the notification's header subtext,
   `notification.rs` `Content::firmware`, since the expanded layout has no
   height to spare; " · 9.0.348 available" on Linux only);
+- the update's line (`display::update`, `format.update`: "Updating
+  firmware… 40 %", "Staged: close the lid", …, a peer's with " · <host>";
+  in the panel it takes the firmware line's place);
 - the battery glyph thresholds 88/63/38/13 (`format.batteryGlyph`,
   `notification.rs` `battery_glyph`);
 - the icons: Noctalia names Tabler glyphs, Android has them converted in
@@ -512,6 +574,29 @@ texts are written twice. A change to one side needs the other:
     one-entry list, or the other hosts having disconnected); then persisted
     (`Effect::LearnedLocalMac`).
   Without it, Take only routes audio (no claim that could never complete).
+
+## Firmware updates
+
+Where: `protocol::{superbinary, uarp, update}` and the engine (UARP over
+the AACP session); Linux fetches and caches the package (`firmware.rs`)
+and exposes it (D-Bus, CLI, panel); Android has no package fetch yet.
+The flow, as done once with `tools/firmware/uarp_offer.py … full` over
+GATT (docs/uarp.md): offer → the primary pulls the SuperBinary header,
+the payload headers, `FTAB`'s metadata and `FTAB` (~7.8 MB, ~8 minutes)
+→ "fully staged" → the lid closes → the case copies and applies (~30
+min) → the next session's version query shows it (`Done`). Rules:
+- never an apply (no 0x0A message exists), never a solicitation; only
+  the offer, data responses, rescinds and acks;
+- preconditions (`update::check`): both buds in the case, the case
+  charging, the release newer than what runs;
+- no UARP unless settled and the primary isn't changing (see the engine);
+- the watchdog rescinds after 60 s without a request;
+- a drop resumes by re-offering the identical package; a staged image
+  stays (nothing rescinds it);
+- other calvados hosts learn the progress through `News`, and an update
+  isn't started while one of them reports one running.
+Untested over AACP so far: the transfer itself (the GATT one worked), and
+`News` through the pods' relay.
 
 ## Debugging a reboot
 

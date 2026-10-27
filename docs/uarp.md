@@ -52,10 +52,19 @@ personalization request in between: the buds stage `FTAB` first and need
 no ticket. At 475 bytes a request, `FTAB` is ~16 500 requests. Rescinded
 there; acknowledged, nothing staged.
 
-The Linux daemon asks this at every AACP session (`crates/linux/src/uarp.rs`,
-messages from `protocol::uarp`): Sync, version discovery proposing 4 and
-the tag 5 request, read-only, to show the exact version (7.1.21 where
-0x1D says only 7.1) and compare it with the catalog's release.
+**Calvados implements the controller side**, over AACP 0x4F (below), in
+the shared engine (`protocol::{uarp, superbinary, update}`; AGENTS.md
+has the details): every settled session asks Sync, version discovery
+proposing 4 and the tag 5 request, to show the exact version (7.1.21
+where 0x1D says only 7.1) and compare it with the catalog's release; and
+`calvados firmware update` offers the catalog's SuperBinary (checked
+first: header, ranges, `FTAB`'s SHA-256) the way `uarp_offer.py … full`
+did, serving exactly what the primary asks for until "fully staged".
+It never sends 0x0A (apply), solicits nothing, rescinds after a minute
+without a request, and re-offers the identical package after a drop to
+resume. Nothing UARP is sent until the AACP session has settled and 5 s
+after a connect or a primary change, because of the abort below. The
+whole update over 0x4F hasn't run yet; the GATT one did.
 
 **A complete update from Linux (Oct 27).** With the case charging, freshly
 reopened, the phone's Bluetooth and the calvados daemon off,

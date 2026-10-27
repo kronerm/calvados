@@ -122,12 +122,12 @@ no other device connected, the laptop takes the audio by itself.
 left then right, the primary's in bold, then the case's; highlighted while
 the laptop has the audio) and a panel with the same controls as the phone.
 The panel also says when Apple has newer AirPods firmware ("Firmware
-7.1.21 · 9.0.348 available"): the daemon asks the AirPods for their exact
-version over UARP, Apple's update protocol (read-only: the version
-query, nothing else), and checks Apple's public update catalog once a
-day while the AirPods are connected. It only tells: Calvados never
-updates the AirPods. Both platforms remember the last version seen, so
-it still shows when the AirPods don't report it again.
+7.1.21 · 9.0.348 available"): the AirPods tell their exact version over
+UARP, Apple's update protocol, and the daemon checks Apple's public
+update catalog once a day while the AirPods are connected. It can also
+update them (below); while it does, that line shows the progress. Both
+platforms remember the last version seen, so it still shows when the
+AirPods don't report it again.
 Link it where Noctalia looks for plugins, enable it, then add the widget
 `kroner/calvados:bar` to the bar (Settings → Bar):
 
@@ -144,6 +144,7 @@ calvados watch                                    # the state as JSON, a line pe
 calvados set auto-switch on|off|toggle
 calvados set auto-connect on|off|toggle
 calvados set noise anc|transparency|adaptive|next
+calvados firmware status|update|cancel            # see below
 ```
 
 The same is on the session bus as `dev.kroner.Calvados`
@@ -153,34 +154,43 @@ its properties signal changes.
 ## Updating the AirPods' firmware (experimental)
 
 AirPods update only from an Apple device, but the update protocol can be
-spoken from Linux. This has worked once: AirPods Pro 2 (USB-C) from 7.1.21
-to 9.0.348, both buds. It's a research tool, not part of calvados yet;
-the AirPods check Apple's signature and refuse older firmware, but if
-something goes wrong, only Apple can fix it. The case's own firmware isn't
-updated this way.
+spoken from Linux. This has worked once, with the research tools below:
+AirPods Pro 2 (USB-C) from 7.1.21 to 9.0.348, both buds. The daemon does
+the same, inside its connection to the AirPods; that route hasn't run a
+whole update yet. The AirPods check Apple's signature and refuse older
+firmware, but if something goes wrong, only Apple can fix it. The case's
+own firmware isn't updated this way.
 
-You need curl, unzip, b3sum, Python with dbus-python and PyGObject, and
-the AirPods' address (`bluetoothctl devices`). From a checkout:
+1. `calvados firmware status` shows what the AirPods run and Apple's
+   latest release for them.
+2. Put both buds in the case and plug the case in; keep the lid open and
+   the case still. If an iPhone or Mac is around, turn its Bluetooth off:
+   it could start an update of its own.
+3. `calvados firmware update` downloads the release from Apple (cached in
+   `~/.cache/calvados`), offers it and shows the progress: about 8
+   minutes, until it says the firmware is staged. Stopping the command
+   doesn't stop the update; `calvados firmware cancel` does.
+4. Close the lid, keep the case plugged in and leave it for about 30
+   minutes: the case copies the firmware to the other bud and installs it
+   on both.
+5. Open the lid; once the AirPods are connected, `calvados firmware
+   status` shows the new version.
 
-1. Download the current firmware for your model (the right bud's model,
-   e.g. A3048) from Apple: `tools/firmware/fetch.sh A3048`.
-2. Check what the AirPods run: `python3 tools/firmware/uarp_probe.py
-   <address>` ("running firmware").
-3. Put both buds in the case and plug the case in. Close the lid and
-   reopen it. Turn off Bluetooth on your other devices and stop calvados
-   (`systemctl --user stop calvados`). Keep the lid open and the case
-   still.
-4. Send the update:
-   `python3 tools/firmware/uarp_offer.py <address>
-   firmware/A3048/asset/AssetData/Firmware.acsw/firmware.uarp full 2700`.
-   It takes about 8 minutes and ends with "fully staged".
-5. Close the lid, keep the case plugged in and leave it for 30 minutes:
-   the case installs it on both buds.
-6. Open the lid and check with `uarp_probe.py` again; then start calvados
-   (`systemctl --user start calvados`) and Bluetooth elsewhere.
+The daemon refuses unless both buds are in the charging case and the
+release is newer. If the AirPods decline or never start, close and reopen
+the case and try again. A transfer that stalls for a minute is
+withdrawn; one cut by a dropped connection carries on where it was once
+they're back. Another calvados host (the phone) shows the progress, and
+won't start an update of its own meanwhile.
 
-If the transfer stalls, the tool withdraws the offer; close and reopen the
-case and run step 4 again.
+The research tools (curl, unzip, b3sum, Python with dbus-python and
+PyGObject, calvados stopped, the AirPods' address from `bluetoothctl
+devices`): `tools/firmware/fetch.sh A3048` downloads the release for a
+model (the right bud's), `python3 tools/firmware/uarp_probe.py <address>`
+shows the running and staged firmware, and `python3
+tools/firmware/uarp_offer.py <address>
+firmware/A3048/asset/AssetData/Firmware.acsw/firmware.uarp full 2700`
+stages it (step 3 above; then steps 4 and 5).
 
 ## Logs
 
