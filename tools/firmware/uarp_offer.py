@@ -103,12 +103,19 @@ def main(address, path, wait="30"):
                             "org.freedesktop.DBus.Properties", path=char_path)
     char.StartNotify()
     GLib.timeout_add(500, lambda: session.offer() and False)
-    GLib.timeout_add_seconds(int(wait), loop.quit)
+
+    def finish():
+        if not session.rescinded:
+            session.rescinded = True
+            session.send(0x0C, struct.pack(">H", ASSET))
+        # Long enough for the rescind's acknowledgement (0x10).
+        GLib.timeout_add_seconds(3, loop.quit)
+        return False
+
+    GLib.timeout_add_seconds(int(wait), finish)
     try:
         loop.run()
     finally:
-        if not session.rescinded:
-            session.send(0x0C, struct.pack(">H", ASSET))
         char.StopNotify()
         print(f"served {session.served} bytes (header and payload headers only)")
 

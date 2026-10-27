@@ -24,9 +24,15 @@ answer 6). Tags: 1 `Apple`, 2 `AirPods Pro`, 3 a bud's serial, 4
 Observed (7B21), offering 9A348's SuperBinary with
 `tools/firmware/uarp_offer.py` (asset tag 0, flags 1, version and length
 from the SuperBinary header, 20 payloads): the pods acknowledge the offer
-(0x0d, every field echoed) and then request nothing for 30 s, with no
-processing notification: deferred, not denied, while worn. A rescind
-leaves nothing staged.
+(0x0d, every field echoed) and then request nothing, with no processing
+notification, for 30 s while worn and 2 min in the case without power:
+deferred. With the case charging they decide at once: processing
+notification flags `0x0202`, denied with the handler's default reason
+(`0x200`, set at [rkof 0x75af0]; the acceptance check's specific reasons
+1, 2, 5 would give `0x0003`, `0x0002`, `0x0007`), also right after a
+rescind-all (`0x0c` asset `0xFFFF`, acknowledged). Why is open: in 9A348
+the default survives e.g. an offering endpoint of type 0xe
+[rkof 0xbdae4–0xbdaea]. Nothing was staged in any of these.
 
 All addresses `[rkof 0x…]`. **Known** = read from code; **Inferred** = meaning guessed
 (names are not in the binary: no msg-type name strings exist; names below follow
