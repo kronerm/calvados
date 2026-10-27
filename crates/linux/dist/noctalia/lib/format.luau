@@ -74,6 +74,16 @@ function format.mode(state)
   return state.noise_mode == "off" and "Off" or "—"
 end
 
+-- "Firmware 7.1", plus " · 9.0 available" when Apple has a newer one;
+-- nil until reported.
+function format.firmware(state)
+  if (state.firmware or "") == "" then
+    return nil
+  end
+  local latest = state.firmware_update and string.match(state.latest_firmware or "", "^%d+%.%d+")
+  return latest and `Firmware {state.firmware} · {latest} available` or `Firmware {state.firmware}`
+end
+
 function format.ownership(state)
   if state.ownership == "owning" then
     return "Active"

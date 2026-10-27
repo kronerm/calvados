@@ -1,7 +1,7 @@
 --!nonstrict
 -- The Android notification's controls, laid out for a panel: the batteries,
--- the noise mode as a choice, and the two switching settings with what they
--- do.
+-- the noise mode as a choice, the two switching settings with what they do,
+-- and the firmware.
 
 local format = require("./lib/format.luau")
 
@@ -144,8 +144,14 @@ local function setting(title, description, checked, key)
   })
 end
 
+-- One small line; only while connected (the daemon clears it otherwise).
+local function firmware()
+  local text = format.firmware(state)
+  return text and ui.label({ text = text, fontSize = 12, color = "on_surface_variant" })
+end
+
 local function render()
-  panel.render(ui.column({ flexGrow = 1, gap = 18, align = "stretch" }, {
+  local rows = {
     header(),
     batteries(),
     noiseControl(),
@@ -163,7 +169,12 @@ local function render()
         "auto-connect"
       ),
     }),
-  }))
+  }
+  local line = firmware()
+  if line then
+    table.insert(rows, line)
+  end
+  panel.render(ui.column({ flexGrow = 1, gap = 18, align = "stretch" }, rows))
 end
 
 noctalia.state.watch("calvados.state", function(value)

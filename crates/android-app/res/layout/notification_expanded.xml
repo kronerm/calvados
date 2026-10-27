@@ -1,6 +1,7 @@
 <?xml version="1.0" encoding="utf-8"?>
 <!-- The expanded notification, like the Linux panel: batteries (a dot by the
-     primary bud), the noise mode as tiles, and the two settings. Filled by
+     primary bud), the noise mode as tiles, the two settings and the
+     firmware. Filled by
      notification.rs; tiles and settings rows are tappable. -->
 <LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
     android:layout_width="match_parent"
@@ -389,4 +390,14 @@
             android:layout_marginStart="12dp"
             android:src="@drawable/ic_toggle_left" />
     </LinearLayout>
+
+    <TextView
+        android:id="@+id/firmware"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="10dp"
+        android:singleLine="true"
+        android:textAppearance="@android:style/TextAppearance.Material.Notification.Info"
+        android:textColor="@color/notification_text_secondary"
+        android:visibility="gone" />
 </LinearLayout>

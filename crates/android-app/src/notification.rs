@@ -55,6 +55,9 @@ pub(crate) struct Content {
     buds: Option<Buds>,
     /// [`display::mode_name`]: empty while unknown.
     noise: &'static str,
+    /// `Firmware 7.1` while connected and reported; else empty. Only the
+    /// running version: unlike Linux, no catalog check (no internet).
+    firmware: String,
     auto_switch: bool,
     auto_connect: bool,
 }
@@ -88,6 +91,12 @@ impl Content {
             text: text.to_owned(),
             buds: connected.then(|| Buds::of(state)),
             noise: display::mode_name(state.noise_mode),
+            firmware: state
+                .firmware
+                .as_deref()
+                .filter(|_| connected)
+                .map(|raw| format!("Firmware {}", display::firmware(raw)))
+                .unwrap_or_default(),
             auto_switch: settings.auto_switch,
             auto_connect: settings.auto_connect,
         }
@@ -100,6 +109,7 @@ impl Content {
             text: "Starting…".into(),
             buds: None,
             noise: "",
+            firmware: String::new(),
             auto_switch: true,
             auto_connect: true,
         }
@@ -196,7 +206,8 @@ impl Content {
         Ok(views)
     }
 
-    /// Batteries, noise tiles and settings, like the Linux panel.
+    /// Batteries, noise tiles, settings and the firmware, like the Linux
+    /// panel.
     fn expanded<'local>(
         &self,
         env: &mut jni::Env<'local>,
@@ -243,6 +254,7 @@ impl Content {
             ui.image(env, &format!("{row}_toggle"), toggle)?;
             ui.on_click(env, context, row, request_code, action)?;
         }
+        ui.optional_text(env, "firmware", &self.firmware)?;
         Ok(views)
     }
 }
