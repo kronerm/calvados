@@ -95,6 +95,7 @@ fn frame_length(frame: &[u8]) -> Length {
     let Some(opcode) = rest.first_chunk::<2>().map(|op| u16::from_le_bytes(*op)) else {
         return Length::Incomplete;
     };
+    // Lengths from the pods' firmware (docs/firmware.md) and captures.
     // Body length from a byte at `at`: `base + byte * per_item`.
     let counted = |at: usize, base: usize, per_item: usize| {
         frame.get(at).map_or(Length::Incomplete, |&n| {
@@ -106,22 +107,34 @@ fn frame_length(frame: &[u8]) -> Length {
             .get(at..at + 2)
             .map(|b| usize::from(u16::from_le_bytes([b[0], b[1]])))
     };
+    // `[len 2]` + body
+    let prefixed = |at: usize, base: usize| {
+        u16_at(at).map_or(Length::Incomplete, |len| Length::Known(base + len))
+    };
     match opcode {
         0x04 => counted(HEADER, HEADER + 1, 5), // battery: count × 5
         0x06 | 0x19 => Length::Known(HEADER + 2), // ear detection, stem press
-        0x08 | 0x4B | 0x55 => Length::Known(HEADER + 4),
+        0x25 | 0x47 => Length::Known(HEADER),
+        0x08 | 0x37 | 0x4B | 0x55 | 0x60 => Length::Known(HEADER + 4),
         0x09 => Length::Known(HEADER + 5), // control command
-        0x0C => Length::Known(HEADER + 8), // device connection
-        0x0E => Length::Known(HEADER + 7), // audio source
-        0x4E => Length::Known(HEADER + 8), // all zeros, once per session
-        0x52 => Length::Known(HEADER + 5), // `03 00 02 01 xx`, before ear changes
+        0x15 | 0x40 => Length::Known(HEADER + 6),
+        0x0E | 0x13 => Length::Known(HEADER + 7), // audio source, …
+        0x0C => Length::Known(HEADER + 8),        // device connection
+        0x4E => Length::Known(HEADER + 8),        // all zeros, once per session
+        // `[len 2]` + body; 0x52 is `03 00 02 01 xx` before ear changes
+        0x4C | 0x52 | 0x57 => prefixed(HEADER, HEADER + 2),
+        // device information: `02 [len 2]`, counting from its own byte 3
+        0x1D => prefixed(HEADER + 1, HEADER + 3),
+        // `01 [x] [len] 00` + body
+        0x21 => counted(HEADER + 2, HEADER + 4, 1),
+        0x31 => proximity_keys_length(frame),
         // smart routing out and relayed in: `[mac 6] [len 2]` + body
         0x10 | 0x11 => u16_at(12).map_or(Length::Incomplete, |len| Length::Known(14 + len)),
         // connection history: `01 [len 2] [now 8]` + events
         0x2B => {
             u16_at(HEADER + 1).map_or(Length::Incomplete, |len| Length::Known(HEADER + 11 + len))
         }
-        // `[2] [2] [len 2]` + body
+        // `[class 4] [len 2]` + body
         0x17 => {
             u16_at(HEADER + 4).map_or(Length::Incomplete, |len| Length::Known(HEADER + 6 + len))
         }
@@ -129,6 +142,21 @@ fn frame_length(frame: &[u8]) -> Length {
         0x53 => Length::Known(140),                 // EQ
         _ => Length::Unknown,
     }
+}
+
+/// `[count]`, then `[type 2] [len 2]` + key, `count` times.
+fn proximity_keys_length(frame: &[u8]) -> Length {
+    const START: usize = 7;
+    let Some(&count) = frame.get(START - 1) else {
+        return Length::Incomplete;
+    };
+    (0..count)
+        .try_fold(START, |at, _| {
+            frame
+                .get(at + 2..at + 4)
+                .map(|len| at + 4 + usize::from(u16::from_le_bytes([len[0], len[1]])))
+        })
+        .map_or(Length::Incomplete, Length::Known)
 }
 
 fn is_magic(window: &[u8]) -> bool {
@@ -436,6 +464,39 @@ mod tests {
         assert!(matches!(
             Decoder::default().push(&ownership_to_false()).as_slice(),
             [Packet::RoutingResponse(r)] if matches!(r.kind, Routing::YieldRequest)
+        ));
+    }
+
+    #[test]
+    fn firmware_lengths_complete_without_the_next_magic() {
+        let keys = [
+            &DATA_MAGIC[..],
+            &[0x31, 0x00, 2, 0x01, 0x00, 0x10, 0x00],
+            &[0xAA; 16],
+            &[0x04, 0x00, 0x10, 0x00],
+            &[0xBB; 16],
+        ]
+        .concat();
+        let ear_hint = [&DATA_MAGIC[..], &[0x52, 0x00, 0x03, 0x00, 0x02, 0x01, 0x00]].concat();
+        let info = [
+            &DATA_MAGIC[..],
+            &[0x1D, 0x00, 0x02, 17, 0x00, 0x04, 0x01],
+            &[0; 15],
+            &[0; 2],
+        ]
+        .concat();
+        let mut decoder = Decoder::default();
+        assert!(matches!(
+            decoder.push(&keys).as_slice(),
+            [Packet::ProximityKeys(k)] if k.len() == 2
+        ));
+        assert!(matches!(
+            decoder.push(&ear_hint).as_slice(),
+            [Packet::Opaque(Opaque { opcode: 0x52, payload })] if payload.len() == 5
+        ));
+        assert!(matches!(
+            decoder.push(&info).as_slice(),
+            [Packet::DeviceInformation(_)]
         ));
     }
 

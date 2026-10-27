@@ -878,6 +878,7 @@ impl Engine {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::aacp::device_information::DeviceInformation;
     use crate::protocol::parse_datagram;
 
     const LOCAL: &str = "02:11:22:33:44:55";
@@ -1496,7 +1497,13 @@ mod tests {
         // Answering but holding the state half back: keeps waiting.
         let mut e = engine();
         e.handle(Packet::HandshakeAck, now());
-        e.handle(Packet::DeviceInformation(vec!["AirPods Pro".into()]), now());
+        e.handle(
+            Packet::DeviceInformation(DeviceInformation {
+                name: Some("AirPods Pro".into()),
+                ..Default::default()
+            }),
+            now(),
+        );
         (0..STARTUP_RETRIES).for_each(|_| {
             e.check_state_burst(now());
         });
@@ -1508,7 +1515,13 @@ mod tests {
         let mut e = engine();
         e.handle(Packet::HandshakeAck, now());
         // Only the settings half.
-        e.handle(Packet::DeviceInformation(vec!["AirPods Pro".into()]), now());
+        e.handle(
+            Packet::DeviceInformation(DeviceInformation {
+                name: Some("AirPods Pro".into()),
+                ..Default::default()
+            }),
+            now(),
+        );
         (0..STARTUP_RETRIES).for_each(|_| {
             assert_eq!(
                 e.check_state_burst(now()),

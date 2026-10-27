@@ -1,12 +1,11 @@
 use nom::{
     IResult, Parser as _,
     bytes::complete::take,
+    combinator::map_opt,
     multi::length_count,
-    number::complete::{be_u16, u8},
+    number::complete::{le_u16, u8},
 };
 use num_enum::TryFromPrimitive;
-
-use super::byte;
 
 /// The pods' proximity keys, the reply to [`crate::protocol::request_proximity_keys`].
 pub const OPCODE: u16 = 0x31;
@@ -27,9 +26,12 @@ pub struct ProximityKey {
     pub data: Vec<u8>,
 }
 
-/// `[type] [len u16 BE] [reserved] [data]`
+/// `[type u16 LE] [len u16 LE] [data]` (firmware: docs/firmware.md).
 fn key(input: &[u8]) -> IResult<&[u8], ProximityKey> {
-    let (input, (kind, len, _)) = (byte, be_u16, u8).parse(input)?;
+    let kind = map_opt(le_u16, |t| {
+        u8::try_from(t).ok().and_then(|t| KeyType::try_from(t).ok())
+    });
+    let (input, (kind, len)) = (kind, le_u16).parse(input)?;
     take(len)
         .map(|data: &[u8]| ProximityKey {
             kind,
@@ -41,4 +43,29 @@ fn key(input: &[u8]) -> IResult<&[u8], ProximityKey> {
 /// `[count] (key) * count`
 pub fn parse(input: &[u8]) -> IResult<&[u8], Vec<ProximityKey>> {
     length_count(u8, key).parse(input)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn both_keys() {
+        let body = [
+            &[2, 0x01, 0x00, 0x10, 0x00][..],
+            &[0xAA; 16],
+            &[0x04, 0x00, 0x10, 0x00],
+            &[0xBB; 16],
+        ]
+        .concat();
+        let (rest, keys) = parse(&body).unwrap();
+        assert!(rest.is_empty());
+        assert!(matches!(
+            &keys[..],
+            [
+                ProximityKey { kind: KeyType::Irk, data: irk },
+                ProximityKey { kind: KeyType::EncryptionKey, data: enc },
+            ] if irk == &[0xAA; 16] && enc == &[0xBB; 16]
+        ));
+    }
 }

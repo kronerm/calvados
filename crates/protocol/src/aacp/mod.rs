@@ -67,7 +67,7 @@ pub enum Packet {
     Control(ControlCommand),
     ConversationAwareness(u8),
     DeviceConnection(DeviceConnectionStatus),
-    DeviceInformation(Vec<String>),
+    DeviceInformation(device_information::DeviceInformation),
     EarDetection(EarDetection),
     Eq(EqData),
     NoiseLevel(u8),

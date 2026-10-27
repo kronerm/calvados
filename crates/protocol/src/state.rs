@@ -126,7 +126,7 @@ impl DeviceState {
                 }
             }
             Packet::PrimaryBud(primary) => self.primary_bud = Some(primary.bud),
-            Packet::DeviceInformation(fields) => self.name = fields.first().cloned(),
+            Packet::DeviceInformation(info) => self.name = info.name.clone(),
             Packet::AudioSource(source) => self.audio_source = Some(*source),
             Packet::Control(ControlCommand {
                 id: ControlId::ListeningMode,
