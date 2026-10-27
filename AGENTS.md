@@ -240,8 +240,8 @@ power-on (`LinkChange`). Its length caps at 255, i.e. 15 events.
   AVDTP signaling, AVRCP passthroughs, A2DP media starting to flow,
   delivery (packets sent against the controller's completed-packet credits:
   a gap of 0.5 s or more with packets outstanding is logged when it ends,
-  what's still undelivered at a link's end, and flushes), and the AACP
-  frames we send. The delivery lines are to see the pods going out of
+  what's still undelivered at a link's end, and flushes), and every AACP
+  frame both ways, in full. The delivery lines are to see the pods going out of
   reach: on Oct 26 the laptop heard nothing for 2 min while the link held,
   the pods kept it as the source and wouldn't start the phone's stream. L2CAP channels are tracked from signaling; the pods'
   link is the one our AACP channel opens on, so channels opened before the

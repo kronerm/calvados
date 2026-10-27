@@ -2,7 +2,8 @@
 //! `btmon` reads; needs `CAP_NET_RAW`), logged next to the engine's lines:
 //! link events, AVDTP and AVRCP signaling, A2DP media starting to flow,
 //! delivery stalls and flushes (the pods out of reach), and the AACP frames
-//! we send.
+//! both ways, in full (the session logs received ones decoded, opaque ones
+//! cut short).
 //!
 //! The pods' link is the one carrying AACP, learned from our AACP channel
 //! request. L2CAP channels opened before the daemon started (e.g. A2DP's)
@@ -186,7 +187,7 @@ fn log(note: &Note) {
             "hci: avrcp"
         ),
         Note::MediaFlowing { dir } => tracing::debug!(%dir, "hci: a2dp media flowing"),
-        Note::Aacp { frame } => tracing::debug!(hex = %HexBytes(frame), "hci: aacp tx"),
+        Note::Aacp { dir, frame } => tracing::debug!(%dir, hex = %HexBytes(frame), "hci: aacp"),
     }
 }
 
@@ -282,8 +283,8 @@ enum Note {
     MediaFlowing {
         dir: Dir,
     },
-    /// Received frames are logged by the session already.
     Aacp {
+        dir: Dir,
         frame: Vec<u8>,
     },
 }
@@ -478,7 +479,8 @@ impl Monitor {
             return Vec::new();
         }
         match self.channels.get(&(handle, dir, cid)) {
-            Some(Channel::Aacp) if matches!(dir, Dir::Tx) => vec![Note::Aacp {
+            Some(Channel::Aacp) => vec![Note::Aacp {
+                dir,
                 frame: payload.to_vec(),
             }],
             Some(Channel::AvdtpSignaling) => self.avdtp(handle, dir, payload).into_iter().collect(),
@@ -756,12 +758,13 @@ mod tests {
     }
 
     #[test]
-    fn our_aacp_frames_are_noted() {
+    fn aacp_frames_are_noted_both_ways() {
         let mut m = monitor();
         let frame = [0x04, 0x00, 0x04, 0x00, 0x09, 0x00];
         let notes = m.feed(MON_ACL_TX, &acl(0x41, &frame));
-        assert!(matches!(&notes[..], [Note::Aacp { frame: f }] if f == &frame));
-        assert!(m.feed(MON_ACL_RX, &acl(0x40, &frame)).is_empty());
+        assert!(matches!(&notes[..], [Note::Aacp { dir: Dir::Tx, frame: f }] if f == &frame));
+        let notes = m.feed(MON_ACL_RX, &acl(0x40, &frame));
+        assert!(matches!(&notes[..], [Note::Aacp { dir: Dir::Rx, frame: f }] if f == &frame));
     }
 
     #[test]

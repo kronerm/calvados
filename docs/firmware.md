@@ -210,9 +210,15 @@ POSH SECURE_SENSOR GATT`] index the registration calls.
 `rkof` keeps core dumps and crash logs (`crash_log.cpp`, `CrashLog.cpp`,
 "coredump core %u section %u size %zu offset %zu", "coredump aborted during
 previous boot", `CrashReporterKey`, a halt-or-reboot crash policy; strings
-around `0x1dd35e`–`0x1ddb7a`, `0x1c3410`). How a host fetches them is not
-established; Inferred: through the AACP `0x17` wrapper's endpoints (`AP AOP
-RTP BTM DSP1 DSP2`) that Apple hosts use for analytics.
+around `0x1dd35e`–`0x1ddb7a`, `0x1c3410`). Not over UARP: the solicitation
+handler [`0xbddcc`] serves `HSML`, `VERS` and `MTIC` (asset types 4, 7,
+0x16) and refuses `LOGS` and `CRSH`, which it only considers from endpoint
+type 0xe. `crashlog` and `forwarded-crashlog` [`0x1ea44d`] are RTKit's
+internal endpoints (with `management`, `kdebug`, `ioreporting`, `oslog`…),
+between the pods' own processors. Inferred: a host gets crash data, if at
+all, through the AACP `0x17` wrapper's endpoints (`AP AOP RTP BTM DSP1
+DSP2`) that Apple hosts use for analytics; the Linux daemon logs every
+AACP frame in full (`hci: aacp`) to see what follows a reboot.
 
 ## Open
 
