@@ -62,10 +62,10 @@ jobs:
         run: |
           # cargo-apk2 won't build a release unsigned: a throwaway key.
           export CARGO_APK_RELEASE_KEYSTORE="$RUNNER_TEMP/build.keystore"
-          export CARGO_APK_RELEASE_KEYSTORE_PASSWORD=build
+          export CARGO_APK_RELEASE_KEYSTORE_PASSWORD=throwaway
           keytool -genkeypair -storetype PKCS12 -keystore "$CARGO_APK_RELEASE_KEYSTORE" \
             -alias build -keyalg EC -groupname secp256r1 -validity 1 \
-            -storepass build -keypass build -dname CN=build
+            -storepass throwaway -keypass throwaway -dname CN=build
           sed -i "s/android:versionCode=\"[0-9]*\"/android:versionCode=\"$CODE\"/; s/android:versionName=\"[^\"]*\"/android:versionName=\"$VERSION\"/" \
             crates/android-app/AndroidManifest.xml
           cargo apk2 build -p android-app --release
