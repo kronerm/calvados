@@ -52,6 +52,11 @@ personalization request in between: the buds stage `FTAB` first and need
 no ticket. At 475 bytes a request, `FTAB` is ~16 500 requests. Rescinded
 there; acknowledged, nothing staged.
 
+The Linux daemon asks this at every AACP session (`crates/linux/src/uarp.rs`,
+messages from `protocol::uarp`): Sync, version discovery proposing 4 and
+the tag 5 request, read-only, to show the exact version (7.1.21 where
+0x1D says only 7.1) and compare it with the catalog's release.
+
 Discover Downstream (0x15, in `uarp_probe.py`) is answered with 0x16
 status 0 and no 0x17 at all, also with a fresh state (case closed and
 reopened) and charging: with nothing staged, the primary offers a host no

@@ -84,16 +84,32 @@ build first.
   (last known while no bud is inside, when the advertisement knows better).
 - `firmware.rs` — the running version (`Version::of_running`: the first
   field of 0x1D's `71.2256000021000000.6663` is major then a one-digit
-  minor, so 7.1; `display::firmware` shows it, or the raw string), and
-  Apple's catalog: `catalog_url`, `catalog_models` (a product's models,
+  minor, so 7.1, and the last a build counter; `ExactVersion`, 7.1.21,
+  from UARP), and Apple's catalog: `catalog_url`, `catalog_models` (a product's models,
   served first: AirPods Pro 2 USB-C asks A3048, the case A2968, then
   A3047, which gets a 403; an unknown model only itself) and, behind the
   `catalog` feature (the `plist` crate; only Linux enables it),
   `parse_catalog` (the newest of `Assets`: `FirmwareVersionMajor`/`Minor`/
   `Release`, `Build`). The running string carries no release number (9A348
-  is `90.…`), so `Release::is_newer_than` compares major.minor only.
-  `DeviceState` keeps the model and firmware from 0x1D, carried over a
-  reconnect like the name.
+  is `90.…`; 7B19–7B21 all read 7.1), so `Release::is_newer_than`
+  compares exactly when UARP told, else major.minor only.
+  `DeviceState::firmware` (`Firmware`: model, 0x1D string, exact version)
+  is carried over a reconnect like the name, and remembered per pair: the
+  engine emits `Effect::LearnedFirmware` when it changes, the platforms
+  store `Firmware::to_stored` (Linux `<address>.firmware` in the state
+  directory, Android the preference `firmware:<MAC>`) and hand it back
+  right after `connected` (`Engine::stored_firmware`), since a session
+  joining while another host is connected often gets no 0x1D (the phone,
+  usually). A 0x1D report wins; the exact version is dropped only when the
+  reported string changes. `display::firmware`: `7.1.21` when exact, else
+  `7.1 (6663)` (the build counter), else the raw string.
+- `uarp.rs` — the read-only UARP query for the exact running version
+  (docs/uarp.md): framing (`[type 2] [len 2] [id 2]`, big-endian), the
+  GATT fragment header (one byte, bit 0 on a message's last fragment;
+  `Reassembler` for indications), the writes Sync, version discovery (4)
+  and the information request for tag 5, and the response's parsing
+  (`[status 2] [tag 4] [len 4]`, four u32: 7.1.21.0). Nothing that offers,
+  transfers or applies firmware; keep it that way.
 - `connection.rs` — L2CAP PSM and service UUID.
 
 ### How sure we are
@@ -225,9 +241,21 @@ power-on (`LinkChange`). Its length caps at 255, i.e. 15 events.
   answers; once a day per product, in memory. ureq (rustls, ring, bundled roots) on a
   blocking task; the result returns to the loop as `Input::Catalog`, which
   keeps it (a failed check keeps the last answer; logged at debug/info).
-  On D-Bus: `Firmware` (`7.1`), `LatestFirmware` (`9.0.348 (9A348)`, empty
-  until checked) and `FirmwareUpdate`. Android doesn't check (no INTERNET
-  permission): it shows the running version only.
+  On D-Bus: `Firmware` (`7.1.21`, or `7.1 (6663)` without UARP),
+  `LatestFirmware` (`9.0.348 (9A348)`, empty until checked) and
+  `FirmwareUpdate`. Android doesn't check (no INTERNET permission): it
+  shows the running version only. Also the stored firmware
+  (`<address>.firmware`).
+- `uarp.rs` — the exact running firmware, once per AACP session, in a
+  spawned task reporting `Input::ExactFirmware`: BlueZ serves the pods'
+  GATT over the classic link, so the UARP characteristic
+  (`94110001-6d9b-4225-a4f1-6a4a7f01b0de`) is found under the device,
+  subscribed, and written `protocol::uarp::running_version_query` (write
+  requests, 300 ms apart); the tag 5 response is the answer. Read-only:
+  never an offer, data or apply. A refused first write ("Not connected",
+  right after a reconnect) is retried once 3 s later; 10 s per try. Without
+  GATT or an answer, a debug line and the 0x1D version. Android doesn't
+  ask (not implemented): it shows the 0x1D version.
 - `cli.rs` — `calvados watch` / `calvados set …`: a zbus proxy client of
   the daemon's own D-Bus object (no daemon logic), for shells without
   D-Bus. `watch` prints JSON lines on `PropertiesChanged` and on the bus
@@ -312,8 +340,9 @@ texts are written twice. A change to one side needs the other:
   `notification_expanded.xml` and `notification.rs` `MODES`);
 - the settings' titles and descriptions ("this computer" / "this phone");
 - the noise heading ("· Off", "· unknown yet");
-- the firmware line ("Firmware 7.1", `format.firmware` and
-  `notification.rs` `Content::firmware`; " · 9.0 available" on Linux only);
+- the firmware line ("Firmware " + `display::firmware`, `format.firmware`
+  and `notification.rs` `Content::firmware`; " · 9.0.348 available" on
+  Linux only);
 - the battery glyph thresholds 88/63/38/13 (`format.batteryGlyph`,
   `notification.rs` `battery_glyph`);
 - the icons: Noctalia names Tabler glyphs, Android has them converted in

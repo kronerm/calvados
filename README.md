@@ -56,7 +56,8 @@ The notification shows the AirPods' name and whether the phone has the
 audio (Active, Standby), and the battery levels, the primary bud's in bold.
 Expanded, it shows each bud's battery and where it is (a dot marks the
 primary bud), the noise control modes to tap, the firmware the AirPods
-run ("Firmware 7.1"), and two settings, both remembered:
+run ("Firmware 7.1 (6663)": the version and its build), and two
+settings, both remembered:
 
 - **Automatic switching:** media starting on the phone takes the AirPods
   (unless the other device is on a call), and so does a call when answered.
@@ -120,10 +121,13 @@ no other device connected, the laptop takes the audio by itself.
 **Noctalia:** the package ships a plugin: a bar widget (the buds' levels,
 left then right, the primary's in bold, then the case's; highlighted while
 the laptop has the audio) and a panel with the same controls as the phone.
-The panel also says when Apple has newer AirPods firmware ("Firmware 7.1 ·
-9.0 available"): the daemon checks Apple's public update catalog once a
+The panel also says when Apple has newer AirPods firmware ("Firmware
+7.1.21 · 9.0.348 available"): the daemon asks the AirPods for their exact
+version over UARP, Apple's update protocol (read-only: the version
+query, nothing else), and checks Apple's public update catalog once a
 day while the AirPods are connected. It only tells: Calvados never
-updates the AirPods.
+updates the AirPods. Both platforms remember the last version seen, so
+it still shows when the AirPods don't report it again.
 Link it where Noctalia looks for plugins, enable it, then add the widget
 `kroner/calvados:bar` to the bar (Settings → Bar):
 
