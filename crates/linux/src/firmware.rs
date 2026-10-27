@@ -14,8 +14,7 @@ const TIMEOUT: Duration = Duration::from_secs(30);
 
 /// Owned by the loop; fetches report back as [`Input::Catalog`].
 pub struct Catalog {
-    /// `None` when the client couldn't be built: no checks.
-    client: Option<reqwest::Client>,
+    client: ureq::Agent,
     /// By product (its models, as asked).
     checked: HashMap<Vec<String>, Checked>,
 }
@@ -28,13 +27,10 @@ struct Checked {
 
 impl Catalog {
     pub fn new() -> Self {
-        // Already installed is fine.
-        let _ = rustls::crypto::ring::default_provider().install_default();
-        let client = reqwest::Client::builder()
-            .timeout(TIMEOUT)
+        let client = ureq::Agent::config_builder()
+            .timeout_global(Some(TIMEOUT))
             .build()
-            .inspect_err(|e| tracing::info!("no firmware checks: {e}"))
-            .ok();
+            .into();
         Self {
             client,
             checked: HashMap::new(),
@@ -43,9 +39,6 @@ impl Catalog {
 
     /// Ask for `model`'s product unless that was done within a day.
     pub fn check(&mut self, model: &str, inputs: &mpsc::UnboundedSender<Input>, now: Instant) {
-        let Some(client) = &self.client else {
-            return;
-        };
         let models = catalog_models(model);
         match self.checked.get_mut(&models) {
             Some(checked) if now.duration_since(checked.at) < CHECK_INTERVAL => return,
@@ -58,9 +51,9 @@ impl Catalog {
                 self.checked.insert(models.clone(), checked);
             }
         }
-        let (client, inputs) = (client.clone(), inputs.clone());
-        tokio::spawn(async move {
-            let release = fetch(&client, &models).await;
+        let (client, inputs) = (self.client.clone(), inputs.clone());
+        tokio::task::spawn_blocking(move || {
+            let release = fetch(&client, &models);
             // The loop is gone only when the daemon stops.
             let _ = inputs.send(Input::Catalog(models, release));
         });
@@ -79,9 +72,9 @@ impl Catalog {
 }
 
 /// The first of `models` the catalog answers for (it refuses some).
-async fn fetch(client: &reqwest::Client, models: &[String]) -> Option<Release> {
+fn fetch(client: &ureq::Agent, models: &[String]) -> Option<Release> {
     for model in models {
-        match fetch_one(client, model).await {
+        match fetch_one(client, model) {
             Ok(Some(release)) => {
                 tracing::info!(%model, %release, "firmware catalog");
                 return Some(release);
@@ -94,13 +87,11 @@ async fn fetch(client: &reqwest::Client, models: &[String]) -> Option<Release> {
     None
 }
 
-async fn fetch_one(client: &reqwest::Client, model: &str) -> reqwest::Result<Option<Release>> {
+fn fetch_one(client: &ureq::Agent, model: &str) -> Result<Option<Release>, ureq::Error> {
     let body = client
         .get(catalog_url(model))
-        .send()
-        .await?
-        .error_for_status()?
-        .bytes()
-        .await?;
+        .call()?
+        .body_mut()
+        .read_to_vec()?;
     Ok(parse_catalog(&body))
 }

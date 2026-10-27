@@ -222,8 +222,8 @@ power-on (`LinkChange`). Its length caps at 255, i.e. 15 events.
 - `firmware.rs` — the catalog check:
   `https://mesu.apple.com/assets/com_apple_MobileAsset_UARP_<MODEL>/com_apple_MobileAsset_UARP_<MODEL>.xml`
   for the pods' model (0x1D), trying `catalog_models` in order until one
-  answers; once a day per product, in memory. reqwest (rustls, ring) in a
-  spawned task; the result returns to the loop as `Input::Catalog`, which
+  answers; once a day per product, in memory. ureq (rustls, ring, bundled roots) on a
+  blocking task; the result returns to the loop as `Input::Catalog`, which
   keeps it (a failed check keeps the last answer; logged at debug/info).
   On D-Bus: `Firmware` (`7.1`), `LatestFirmware` (`9.0.348 (9A348)`, empty
   until checked) and `FirmwareUpdate`. Android doesn't check (no INTERNET
