@@ -55,7 +55,21 @@ jobs:
           echo "JAVA_HOME=$JAVA_HOME_21_X64" >> "$GITHUB_ENV"
           echo "$ANDROID_HOME/build-tools/35.0.0" >> "$GITHUB_PATH"
           echo "$JAVA_HOME_21_X64/bin" >> "$GITHUB_PATH"
-      - run: cargo install cargo-apk2 --version 1.4.2 --locked
+      # Cargo's downloads, the build and cargo-apk2: dependencies rebuild
+      # only when Cargo.lock or the compiler changes, and then from the
+      # newest older cache.
+      - id: rust
+        run: echo "version=$(rustc -V | cut -d' ' -f2)" >> "$GITHUB_OUTPUT"
+      - uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            ~/.cargo/bin/cargo-apk2
+            target
+          key: android-${{ steps.rust.outputs.version }}-${{ hashFiles('Cargo.lock') }}
+          restore-keys: android-${{ steps.rust.outputs.version }}-
+      - run: command -v cargo-apk2 || cargo install cargo-apk2 --version 1.4.2 --locked
       - name: Build
         env:
           CODE: ${{ needs.version.outputs.code }}
@@ -100,10 +114,21 @@ jobs:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
           fetch-depth: 0
+      - id: rust
+        run: echo "version=$(rustc -V | cut -d' ' -f2)" >> "$GITHUB_OUTPUT"
+      # The build user's Cargo downloads and the PKGBUILD's target dir.
+      - uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+        with:
+          path: |
+            /home/builder/.cargo/registry
+            /home/builder/.cargo/git
+            src/target
+          key: arch-${{ steps.rust.outputs.version }}-${{ hashFiles('Cargo.lock') }}
+          restore-keys: arch-${{ steps.rust.outputs.version }}-
       - name: Build
         run: |
           useradd -m builder
-          chown -R builder: .
+          chown -R builder: . /home/builder
           sudo -u builder git config --global --add safe.directory "$PWD"
           sudo -u builder makepkg --noconfirm
           mkdir out && cp ./*.pkg.tar.zst out/

@@ -68,7 +68,9 @@ rewrite the file); CI writes it into the app's manifest, which keeps
 `versionCode 1` / `dev` for local builds. `.github/workflows/release.yml`
 (the key reaches only its signing step, `apksigner` alone: the build signs
 with a throwaway key; only the release job may write to the repo; GitHub's
-own actions pinned by commit, the runner's SDK, NDK and JDK) publishes a
+own actions pinned by commit, the runner's SDK, NDK and JDK; Cargo's
+downloads, `target` and cargo-apk2 cached per job, keyed on `Cargo.lock`
+and the compiler) publishes a
 tag as a release (alphas as pre-releases) and every push to
 main as the rolling pre-release `testing`: a release is
 `git tag -a v0.2.0 && git push --tags`.
