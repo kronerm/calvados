@@ -220,6 +220,11 @@ all, through the AACP `0x17` wrapper's endpoints (`AP AOP RTP BTM DSP1
 DSP2`) that Apple hosts use for analytics; the Linux daemon logs every
 AACP frame in full (`hci: aacp`) to see what follows a reboot.
 
+## A host-side updater
+
+What closing the lid does, how several hosts interact, resuming, and the
+case's version: [update-host.md](update-host.md).
+
 ## Open
 
 - UARP: see the open list in [uarp.md](uarp.md).
