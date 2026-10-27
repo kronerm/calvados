@@ -4,3 +4,4 @@
 /pkg
 /*.pkg.tar.*
 /firmware/
+__pycache__/
