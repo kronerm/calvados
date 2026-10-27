@@ -23,6 +23,7 @@ use crate::jni::{app_context, with_env};
 use crate::proto::MacAddress;
 use crate::proto::aacp::KeyType;
 use crate::proto::ble::{APPLE_COMPANY_ID, Pattern, PodsKeys};
+use crate::proto::firmware::Firmware;
 use crate::proto::settings::Setting;
 
 pub(crate) const PREFS_NAME: &str = "calvados_prefs";
@@ -100,6 +101,31 @@ pub(crate) fn stored_keys() -> anyhow::Result<Option<(MacAddress, PodsKeys)>> {
     };
     let encryption = read(KeyType::EncryptionKey)?;
     Ok(Some((pods, PodsKeys { irk, encryption })))
+}
+
+/// The pods' firmware preference: `firmware:<MAC>`.
+fn firmware_preference(pods: MacAddress) -> String {
+    format!("firmware:{}", address(pods))
+}
+
+pub(crate) fn save_firmware(pods: MacAddress, firmware: &Firmware) -> anyhow::Result<()> {
+    with_env(|env| {
+        app_context(env)?
+            .get_shared_preferences(env, PREFS_NAME)?
+            .edit(env)?
+            .put_string(env, &firmware_preference(pods), &firmware.to_stored())?
+            .apply(env)
+    })
+}
+
+/// What was stored for `pods`; nothing when never stored.
+pub(crate) fn stored_firmware(pods: MacAddress) -> anyhow::Result<Firmware> {
+    let stored = with_env(|env| {
+        app_context(env)?
+            .get_shared_preferences(env, PREFS_NAME)?
+            .get_string(env, &firmware_preference(pods), "")
+    })?;
+    Ok(Firmware::from_stored(&stored))
 }
 
 /// Start or stop watching for Apple proximity pairing advertisements

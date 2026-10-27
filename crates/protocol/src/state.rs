@@ -3,6 +3,7 @@
 use std::fmt;
 
 use crate::MacAddress;
+use crate::firmware::Firmware;
 use crate::aacp::{
     AudioSource, BatteryComponent, BatteryInfo, Bud, ChargingStatus, ControlCommand, ControlId,
     DeviceConnectionStatus, DeviceRole, EarDetection, EarStatus, NoiseControlMode, Packet,
@@ -11,10 +12,8 @@ use crate::aacp::{
 #[derive(Debug, Clone, Default)]
 pub struct DeviceState {
     pub name: Option<String>,
-    /// The primary bud's model number, e.g. `A3048`.
-    pub model: Option<String>,
-    /// The running firmware, as reported: see [`crate::firmware::Version`].
-    pub firmware: Option<String>,
+    /// The model and what it runs.
+    pub firmware: Firmware,
     pub battery: Battery,
     /// Ear status by role; see [`Self::ears`] for physical buds.
     pub ear_detection: Option<EarDetection>,
@@ -73,7 +72,6 @@ impl DeviceState {
         };
         Self {
             name: self.name.clone(),
-            model: self.model.clone(),
             firmware: self.firmware.clone(),
             noise_mode: self.noise_mode,
             noise_source: NoiseSource::Expected,
@@ -145,8 +143,8 @@ impl DeviceState {
             Packet::PrimaryBud(primary) => self.primary_bud = Some(primary.bud),
             Packet::DeviceInformation(info) => {
                 self.name = info.name.clone();
-                self.model = info.model.clone();
-                self.firmware = info.firmware.clone();
+                self.firmware
+                    .reported(info.model.clone(), info.firmware.clone());
             }
             Packet::AudioSource(source) => self.audio_source = Some(*source),
             Packet::Control(ControlCommand {
@@ -453,8 +451,11 @@ mod tests {
             },
         ));
         let state = state.carried_over();
-        assert_eq!(state.model.as_deref(), Some("A3048"));
-        assert_eq!(state.firmware.as_deref(), Some("71.2256000021000000.6663"));
+        assert_eq!(state.firmware.model.as_deref(), Some("A3048"));
+        assert_eq!(
+            state.firmware.reported.as_deref(),
+            Some("71.2256000021000000.6663")
+        );
     }
 
     #[test]

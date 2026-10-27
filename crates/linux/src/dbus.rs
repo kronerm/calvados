@@ -7,7 +7,7 @@ use std::time::Duration;
 
 use protocol::display::{self, Buds, Place, mode_name, parse_mode};
 use protocol::engine::Engine;
-use protocol::firmware::{Release, Version};
+use protocol::firmware::Release;
 use protocol::settings::Setting;
 use tokio::sync::watch;
 use zbus::fdo::{RequestNameFlags, RequestNameReply};
@@ -112,15 +112,9 @@ impl Status {
             name: state.name.clone().unwrap_or_default(),
             noise_mode: mode_name(state.noise_mode).to_owned(),
             buds: wire_buds(Buds::of(state)),
-            firmware: state
-                .firmware
-                .as_deref()
-                .map(display::firmware)
-                .unwrap_or_default(),
+            firmware: display::firmware(&state.firmware).unwrap_or_default(),
             latest_firmware: latest.map(Release::to_string).unwrap_or_default(),
-            firmware_update: latest
-                .zip(state.firmware.as_deref().and_then(Version::of_running))
-                .is_some_and(|(latest, running)| latest.is_newer_than(running)),
+            firmware_update: latest.is_some_and(|latest| latest.is_newer_than(&state.firmware)),
             ..Self::default()
         }
     }

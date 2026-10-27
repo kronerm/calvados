@@ -239,7 +239,13 @@ fn service_main(jvm: JavaVM, events: crossbeam_channel::Receiver<Event>) {
                         available = true;
                         decoder = Decoder::default();
                         match mac.parse::<MacAddress>() {
-                            Ok(pods) => effects.extend(engine.connected(pods, now)),
+                            Ok(pods) => {
+                                effects.extend(engine.connected(pods, now));
+                                match bluetooth::stored_firmware(pods) {
+                                    Ok(stored) => engine.stored_firmware(stored),
+                                    Err(e) => tracing::warn!("reading the firmware: {e:#}"),
+                                }
+                            }
                             Err(_) => tracing::warn!(mac, "the pods' address is unusable"),
                         }
                         conn = Conn::Connected { mac };
@@ -354,6 +360,11 @@ fn execute_effect(conn: &Conn, effect: Effect, in_call: bool) -> bool {
         Effect::LearnedKey { pods, kind, key } => {
             if let Err(e) = bluetooth::save_key(pods, kind, key) {
                 tracing::warn!(?kind, "storing the AirPods' key: {e:#}");
+            }
+        }
+        Effect::LearnedFirmware { pods, firmware } => {
+            if let Err(e) = bluetooth::save_firmware(pods, &firmware) {
+                tracing::warn!("storing the firmware: {e:#}");
             }
         }
         Effect::LearnedLocalMac(mac) => {

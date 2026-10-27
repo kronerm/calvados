@@ -1,8 +1,9 @@
-//! The pods' firmware: the running version (AACP `0x1D`) and, with the
-//! `catalog` feature, the current release in Apple's public catalog
-//! (fetched by the platform).
+//! The pods' firmware: the running version (AACP `0x1D`, and exactly over
+//! [`crate::uarp`]) and, with the `catalog` feature, the current release in
+//! Apple's public catalog (fetched by the platform).
 
 use std::fmt;
+use std::str::FromStr;
 
 /// A firmware's major.minor: all the running version string tells.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
@@ -39,28 +40,146 @@ impl fmt::Display for Version {
     }
 }
 
+/// major.minor.release, e.g. `7.1.21` (7B21): what UARP reports and the
+/// catalog names. Several releases share a major.minor.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub struct ExactVersion {
+    pub version: Version,
+    pub release: u32,
+}
+
+impl fmt::Display for ExactVersion {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{}.{}", self.version, self.release)
+    }
+}
+
+impl FromStr for ExactVersion {
+    type Err = ();
+
+    fn from_str(s: &str) -> Result<Self, ()> {
+        match s.split('.').map(digits).collect::<Option<Vec<_>>>().ok_or(())?[..] {
+            [major, minor, release] => Ok(Self {
+                version: Version { major, minor },
+                release,
+            }),
+            _ => Err(()),
+        }
+    }
+}
+
+/// What the pods run, as far as known: remembered per pair, so a session
+/// without `0x1D` (one joining while another host is connected often gets
+/// none) still shows it.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct Firmware {
+    /// The primary bud's model number, e.g. `A3048`: the catalog's key.
+    pub model: Option<String>,
+    /// As `0x1D` reports it: see [`Version::of_running`].
+    pub reported: Option<String>,
+    /// From UARP (Linux).
+    pub exact: Option<ExactVersion>,
+}
+
+impl Firmware {
+    /// A `0x1D` report: it wins; the exact version holds unless the
+    /// reported one changed.
+    pub fn reported(&mut self, model: Option<String>, reported: Option<String>) {
+        let changed = self
+            .reported
+            .as_ref()
+            .is_some_and(|known| reported.as_ref().is_some_and(|new| new != known));
+        if changed {
+            self.exact = None;
+        }
+        self.model = model.or(self.model.take());
+        self.reported = reported.or(self.reported.take());
+    }
+
+    /// Fill in what this session doesn't know yet from what was stored,
+    /// unless it already reported another version.
+    pub fn or_stored(self, stored: Self) -> Self {
+        let other = self
+            .reported
+            .as_ref()
+            .is_some_and(|known| stored.reported.as_ref() != Some(known));
+        match other {
+            true => self,
+            false => Self {
+                model: self.model.or(stored.model),
+                reported: self.reported.or(stored.reported),
+                exact: self.exact.or(stored.exact),
+            },
+        }
+    }
+
+    /// The major.minor, exact or reported.
+    pub fn version(&self) -> Option<Version> {
+        self.exact
+            .map(|exact| exact.version)
+            .or_else(|| Version::of_running(self.reported.as_deref()?))
+    }
+
+    /// For storage: `key=value` lines, those known.
+    pub fn to_stored(&self) -> String {
+        [
+            ("model", self.model.clone()),
+            ("reported", self.reported.clone()),
+            ("exact", self.exact.map(|exact| exact.to_string())),
+        ]
+        .into_iter()
+        .filter_map(|(key, value)| Some(format!("{key}={}\n", value?)))
+        .collect()
+    }
+
+    /// What [`Self::to_stored`] wrote; unknown lines are skipped.
+    pub fn from_stored(stored: &str) -> Self {
+        stored
+            .lines()
+            .filter_map(|line| line.split_once('='))
+            .fold(Self::default(), |firmware, (key, value)| match key {
+                "model" => Self {
+                    model: Some(value.to_owned()),
+                    ..firmware
+                },
+                "reported" => Self {
+                    reported: Some(value.to_owned()),
+                    ..firmware
+                },
+                "exact" => Self {
+                    exact: value.parse().ok(),
+                    ..firmware
+                },
+                _ => firmware,
+            })
+    }
+}
+
 /// The catalog's current release.
 #[derive(Debug, Clone)]
 #[cfg_attr(test, derive(PartialEq, Eq))]
 pub struct Release {
-    pub version: Version,
-    pub release: u32,
+    pub version: ExactVersion,
     /// E.g. `9A348`.
     pub build: String,
 }
 
 impl Release {
-    /// Newer than the running version: the running string carries no
-    /// release number, so only major.minor compare.
-    pub fn is_newer_than(&self, running: Version) -> bool {
-        self.version > running
+    /// Newer than what runs: exactly when UARP told, else by major.minor
+    /// (the `0x1D` string carries no release number).
+    pub fn is_newer_than(&self, running: &Firmware) -> bool {
+        match (running.exact, running.version()) {
+            (Some(exact), _) => self.version > exact,
+            (None, Some(version)) => self.version.version > version,
+            (None, None) => false,
+        }
     }
 }
 
 /// `9.0.348 (9A348)`.
 impl fmt::Display for Release {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "{}.{} ({})", self.version, self.release, self.build)
+        write!(f, "{} ({})", self.version, self.build)
     }
 }
 
@@ -102,15 +221,17 @@ pub fn parse_catalog(xml: &[u8]) -> Option<Release> {
             let asset = asset.as_dictionary()?;
             let number = |key| asset.get(key)?.as_unsigned_integer()?.try_into().ok();
             Some(Release {
-                version: Version {
-                    major: number("FirmwareVersionMajor")?,
-                    minor: number("FirmwareVersionMinor")?,
+                version: ExactVersion {
+                    version: Version {
+                        major: number("FirmwareVersionMajor")?,
+                        minor: number("FirmwareVersionMinor")?,
+                    },
+                    release: number("FirmwareVersionRelease")?,
                 },
-                release: number("FirmwareVersionRelease")?,
                 build: asset.get("Build")?.as_string()?.to_owned(),
             })
         })
-        .max_by_key(|release| (release.version, release.release))
+        .max_by_key(|release| release.version)
 }
 
 #[cfg(test)]
@@ -127,6 +248,66 @@ mod tests {
         assert_eq!(version(""), None);
         assert_eq!(version("+1.2"), None);
         assert_eq!(version("6A300"), None);
+    }
+
+    #[test]
+    fn exact_versions() {
+        let exact = "7.1.21".parse::<ExactVersion>().unwrap();
+        assert_eq!(exact.to_string(), "7.1.21");
+        assert!(exact < "7.1.22".parse().unwrap() && exact > "7.0.99".parse().unwrap());
+        assert_eq!("7.1".parse::<ExactVersion>(), Err(()));
+        assert_eq!("7.1.x".parse::<ExactVersion>(), Err(()));
+    }
+
+    #[test]
+    fn updates_compare_exactly_when_known() {
+        let release = Release {
+            version: "7.1.22".parse().unwrap(),
+            build: "7B22".into(),
+        };
+        let mut running = Firmware {
+            reported: Some("71.2256000021000000.6663".into()),
+            ..Firmware::default()
+        };
+        assert!(!release.is_newer_than(&running), "7.1 is all 0x1D tells");
+        running.exact = "7.1.21".parse().ok();
+        assert!(release.is_newer_than(&running));
+        running.exact = "7.1.22".parse().ok();
+        assert!(!release.is_newer_than(&running));
+        assert!(!release.is_newer_than(&Firmware::default()));
+    }
+
+    #[test]
+    fn a_report_drops_the_exact_version_only_when_it_changed() {
+        let raw = "71.2256000021000000.6663";
+        let mut firmware = Firmware {
+            exact: "7.1.21".parse().ok(),
+            ..Firmware::default()
+        };
+        firmware.reported(Some("A3048".into()), Some(raw.into()));
+        assert_eq!(firmware.exact, "7.1.21".parse().ok());
+        firmware.reported(None, None);
+        assert_eq!(firmware.reported.as_deref(), Some(raw));
+        assert_eq!(firmware.model.as_deref(), Some("A3048"));
+        firmware.reported(None, Some("90.3431000025000000.6807".into()));
+        assert_eq!(firmware.exact, None);
+    }
+
+    #[test]
+    fn the_stored_firmware_fills_in_unless_another_is_reported() {
+        let stored = Firmware {
+            model: Some("A3048".into()),
+            reported: Some("71.2256000021000000.6663".into()),
+            exact: "7.1.21".parse().ok(),
+        };
+        assert_eq!(Firmware::from_stored(&stored.to_stored()), stored);
+        assert_eq!(Firmware::from_stored("junk\nexact=7"), Firmware::default());
+        assert_eq!(Firmware::default().or_stored(stored.clone()), stored);
+        let newer = Firmware {
+            reported: Some("90.3431000025000000.6807".into()),
+            ..Firmware::default()
+        };
+        assert_eq!(newer.clone().or_stored(stored), newer);
     }
 
     #[test]
@@ -176,9 +357,12 @@ mod tests {
 </plist>"#;
         let release = parse_catalog(xml).unwrap();
         assert_eq!(release.to_string(), "9.0.348 (9A348)");
-        let running = |raw| Version::of_running(raw).unwrap();
-        assert!(release.is_newer_than(running("71.2256000021000000.6663")));
-        assert!(!release.is_newer_than(running("90.3431000025000000.6807")));
+        let reported = |raw: &str| Firmware {
+            reported: Some(raw.into()),
+            ..Firmware::default()
+        };
+        assert!(release.is_newer_than(&reported("71.2256000021000000.6663")));
+        assert!(!release.is_newer_than(&reported("90.3431000025000000.6807")));
         assert_eq!(parse_catalog(b"<html>Forbidden</html>"), None);
         assert_eq!(
             parse_catalog(

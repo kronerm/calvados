@@ -55,7 +55,7 @@ pub(crate) struct Content {
     buds: Option<Buds>,
     /// [`display::mode_name`]: empty while unknown.
     noise: &'static str,
-    /// `Firmware 7.1` while connected and reported; else empty. Only the
+    /// `Firmware 7.1 (6663)` while connected and known; else empty. Only the
     /// running version: unlike Linux, no catalog check (no internet).
     firmware: String,
     auto_switch: bool,
@@ -91,11 +91,9 @@ impl Content {
             text: text.to_owned(),
             buds: connected.then(|| Buds::of(state)),
             noise: display::mode_name(state.noise_mode),
-            firmware: state
-                .firmware
-                .as_deref()
+            firmware: display::firmware(&state.firmware)
                 .filter(|_| connected)
-                .map(|raw| format!("Firmware {}", display::firmware(raw)))
+                .map(|version| format!("Firmware {version}"))
                 .unwrap_or_default(),
             auto_switch: settings.auto_switch,
             auto_connect: settings.auto_connect,

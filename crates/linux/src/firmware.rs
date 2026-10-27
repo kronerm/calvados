@@ -1,13 +1,43 @@
+//! The pods' firmware: what they last reported, stored per pair, and
 //! Apple's firmware catalog: the current release for the pods' product,
 //! asked at most once a day, off the loop. Only tells; never updates.
 
 use std::collections::HashMap;
+use std::path::PathBuf;
 use std::time::{Duration, Instant};
 
-use protocol::firmware::{Release, catalog_models, catalog_url, parse_catalog};
+use protocol::MacAddress;
+use protocol::firmware::{Firmware, Release, catalog_models, catalog_url, parse_catalog};
 use tokio::sync::mpsc;
 
-use crate::Input;
+use crate::{Input, state};
+
+/// `<address>.firmware` in the state directory, like the keys.
+fn path(pods: MacAddress) -> Option<PathBuf> {
+    let pods = bluer::Address(pods.to_array());
+    Some(state::dir()?.join(format!("{pods}.firmware")))
+}
+
+/// What was stored for `pods`; nothing when never stored.
+pub fn stored(pods: MacAddress) -> Firmware {
+    path(pods)
+        .and_then(|path| std::fs::read_to_string(path).ok())
+        .map(|stored| Firmware::from_stored(&stored))
+        .unwrap_or_default()
+}
+
+pub fn save(pods: MacAddress, firmware: &Firmware) {
+    let Some(path) = path(pods) else {
+        return;
+    };
+    let saved = path
+        .parent()
+        .map_or(Ok(()), std::fs::create_dir_all)
+        .and_then(|()| std::fs::write(&path, firmware.to_stored()));
+    if let Err(e) = saved {
+        tracing::warn!(%pods, "storing the firmware: {e}");
+    }
+}
 
 const CHECK_INTERVAL: Duration = Duration::from_secs(24 * 60 * 60);
 const TIMEOUT: Duration = Duration::from_secs(30);

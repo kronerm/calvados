@@ -3,7 +3,7 @@
 
 use crate::aacp::{BatteryInfo, Bud, ChargingStatus, EarStatus, NoiseControlMode};
 use crate::engine::Ownership;
-use crate::firmware::Version;
+use crate::firmware::{Firmware, Version};
 use crate::state::DeviceState;
 
 /// Where a bud is, as far as the display goes.
@@ -102,10 +102,18 @@ pub fn parse_mode(name: &str) -> Option<NoiseControlMode> {
     .find(|mode| mode_name(Some(*mode)) == name)
 }
 
-/// The running firmware as both hosts show it: `7.1`, or the reported
-/// string when it isn't in the known format.
-pub fn firmware(raw: &str) -> String {
-    Version::of_running(raw).map_or_else(|| raw.to_owned(), |version| version.to_string())
+/// The running firmware as both hosts show it: `7.1.21` when known
+/// exactly (UARP), else from `0x1D` major.minor and the build counter,
+/// `7.1 (6663)`, or the reported string when it isn't in the known format.
+pub fn firmware(firmware: &Firmware) -> Option<String> {
+    let reported = |raw: &str| match (Version::of_running(raw), raw.rsplit_once('.')) {
+        (Some(version), Some((_, build))) => format!("{version} ({build})"),
+        _ => raw.to_owned(),
+    };
+    firmware
+        .exact
+        .map(|exact| exact.to_string())
+        .or_else(|| firmware.reported.as_deref().map(reported))
 }
 
 #[cfg(test)]
@@ -149,8 +157,19 @@ mod tests {
     }
 
     #[test]
-    fn firmware_shows_major_and_minor() {
-        assert_eq!(firmware("71.2256000021000000.6663"), "7.1");
-        assert_eq!(firmware("6A300"), "6A300");
+    fn firmware_shows_the_exact_version_or_the_build() {
+        let mut running = Firmware {
+            reported: Some("71.2256000021000000.6663".into()),
+            ..Firmware::default()
+        };
+        assert_eq!(firmware(&running).as_deref(), Some("7.1 (6663)"));
+        running.exact = "7.1.21".parse().ok();
+        assert_eq!(firmware(&running).as_deref(), Some("7.1.21"));
+        let odd = Firmware {
+            reported: Some("6A300".into()),
+            ..Firmware::default()
+        };
+        assert_eq!(firmware(&odd).as_deref(), Some("6A300"));
+        assert_eq!(firmware(&Firmware::default()), None);
     }
 }

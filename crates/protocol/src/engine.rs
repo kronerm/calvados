@@ -12,6 +12,7 @@ use crate::aacp::{
     NoiseControlMode, Packet, Routing, RoutingResponse,
 };
 use crate::ble;
+use crate::firmware::{ExactVersion, Firmware};
 use crate::protocol::{
     handshake, hijack_sequence, request_notifications, session_setup_frames, set_noise_control,
     set_ownership,
@@ -140,6 +141,9 @@ pub enum Effect {
         kind: KeyType,
         key: [u8; 16],
     },
+    /// What the pods run changed (a `0x1D` report, or UARP's exact
+    /// version): persist it per pods, for [`Engine::stored_firmware`].
+    LearnedFirmware { pods: MacAddress, firmware: Firmware },
     /// Pause local media playback (a bud left an ear).
     Pause,
     /// Resume the playback [`Effect::Pause`] paused.
@@ -326,6 +330,32 @@ impl Engine {
         vec![Effect::Send(handshake())]
     }
 
+    /// What was stored for the session's pods
+    /// ([`Effect::LearnedFirmware`]), right after [`Engine::connected`]:
+    /// shown until they report, so the line doesn't vanish in a session
+    /// without `0x1D`. A report wins.
+    pub fn stored_firmware(&mut self, stored: Firmware) {
+        let firmware = std::mem::take(&mut self.state.firmware);
+        self.state.firmware = firmware.or_stored(stored);
+    }
+
+    /// The pods' exact running version (UARP, asked by the platform).
+    pub fn exact_firmware(&mut self, pods: MacAddress, exact: ExactVersion) -> Vec<Effect> {
+        if self.pods != Some(pods) || self.state.firmware.exact == Some(exact) {
+            return Vec::new();
+        }
+        tracing::info!(%pods, %exact, "running firmware");
+        self.state.firmware.exact = Some(exact);
+        self.learned_firmware().into_iter().collect()
+    }
+
+    fn learned_firmware(&self) -> Option<Effect> {
+        Some(Effect::LearnedFirmware {
+            pods: self.pods?,
+            firmware: self.state.firmware.clone(),
+        })
+    }
+
     /// The AACP session ended. Unless both buds were put away (the case
     /// closing), the drop was unexpected: the pods page back only the host
     /// that last had the audio, and the OS doesn't retry soon (BlueZ: not
@@ -473,8 +503,17 @@ impl Engine {
         let previous_ears = self.state.ear_detection;
         let was_stowed = self.state.is_stowed();
         let was_in_case = self.state.in_case();
+        let firmware = self.state.firmware.clone();
         self.state.apply(&packet);
-        let learned = self.learn_local_mac(&packet).map(Effect::LearnedLocalMac);
+        let learned = self
+            .learn_local_mac(&packet)
+            .map(Effect::LearnedLocalMac)
+            .into_iter()
+            .chain(
+                (self.state.firmware != firmware)
+                    .then(|| self.learned_firmware())
+                    .flatten(),
+            );
         let reaction = match packet {
             // The firmware's word on who owns the link is final.
             Packet::Control(ControlCommand {
@@ -1366,6 +1405,53 @@ mod tests {
                     key: [0xee; 16]
                 }
             ]
+        );
+    }
+
+    #[test]
+    fn the_firmware_is_learned_and_stored_firmware_shown_until_reported() {
+        let report = |firmware: &str| {
+            Packet::DeviceInformation(DeviceInformation {
+                model: Some("A3048".into()),
+                firmware: Some(firmware.into()),
+                ..Default::default()
+            })
+        };
+        let old = "71.2256000021000000.6663";
+        let mut e = engine();
+        let stored = Firmware {
+            model: Some("A3048".into()),
+            reported: Some(old.into()),
+            exact: "7.1.21".parse().ok(),
+        };
+        e.stored_firmware(stored.clone());
+        assert_eq!(e.state().firmware, stored);
+        assert!(e.handle(report(old), now()).is_empty(), "nothing new");
+        assert!(e.exact_firmware(mac(PODS), "7.1.21".parse().unwrap()).is_empty());
+        let new = "90.3431000025000000.6807";
+        let reported = Firmware {
+            model: Some("A3048".into()),
+            reported: Some(new.into()),
+            exact: None,
+        };
+        assert_eq!(
+            e.handle(report(new), now()),
+            [Effect::LearnedFirmware {
+                pods: mac(PODS),
+                firmware: reported.clone()
+            }]
+        );
+        let exact = "9.0.348".parse().unwrap();
+        assert!(e.exact_firmware(mac(PEER), exact).is_empty(), "other pods");
+        assert_eq!(
+            e.exact_firmware(mac(PODS), exact),
+            [Effect::LearnedFirmware {
+                pods: mac(PODS),
+                firmware: Firmware {
+                    exact: Some(exact),
+                    ..reported
+                }
+            }]
         );
     }
 
