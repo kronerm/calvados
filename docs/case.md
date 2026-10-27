@@ -197,3 +197,155 @@ Known:
   case runs B2B + apply; the case stays on its old STFC/NERF/R1FW/audio (90.390 / 90.264 /
   older). No code requiring case and bud versions to match was found, so the set should work
   mismatched; what new bud firmware expects from an old case (B2P protocol) is not visible.
+
+
+## The case's tunnel to a host (how it becomes downstream 1)
+
+Static (STFC, rkof 9A348), cited as above. Summary: the case opens its UARP
+tunnel to the primary bud by itself about 2 s after the lid closes, never
+with the lid open, and only if both buds are present and coupled, the lid
+has moved at least twice since the case booted and the primary's radio is
+active; nothing a host sends triggers it. The bud announces the case as
+downstream 1 only if a host's AACP 0x4F (or GATT) UARP session exists at
+that moment, and the pods drop every host within ~0.2 s of the lid closing
+unless that host's session holds an accepted or deferred offer. So reading
+the case's version, or updating it, needs an offer in progress when the lid
+closes: in practice, during an update of the buds.
+
+Images: STFC (case MCU, base 0x08001800) and rkof (bud). Known = read from code;
+Inferred = meaning guessed. Nothing was run against devices.
+
+## Answer in one paragraph
+
+The case opens its UARP tunnel on its own, **about 2 s after the lid closes**, never
+while the lid is open, and never because a bud or host asks. The bud has no message that
+asks for it: it only answers the case's open request. When the request comes, the bud adds
+the case as downstream 1 only if an AACP-UARP (0xd) or GATT-AAP (4) session exists on
+that bud at that moment. A closed lid normally drops every host within ~0.2 s (observed
+Oct 27), so the session is gone 2 s later. The bud keeps exactly one host across a lid
+close: the one whose 0xd/4 session has an offer record in state 1, 2 or 6 (rkof bf2b0).
+Today's probe ran with the lid open, so no tunnel existed. That fits.
+
+## Q1. STFC: what raises 0x2805e ("Tunnel avail") (Known)
+
+- The only publisher of 0x2805e is [STFC 0x08012cf2-0x08012cf8]: 0x28052+0xc, arg =
+  tid, then the log "Tunnel avail". Its only subscriber, [STFC 0x08011f0a] (in the UARP DS
+  setup 0x08011ee8), is handler 0x08011fc4: `0x0802a2ac(tid, 3)` = "Open tid:%s ds:%d"
+  -> 0x0802a22c sends B2P message 0x10 {ds 3, state 1} to that bud (0x0802a328).
+  A constant-tracking scan of every publish/subscribe call site found no other 0x2805e.
+- The code is case 0x1c006 of the fwup handler FUN_080123b0 (tbh table 0x0801243c:
+  0x1c006 -> 0x080126da). 0x1c006 is the expiry of timer 0x20036188 (callback 0x0801237c,
+  installed [0x0801223e]). Conditions at expiry [0x080126da-0x08012718]:
+  1. lid closed: [0x200350c8+5] == 0 (+5 = lid GPIO, 1 = open; set by 0x0803c7c8, which
+     also logs "Lid Opened/Closed"),
+  2. FUN_0801d8e0: both buds present, coup_st (S1 bits 1-2) == 0 on both, coupling
+     state [0x2003533c+0x4c] not 1..5, and both bud records hold each other's address
+     (Inferred: a coupled pair, no coupling running),
+  3. lid-event counter [0x200350c8+0x44] >= 2 (it is incremented on every lid event
+     0x28030/0x28031 [0x0801258c]; Inferred: at least one open and one close since the
+     case MCU booted),
+  4. FUN_0801e074: tid = the bud whose S0 bit 1 (role, rkof 0xc61a4, Inferred primary)
+     is set,
+  5. that bud's S1 bit 0 "radio" is set ([0x2002658c + tid*0x40 + 0x16] bit 0). The
+     bud side is rkof 0x1589ba: S1 bit 0 = 0xb64b4(), meaning object 0x200ba890 (HSM
+     0x1c8124) is in state 4. Inferred: the bud's radio is active.
+  If 2-5 fail there is one retry 1 s later (0xf4240) while [0x20036188+0x1c] is set. The
+  flag is cleared after the retry and set again on lid open [0x080125b8]. The same retry
+  path also runs after a successful open on tid 1 [0x08012d06-0x08012d1a].
+- What starts the 2 s timer (0x1e8480; Inferred µs):
+  - **0x28030 with arg 0 (lid closed)**, posted by the lid handler 0x0803c804
+    [0x0803c828, 0x0803c870] -> [0x08012adc]. This needs the "No Apply" flag
+    [0x20034fc8+0x37] != 1 (otherwise the case's own apply path runs, 0x08012f34 + 15 s),
+    and it needs the tunnel config [[0x20035244+0x70]+0xc] == 1 [0x08012b9c-0x08012bbc].
+  - 0x28013 with the lid closed and the same config [0x080129ac-0x080129cc]. It is posted
+    once at boot from the boot lid state [0x08007322]. Inferred: the case booted with the
+    lid closed.
+  - Lid open (0x28030 arg 1) stops it [0x080125b2-0x080125ba].
+- Tunnel config: the pointer at 0x20035244+0x70 = 0x20001790 (FUN_080121a8 called with
+  0x20001748+0x48 [0x08008816-0x0800881c]). It lives in initialized data (copied from flash
+  0x0807c8b4 to 0x20000000 by the C runtime [0x08049132-0x0804914c]). Its initial bytes
+  are +0xc = 1 (tunnel, also "tunnel:%d" in "bud fwup cond" via 0x20001748+0x54),
+  +0xd = 1, +0xf = 0 (the manifest-required flag 0x20001748+0x57 is **0**, which corrects
+  the earlier open question), and +0x11 = 1. No code store to +0xc/+0xd was found. So
+  tunnels are enabled in this build.
+- Not inputs: charging, battery, case OTA pending (apart from +0x37), host type, any bud
+  request, bt_prog. The B2B "Bud server/client" tunnels (ds 1/2) are a separate path
+  (0x08037878, case event 0xc001; docs/sibling-and-case.md).
+
+## Q2. rkof: does the bud ask for it? (Known: no)
+
+- rkof has no tunnel or DS strings. Its only B2P sends of a DS type are two 0x11 replies
+  [rkof 0x15be28, 0x15c6c2]. The first answers the case's 0x10: `846d4(id, state)` brings
+  transport 0x03 up, then the reply carries the resulting state (0 if the up callback
+  failed: 846d4 resets state to 0 [rkof 0x84794-0x84798]). The second replies status 5
+  when the transport isn't enabled ([desc+0x42] == 0) [rkof 0x15c6ba].
+- What the bud reports and the case reads here is only S0 role and S1 radio. No host,
+  AACP, 0x4D, Discover Downstream (0x15) or Solicitation event reaches the case. 0x15
+  only re-announces existing downstream slots (below).
+
+## Q3. Ordering and re-triggering
+
+- At tunnel up: 0xbe6de-0xbe70a calls bee88 (any 0xd/4 session, **no offer state
+  needed**). With none, it logs and returns 0x80000000 [rkof 0xbe7d6], 846d4 drops 0x03
+  back to down, and the bud replies state 0 (Known). The case's connect-rsp
+  [STFC 0x08026616-0x08026644, 0x08026bf8] then just marks ds 3 closed. It has no
+  retry of its own (Known), beyond the one 1 s timer retry above.
+- bea24 (creating the 0xd session) never adds downstream 1 (its calls: role, endpoint
+  add/remove, bb4e0, 9e038, sibling cmd 0x14) (Known). So a tunnel that failed stays
+  failed until the next lid close + 2 s.
+- If the tunnel came up while a session existed: addDownstreamAccessory 0x77ef0 needs the
+  host endpoint (0x76e0c), sends 0x17 and marks the slot in use (+0x24), announced
+  (+0x2e) and bound (+0x28) [rkof 0x77fcc-0x78010]. Release callback 0x781c0 (pointer
+  at 0x154768) clears only +0x28/+0x2e. Discover Downstream 0x78134 re-announces every
+  slot that is in use but not announced to the asking host (0x17) [rkof 0x78150-0x7817e].
+  The slot is removed only when transport 0x03 goes down [0xbe7b0-0xbe7d0]. Inferred
+  (when 0x781c0 runs was not traced): once downstream 1 exists, a later 0xd session can
+  get it back with 0x15, as long as the case keeps ds 3 open.
+- Re-trigger: close the lid again. A cycle needs the lid open, then closed for at least
+  2 s. Each close is another attempt.
+- The catch is the host link. On lid close, bf2b0(0) [rkof 0xbf2d8-0xbf35c] keeps exactly
+  one host and drops all others (0x9a364, reason 4), takes holds and pages it back
+  (reason 5). It does this only if bee30 (a SuperBinary record of that session in state
+  2 [0xbee60-0xbee6a]) or bef74 (a dynamic record, list +0x398, or a SuperBinary record
+  in state 1 or 6 [0xbefdc-0xbf024]) finds the 0xd/4 session. Otherwise all hosts drop
+  (observed ~0.18 s after close). So a 0xd session survives a lid close only with an
+  accepted (2), deferred (1) or state-6 offer from that host. For a 0xd host, a
+  SuperBinary is accepted or deferred only if it is newer than running (bd938: not newer
+  -> deny 1). With 9A348 running there is none. Which host-offered dynamic assets the bud
+  records in state 1/6 was not established.
+- With the tunnel up, bt_prog (S0 bit 6, rkof 0x15f6e4 via be420 "transport 3 up") keeps
+  the case from putting that bud into ULP (STFC 0x08022482).
+
+## Q4. After downstream 1 exists
+
+- Host 0x1b to id 1 -> rkof 0x78280 -> the slot's send function 0xbe929 on transport 0x03
+  (MTU 0xf2) -> case ds 3 on tid = primary. On the case, rx 0x08012129 posts 0x28057
+  only if the case's current UARP host [0x200015d4+0x3c] == tid [0x0801214c] (Known).
+- The case serves one UARP host at a time ([0x200015d4+0x40]; 4 = none), chosen by
+  priority FUN_08016acc: tid 0/1 base 5, BLE tid 2 base 1, tid 3 base 9 (Known values;
+  Inferred: a tunnel outranks the case's own BLE). "Init Ctrl" 0x080158bc takes a tid
+  only when none is current [0x080158d8-0x080158ec].
+- Tag 5: Init Ctrl builds the accessory info. It contains "AirPods Pro Case " (+ suffix)
+  and 16-byte active and pending versions from FUN_08036e68 (log "A: %d.%d.%d.%d P: ...")
+  [0x08015904-0x08015a3e], the same ctx+0x370/+0x380 layout the bud answers tags 5/6
+  from. Inferred: tag 5 = 4 x u32 BE. The values are combined from component versions
+  (0x08004aac(2/1/4) + 0x0803688e), so the exact number (90.390.x.y?) is not established.
+- Gates: "Deny tunnel(%u)" / "Deny BLE" in 0x08015138 sit in the offer path only. For
+  tid 0/1 they need cfg+0xc == 1 (set) and, because +0xd == 1, [0x200350c8+0x46] > 5
+  (unknown field). No host-identity check was found on the info path (not searched
+  exhaustively).
+
+## Q5. Steps (Inferred) and risks
+
+1. Both buds in the case, lid opened at least once since the case booted, buds coupled.
+   Settle on the primary.
+2. Open AACP, send 0x4F Sync and Version Discovery (creates 0xd), then Discover Downstream.
+3. Get a hold: offer the primary a SuperBinary newer than it runs, over 0x4F, and let it be
+   accepted or deferred. Without that the lid close drops us.
+4. Close the lid. After ~2 s, expect 0x17 for id 1 (or send 0x15 again).
+5. Send 0x1b to id 1 with Sync, Version Discovery and Info tag 5. Keep the lid closed.
+
+Risks: step 3 means a real staging that the case may B2B-copy and apply. A 0x4F to a
+non-primary aborts (rkof 0xbea70). The hold drops every other host and keeps the buds out
+of ULP. Not established: a hold without a newer image, whether the bud accepts a page
+in the closed case before 2 s, the case's exact tag-5 value, and ds 3's idle timeout.
