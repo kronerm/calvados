@@ -18,9 +18,10 @@ use tokio::sync::mpsc;
 use crate::Input;
 
 const TIMEOUT: Duration = Duration::from_secs(10);
-/// Right after a reconnect BlueZ can refuse the first write ("Not
-/// connected") for a moment.
-const RETRY_DELAY: Duration = Duration::from_secs(3);
+/// After a connect BlueZ refuses writes ("Not connected") until its GATT
+/// channel is up: over 4 s once, so retry for half a minute.
+const RETRY_DELAY: Duration = Duration::from_secs(5);
+const TRIES: usize = 6;
 /// Between the writes, as the probe that was observed working spaced them.
 const WRITE_GAP: Duration = Duration::from_millis(300);
 
@@ -41,7 +42,7 @@ pub fn spawn(device: bluer::Device, inputs: mpsc::UnboundedSender<Input>) {
 
 /// Why asking failed.
 enum Failure {
-    /// The first write: worth another try.
+    /// The first write: worth another try, GATT may not be up yet.
     Refused(bluer::Error),
     Other(anyhow::Error),
 }
@@ -56,14 +57,21 @@ impl From<Failure> for anyhow::Error {
 }
 
 async fn query(device: &bluer::Device) -> anyhow::Result<ExactVersion> {
-    let answer = match tokio::time::timeout(TIMEOUT, ask(device)).await {
-        Ok(Err(Failure::Refused(e))) => {
-            tracing::debug!("UARP write refused, asking again: {e}");
-            tokio::time::sleep(RETRY_DELAY).await;
-            tokio::time::timeout(TIMEOUT, ask(device)).await
+    for _ in 1..TRIES {
+        match tokio::time::timeout(TIMEOUT, ask(device)).await {
+            Ok(Err(Failure::Refused(e))) => {
+                tracing::debug!("UARP write refused, asking again: {e}");
+                tokio::time::sleep(RETRY_DELAY).await;
+            }
+            answer => return finish(answer),
         }
-        answer => answer,
-    };
+    }
+    finish(tokio::time::timeout(TIMEOUT, ask(device)).await)
+}
+
+fn finish(
+    answer: Result<Result<ExactVersion, Failure>, tokio::time::error::Elapsed>,
+) -> anyhow::Result<ExactVersion> {
     Ok(answer.map_err(|_| anyhow::anyhow!("no answer within {TIMEOUT:?}"))??)
 }
 
