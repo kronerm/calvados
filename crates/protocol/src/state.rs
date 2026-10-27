@@ -11,6 +11,10 @@ use crate::aacp::{
 #[derive(Debug, Clone, Default)]
 pub struct DeviceState {
     pub name: Option<String>,
+    /// The primary bud's model number, e.g. `A3048`.
+    pub model: Option<String>,
+    /// The running firmware, as reported: see [`crate::firmware::Version`].
+    pub firmware: Option<String>,
     pub battery: Battery,
     /// Ear status by role; see [`Self::ears`] for physical buds.
     pub ear_detection: Option<EarDetection>,
@@ -57,9 +61,9 @@ pub struct Battery {
 
 impl DeviceState {
     /// What a new session with the same pods starts from: what's only shown
-    /// (name, noise mode, battery as last known) until the pods report it,
-    /// which after a reconnect can take ~20 s (the settings half of the
-    /// burst is held back). Routing state starts empty.
+    /// (name, model, firmware, noise mode, battery as last known) until the
+    /// pods report it, which after a reconnect can take ~20 s (the settings
+    /// half of the burst is held back). Routing state starts empty.
     pub fn carried_over(&self) -> Self {
         let last_known = |info: Option<BatteryInfo>| {
             info.map(|info| BatteryInfo {
@@ -69,6 +73,8 @@ impl DeviceState {
         };
         Self {
             name: self.name.clone(),
+            model: self.model.clone(),
+            firmware: self.firmware.clone(),
             noise_mode: self.noise_mode,
             noise_source: NoiseSource::Expected,
             worn_noise_modes: self.worn_noise_modes,
@@ -137,7 +143,11 @@ impl DeviceState {
                 }
             }
             Packet::PrimaryBud(primary) => self.primary_bud = Some(primary.bud),
-            Packet::DeviceInformation(info) => self.name = info.name.clone(),
+            Packet::DeviceInformation(info) => {
+                self.name = info.name.clone();
+                self.model = info.model.clone();
+                self.firmware = info.firmware.clone();
+            }
             Packet::AudioSource(source) => self.audio_source = Some(*source),
             Packet::Control(ControlCommand {
                 id: ControlId::ListeningMode,
@@ -430,6 +440,21 @@ mod tests {
             ChargingStatus::Discharging,
         )]));
         assert!(!state.is_stowed());
+    }
+
+    #[test]
+    fn device_information_is_carried_over() {
+        let mut state = DeviceState::default();
+        state.apply(&Packet::DeviceInformation(
+            crate::aacp::device_information::DeviceInformation {
+                name: Some("AirPods Pro".into()),
+                model: Some("A3048".into()),
+                firmware: Some("71.2256000021000000.6663".into()),
+            },
+        ));
+        let state = state.carried_over();
+        assert_eq!(state.model.as_deref(), Some("A3048"));
+        assert_eq!(state.firmware.as_deref(), Some("71.2256000021000000.6663"));
     }
 
     #[test]

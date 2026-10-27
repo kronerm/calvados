@@ -3,6 +3,7 @@
 
 use crate::aacp::{BatteryInfo, Bud, ChargingStatus, EarStatus, NoiseControlMode};
 use crate::engine::Ownership;
+use crate::firmware::Version;
 use crate::state::DeviceState;
 
 /// Where a bud is, as far as the display goes.
@@ -101,6 +102,12 @@ pub fn parse_mode(name: &str) -> Option<NoiseControlMode> {
     .find(|mode| mode_name(Some(*mode)) == name)
 }
 
+/// The running firmware as both hosts show it: `7.1`, or the reported
+/// string when it isn't in the known format.
+pub fn firmware(raw: &str) -> String {
+    Version::of_running(raw).map_or_else(|| raw.to_owned(), |version| version.to_string())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -139,5 +146,11 @@ mod tests {
         assert!(!right.primary && right.charging && matches!(right.place, Some(Place::InCase)));
         assert!(case.last_known && case.level == 60);
         assert_eq!(Buds::of(&DeviceState::default()), Buds::default());
+    }
+
+    #[test]
+    fn firmware_shows_major_and_minor() {
+        assert_eq!(firmware("71.2256000021000000.6663"), "7.1");
+        assert_eq!(firmware("6A300"), "6A300");
     }
 }

@@ -6,6 +6,7 @@ pub mod ble;
 pub mod connection;
 pub mod display;
 pub mod engine;
+pub mod firmware;
 mod mac_address;
 pub mod protocol;
 pub mod settings;

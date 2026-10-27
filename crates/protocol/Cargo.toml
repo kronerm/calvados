@@ -16,6 +16,11 @@ aes = "0.8"
 bitflags = "2"
 num_enum = "0.7"
 tracing = "0.1"
+plist = { version = "1.10", default-features = false, optional = true }
+
+[features]
+# Parsing Apple's firmware catalog (`firmware::parse_catalog`): Linux only.
+catalog = ["dep:plist"]
 
 [dev-dependencies]
 hex = "0.4"
