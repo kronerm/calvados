@@ -82,6 +82,18 @@ build first.
   top bit charging, LibrePods). `Engine::nearby` writes that level into the
   state for our pods, also during a session; the status stays the pods'
   (last known while no bud is inside, when the advertisement knows better).
+- `firmware.rs` — the running version (`Version::of_running`: the first
+  field of 0x1D's `71.2256000021000000.6663` is major then a one-digit
+  minor, so 7.1; `display::firmware` shows it, or the raw string), and
+  Apple's catalog: `catalog_url`, `catalog_models` (a product's models,
+  served first: AirPods Pro 2 USB-C asks A3048, the case A2968, then
+  A3047, which gets a 403; an unknown model only itself) and, behind the
+  `catalog` feature (the `plist` crate; only Linux enables it),
+  `parse_catalog` (the newest of `Assets`: `FirmwareVersionMajor`/`Minor`/
+  `Release`, `Build`). The running string carries no release number (9A348
+  is `90.…`), so `Release::is_newer_than` compares major.minor only.
+  `DeviceState` keeps the model and firmware from 0x1D, carried over a
+  reconnect like the name.
 - `connection.rs` — L2CAP PSM and service UUID.
 
 ### How sure we are
@@ -207,6 +219,15 @@ power-on (`LinkChange`). Its length caps at 255, i.e. 15 events.
   and `.enc`, one pair each. A fresh link
   starts with the profile `off`, so connecting never takes the audio.
   The monitor starts after the D-Bus name is claimed (single instance).
+- `firmware.rs` — the catalog check:
+  `https://mesu.apple.com/assets/com_apple_MobileAsset_UARP_<MODEL>/com_apple_MobileAsset_UARP_<MODEL>.xml`
+  for the pods' model (0x1D), trying `catalog_models` in order until one
+  answers; once a day per product, in memory. reqwest (rustls, ring) in a
+  spawned task; the result returns to the loop as `Input::Catalog`, which
+  keeps it (a failed check keeps the last answer; logged at debug/info).
+  On D-Bus: `Firmware` (`7.1`), `LatestFirmware` (`9.0.348 (9A348)`, empty
+  until checked) and `FirmwareUpdate`. Android doesn't check (no INTERNET
+  permission): it shows the running version only.
 - `cli.rs` — `calvados watch` / `calvados set …`: a zbus proxy client of
   the daemon's own D-Bus object (no daemon logic), for shells without
   D-Bus. `watch` prints JSON lines on `PropertiesChanged` and on the bus
@@ -291,6 +312,8 @@ texts are written twice. A change to one side needs the other:
   `notification_expanded.xml` and `notification.rs` `MODES`);
 - the settings' titles and descriptions ("this computer" / "this phone");
 - the noise heading ("· Off", "· unknown yet");
+- the firmware line ("Firmware 7.1", `format.firmware` and
+  `notification.rs` `Content::firmware`; " · 9.0 available" on Linux only);
 - the battery glyph thresholds 88/63/38/13 (`format.batteryGlyph`,
   `notification.rs` `battery_glyph`);
 - the icons: Noctalia names Tabler glyphs, Android has them converted in

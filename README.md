@@ -19,8 +19,8 @@ are a tap away.
   laptop's speakers; Android keeps them as its audio device by itself).
 - **Status and controls:** battery per bud and case, where each bud is,
   which bud is the primary (it holds the link), noise control (ANC,
-  Transparency, Adaptive), and both settings above, in the phone's
-  notification and in a Linux status bar panel.
+  Transparency, Adaptive), both settings above, and the firmware version,
+  in the phone's notification and in a Linux status bar panel.
 
 ## Requirements
 
@@ -55,8 +55,8 @@ are a tap away.
 The notification shows the AirPods' name and whether the phone has the
 audio (Active, Standby), and the battery levels, the primary bud's in bold.
 Expanded, it shows each bud's battery and where it is (a dot marks the
-primary bud), the noise control modes to tap, and two settings, both
-remembered:
+primary bud), the noise control modes to tap, the firmware the AirPods
+run ("Firmware 7.1"), and two settings, both remembered:
 
 - **Automatic switching:** media starting on the phone takes the AirPods
   (unless the other device is on a call), and so does a call when answered.
@@ -120,6 +120,10 @@ no other device connected, the laptop takes the audio by itself.
 **Noctalia:** the package ships a plugin: a bar widget (the buds' levels,
 left then right, the primary's in bold, then the case's; highlighted while
 the laptop has the audio) and a panel with the same controls as the phone.
+The panel also says when Apple has newer AirPods firmware ("Firmware 7.1 ·
+9.0 available"): the daemon checks Apple's public update catalog once a
+day while the AirPods are connected. It only tells: Calvados never
+updates the AirPods.
 Link it where Noctalia looks for plugins, enable it, then add the widget
 `kroner/calvados:bar` to the bar (Settings → Bar):
 
