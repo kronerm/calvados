@@ -177,8 +177,10 @@ main as the rolling pre-release `testing`: a release is
   `MTIC` asset (left unanswered); nothing is solicited.
   Updates: `prepare_update(release)` (refusals: `Refusal`, incl. not
   connected, no release, already running, another host's update running,
-  `update::check`; a refusal becomes the update's status,
-  `Failed(Refused)`, not over a running update and not told to peers) →
+  `update::check`; an actionable refusal (not connected, not in the
+  case, version unknown) becomes the update's status, `Failed(Refused)`,
+  not over a running update and not told to peers; a done or failed update
+  is dropped at the next session, so the firmware shows again) →
   `Downloading`; the platform fetches and hands
   `package(Option<Package>)`, checked again (the release's version, the
   preconditions) → offered once settled. The update survives a session

@@ -166,6 +166,18 @@ pub enum Refusal {
     NotNewer,
 }
 
+impl Refusal {
+    /// Something the user can do about it (connect, put the buds in the
+    /// case, wait for the version): worth showing. Not when there's nothing
+    /// to update, or an update already runs.
+    pub fn is_actionable(self) -> bool {
+        matches!(
+            self,
+            Self::NotConnected | Self::NotInCase | Self::VersionUnknown
+        )
+    }
+}
+
 impl fmt::Display for Refusal {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.write_str(match self {

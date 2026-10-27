@@ -232,6 +232,14 @@ enum Update {
 }
 
 impl Update {
+    /// Done or failed (a refusal included): nothing left to resume.
+    fn is_over(&self) -> bool {
+        matches!(
+            self.status(),
+            UpdateStatus::Done(_) | UpdateStatus::Failed(_)
+        )
+    }
+
     fn status(&self) -> UpdateStatus {
         match self {
             Self::Downloading(_) => UpdateStatus::Downloading,
@@ -369,7 +377,12 @@ impl Engine {
             LocalMac::Known(mac) => Some(mac),
             _ => None,
         };
-        let update = self.update.take().filter(|_| self.pods == Some(pods));
+        // A running or staged update carries on; one that's over (done,
+        // failed, refused) has been seen and makes way for the firmware.
+        let update = self
+            .update
+            .take()
+            .filter(|update| self.pods == Some(pods) && !update.is_over());
         *self = Self {
             pods: Some(pods),
             link: Link::Up,
@@ -1157,9 +1170,10 @@ impl Engine {
         release: Option<ExactVersion>,
     ) -> Result<Vec<Effect>, Refusal> {
         let release = self.may_update(release).inspect_err(|&refusal| {
-            // Shown as the update's status on both UIs, like a failure; not
-            // over a running update, nor told to peers (it's ours).
-            if !matches!(refusal, Refusal::Running | Refusal::PeerRunning) {
+            // Shown as the update's status on both UIs, like a failure, when
+            // there's something to do about it; not over a running update,
+            // nor told to peers (it's ours).
+            if refusal.is_actionable() {
                 self.update = Some(Update::Failed(Failure::Refused(refusal)));
             }
         })?;
@@ -2694,6 +2708,26 @@ mod tests {
                 Some(UpdateStatus::Downloading),
                 "a refusal doesn't replace a running update"
             );
+        }
+
+        #[test]
+        fn an_old_outcome_makes_way_for_the_firmware() {
+            let mut e = ready();
+            e.state.firmware.reported = Some("90.3431000025000000.6807".into());
+            assert_eq!(e.prepare_update(release()), Err(Refusal::NotNewer));
+            assert_eq!(e.update_status(), None, "nothing to do about it");
+            let mut e = ready();
+            e.handle(
+                Packet::EarDetection(EarDetection {
+                    primary: EarStatus::InEar,
+                    secondary: EarStatus::InCase,
+                }),
+                now(),
+            );
+            assert_eq!(e.prepare_update(release()), Err(Refusal::NotInCase));
+            assert!(e.update_status().is_some(), "shown until the next session");
+            reconnect(&mut e, Duration::from_secs(5));
+            assert_eq!(e.update_status(), None);
         }
 
         #[test]
