@@ -70,6 +70,18 @@ switch the other bud reports the same, and both firmware slots of 0x1D
 read `90.3431000025000000.6807`. The case's own firmware wasn't offered
 (not reachable over GATT).
 
+**Over AACP (Oct 27, on 9A348).** UARP also runs inside AACP, opcode 0x4F
+on the service-4 session: `04 00 04 00 4F 00 [len u16 LE]` + one whole UARP
+message, ≤ 1007 bytes, no fragment header; the pods answer the same way
+[rkof 0x6d6d0, sender 0xbebc8]. `tools/firmware/uarp_aacp_probe.py` (its
+own AACP channel, the daemon stopped, buds settled) got protocol version 6,
+running 9.0.348, tags 3/4/9 differing from GATT's (the other bud's serial,
+hardware `3.36.32`, tag 9 `AirPods Pro`), an unsolicited Downstream Added
+(0x17) for id 2 (the other bud) and an offer from the pods of a 300-byte
+dynamic asset `MTIC` (flags 0x000a; not accepted). The case didn't appear.
+Don't send 0x4F around a primary switch: on a bud that isn't primary it
+reaches an abort [rkof 0xbea70].
+
 Discover Downstream (0x15, in `uarp_probe.py`) is answered with 0x16
 status 0 and no 0x17 at all, also with a fresh state (case closed and
 reopened) and charging: with nothing staged, the primary offers a host no
