@@ -57,6 +57,19 @@ messages from `protocol::uarp`): Sync, version discovery proposing 4 and
 the tag 5 request, read-only, to show the exact version (7.1.21 where
 0x1D says only 7.1) and compare it with the catalog's release.
 
+**A complete update from Linux (Oct 27).** With the case charging, freshly
+reopened, the phone's Bluetooth and the calvados daemon off,
+`uarp_offer.py … full` served what the primary asked for: exactly `FTAB`
+(7 811 966 bytes with headers and metadata, 475-byte requests, ~18 KB/s,
+about 7.5 minutes), then got processing flags `0x0001` (fully staged); the
+probe showed 7.1.21 running, 9.0.348 staged. No apply was sent: with the
+lid closed for ~30 minutes the case copied the image to the other bud and
+applied both. Afterwards the probe answers protocol version **6** (9A348's
+maximum) and running 9.0.348, nothing staged; after a forced primary
+switch the other bud reports the same, and both firmware slots of 0x1D
+read `90.3431000025000000.6807`. The case's own firmware wasn't offered
+(not reachable over GATT).
+
 Discover Downstream (0x15, in `uarp_probe.py`) is answered with 0x16
 status 0 and no 0x17 at all, also with a fresh state (case closed and
 reopened) and charging: with nothing staged, the primary offers a host no

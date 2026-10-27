@@ -5,6 +5,10 @@ the protocol: [uarp.md](uarp.md)). Static analysis, `[image 0xADDR]`;
 Known = read from code or data, Inferred = marked. Nothing here has been
 tried on real pods beyond the read-only probe.
 
+Done once, Oct 27: a pair on 7.1.21 updated to 9.0.348 from Linux over
+GATT, the primary staging `FTAB` and the case finishing the other bud and
+applying both (details in [uarp.md](uarp.md)).
+
 ## The buds' manifest needs no personalization (Known, checked)
 
 The IM4M at the end of the `FTAB` payload (offset `0x771e72`) is signed
