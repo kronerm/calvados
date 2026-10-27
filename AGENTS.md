@@ -705,7 +705,6 @@ README's credits when work from elsewhere is used.
   with only the values used. The
   module is private, so unused wrappers show up as dead-code warnings:
   remove them (git has them if needed again).
-- Commit messages from agents are prefixed with the model name.
 
 ## Checks
 
