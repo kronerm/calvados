@@ -44,6 +44,14 @@ The tool rescinded there; acknowledged, nothing staged. So the denials
 came from state left by earlier offers, which rescinds didn't clear;
 closing the case did.
 
+Serving the metadata too (`uarp_offer.py … metadata`, everything before
+`0x2a5c`, the first payload's data): after `FTAB`'s metadata (its SHA-256,
+`0xCCD28107`, which matches the payload, and `0xCCD28112` = 1) the pods ask
+for `FTAB`'s data right away, 475 bytes at its start (`0x5e7781`), with no
+personalization request in between: the buds stage `FTAB` first and need
+no ticket. At 475 bytes a request, `FTAB` is ~16 500 requests. Rescinded
+there; acknowledged, nothing staged.
+
 All addresses `[rkof 0x…]`. **Known** = read from code; **Inferred** = meaning guessed
 (names are not in the binary: no msg-type name strings exist; names below follow
 behaviour and request/ack pairing).
