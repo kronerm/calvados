@@ -1,7 +1,9 @@
 # Builds the Linux daemon from this checkout: `makepkg -si`. A same-version
 # rebuild reinstalls.
 pkgname=calvados
-pkgver=0.1.0
+# From git tags (tools/version.sh), like the Android app's version, so both
+# order the same: 0.1.0 < 0.1.0.r43.g… < 0.1.1alpha1 < 0.1.1.
+pkgver=$(cd "${startdir:-.}" && tools/version.sh | cut -d' ' -f1)
 pkgrel=1
 pkgdesc='AirPods daemon: battery, ear detection, audio handoff between hosts'
 arch=(x86_64 aarch64)

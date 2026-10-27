@@ -1,12 +1,18 @@
-# A push to main whose version has no tag yet builds the signed APKs and the
-# Arch package and publishes them as release v<version> (tools/release.sh
-# sets the version). Secrets: ANDROID_KEYSTORE (the release keystore,
-# base64) and ANDROID_KEYSTORE_PASSWORD.
+# Builds the signed APKs and the Arch package and publishes them:
+# - a tag v0.1.1 as release 0.1.1, a tag v0.1.1-alpha.2 as pre-release
+#   0.1.1alpha2;
+# - every push to main as the rolling pre-release "testing" (version like
+#   0.1.1.r3.g1a2b3c4).
+# The version comes from the tags (tools/version.sh), the same for pacman
+# and Android, so updates go release < testing < next alpha < next release.
+# Secrets: ANDROID_KEYSTORE (the release keystore, base64) and
+# ANDROID_KEYSTORE_PASSWORD.
 name: Release
 
 on:
   push:
     branches: [main]
+    tags: ["v[0-9]*"]
   workflow_dispatch:
 
 permissions:
@@ -16,36 +22,21 @@ jobs:
   version:
     runs-on: ubuntu-24.04
     outputs:
-      version: ${{ steps.check.outputs.version }}
-      release: ${{ steps.check.outputs.release }}
+      version: ${{ steps.version.outputs.version }}
+      code: ${{ steps.version.outputs.code }}
     steps:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
-      - id: check
+      - id: version
         run: |
-          cargo_version() { sed -n 's/^version = "\(.*\)"/\1/p' "$1" | head -1; }
-          version=$(cargo_version crates/android-app/Cargo.toml)
-          manifest=crates/android-app/AndroidManifest.xml
-          name=$(sed -n 's/.*android:versionName="\([^"]*\)".*/\1/p' "$manifest")
-          code=$(sed -n 's/.*android:versionCode="\([0-9]*\)".*/\1/p' "$manifest")
-          IFS=. read -r major minor patch <<< "$version"
-          for other in "$(cargo_version crates/linux/Cargo.toml)" \
-              "$(sed -n 's/^pkgver=//p' PKGBUILD)" "$name"; do
-            [ "$other" = "$version" ] || { echo "::error::version $other isn't $version (tools/release.sh)"; exit 1; }
-          done
-          [ "$code" = $(( (1 << 24) + (major << 16) + (minor << 8) + patch )) ] ||
-            { echo "::error::versionCode $code doesn't match $version (tools/release.sh)"; exit 1; }
+          read -r version code < <(tools/version.sh)
           echo "version=$version" >> "$GITHUB_OUTPUT"
-          if git rev-parse -q --verify "refs/tags/v$version" >/dev/null; then
-            echo "release=false" >> "$GITHUB_OUTPUT"
-          else
-            echo "release=true" >> "$GITHUB_OUTPUT"
-          fi
+          echo "code=$code" >> "$GITHUB_OUTPUT"
+          echo "::notice::version $version, versionCode $code"
 
   android:
     needs: version
-    if: needs.version.outputs.release == 'true'
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
@@ -62,6 +53,8 @@ jobs:
       - run: cargo install cargo-apk2 --version 1.4.2 --locked
       - name: Build
         env:
+          VERSION: ${{ needs.version.outputs.version }}
+          CODE: ${{ needs.version.outputs.code }}
           ANDROID_NDK_ROOT: ${{ steps.ndk.outputs.ndk-path }}
           KEYSTORE: ${{ secrets.ANDROID_KEYSTORE }}
           CARGO_APK_RELEASE_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
@@ -70,12 +63,13 @@ jobs:
           export CARGO_APK_RELEASE_KEYSTORE="$RUNNER_TEMP/release.keystore"
           base64 -d <<< "$KEYSTORE" > "$CARGO_APK_RELEASE_KEYSTORE"
           export PATH="$ANDROID_HOME/build-tools/35.0.0:$PATH"
+          sed -i "s/android:versionCode=\"[0-9]*\"/android:versionCode=\"$CODE\"/; s/android:versionName=\"[^\"]*\"/android:versionName=\"$VERSION\"/" \
+            crates/android-app/AndroidManifest.xml
           cargo apk2 build -p android-app --release
           cargo xposed
-          version=${{ needs.version.outputs.version }}
           mkdir out
-          cp target/release/apk/calvados.apk "out/calvados-$version.apk"
-          cp target/release/calvados-xposed.apk "out/calvados-xposed-$version.apk"
+          cp target/release/apk/calvados.apk "out/calvados-$VERSION.apk"
+          cp target/release/calvados-xposed.apk "out/calvados-xposed-$VERSION.apk"
       - uses: actions/upload-artifact@v4
         with:
           name: android
@@ -83,16 +77,18 @@ jobs:
 
   arch:
     needs: version
-    if: needs.version.outputs.release == 'true'
     runs-on: ubuntu-24.04
     container: archlinux:base-devel
     steps:
       - run: pacman -Syu --noconfirm --needed git rust clang bluez dbus libpipewire libcap
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
       - name: Build
         run: |
           useradd -m builder
           chown -R builder: .
+          sudo -u builder git config --global --add safe.directory "$PWD"
           sudo -u builder makepkg --noconfirm
           mkdir out && cp ./*.pkg.tar.zst out/
       - uses: actions/upload-artifact@v4
@@ -110,7 +106,21 @@ jobs:
           merge-multiple: true
       - env:
           GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ needs.version.outputs.version }}
         run: |
-          version=${{ needs.version.outputs.version }}
-          gh release create "v$version" out/* --repo "$GITHUB_REPOSITORY" \
-            --target "$GITHUB_SHA" --title "Calvados $version" --generate-notes
+          repo=(--repo "$GITHUB_REPOSITORY")
+          case "$GITHUB_REF" in
+            refs/tags/*)
+              tag=${GITHUB_REF#refs/tags/}
+              flags=(--title "Calvados $VERSION" --generate-notes)
+              case $tag in *-alpha.*) flags+=(--prerelease) ;; esac
+              gh release create "$tag" out/* "${repo[@]}" "${flags[@]}"
+              ;;
+            *)
+              # One rolling testing release, moved to this commit.
+              gh release delete testing --cleanup-tag --yes "${repo[@]}" 2>/dev/null || true
+              gh release create testing out/* "${repo[@]}" --target "$GITHUB_SHA" \
+                --prerelease --title "Testing $VERSION" \
+                --notes "Built from $GITHUB_SHA on main; newer than the last release, older than the next."
+              ;;
+          esac

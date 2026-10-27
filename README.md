@@ -33,7 +33,8 @@ config (below). Calvados itself needs no root.
 [LSPosed]: https://github.com/LSPosed/LSPosed
 
 Releases on GitHub have the signed Android app and LSPosed module and an
-Arch Linux package; or build them yourself (below).
+Arch Linux package; "testing" is the latest build from main, newer than
+the last release. Or build them yourself (below).
 
 ## Android
 

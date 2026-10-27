@@ -56,12 +56,18 @@ one to `apksigner`): `keytool -genkeypair -storetype PKCS12 -keystore …
 -dname "CN=Calvados"`. A new key changes the apps' signature: uninstall the
 old builds first.
 
-Releases: `tools/release.sh 0.2.0` sets the version in both crates, the
-PKGBUILD and the app's manifest (`versionCode` by cargo-apk2's formula, it
-must grow); commit and push to main, and `.github/workflows/release.yml`
-builds the signed APKs and the Arch package and publishes release
-`v0.2.0` (it runs whenever main's version has no tag yet, and fails if the
-version fields disagree).
+Versions come only from git tags (`tools/version.sh`): tag `v0.1.1` is
+release `0.1.1`, `v0.1.1-alpha.2` pre-release `0.1.1alpha2`, other commits
+`<last>.r<n>.g<hash>`. pacman's vercmp and Android's `versionCode` (an
+integer: slot = major·10⁴ + minor·10² + patch; a release and the builds
+after it slot·10⁴ + 5000 + n, its alpha k slot·10⁴ + k·100 + n) order them
+the same, so updates go 0.1.0 < 0.1.0.r43.g… < 0.1.1alpha1 < 0.1.1. The
+PKGBUILD computes `pkgver` from it when read (no `pkgver()`, which would
+rewrite the file); CI writes it into the app's manifest, which keeps
+`versionCode 1` / `dev` for local builds. `.github/workflows/release.yml`
+publishes a tag as a release (alphas as pre-releases) and every push to
+main as the rolling pre-release `testing`: a release is
+`git tag -a v0.2.0 && git push --tags`.
 
 ## Protocol crate layout
 
