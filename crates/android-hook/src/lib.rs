@@ -10,7 +10,6 @@ use anyhow::Context as _;
 use lzma_rust2::XzReader;
 use object::{Object as _, ObjectSection as _, ObjectSymbol as _, SymbolKind};
 use tracing::level_filters::LevelFilter;
-use tracing_subscriber::fmt::format::FmtSpan;
 use tracing_subscriber::layer::SubscriberExt as _;
 use tracing_subscriber::util::SubscriberInitExt as _;
 use tracing_subscriber::{EnvFilter, Layer as _};
@@ -23,57 +22,105 @@ mod bta_dm_set_local_di_record;
 mod l2c_fcr_chk_chan_modes;
 mod remote_suspend;
 
-/// Find a symbol's address offset in an ELF file by name.
-fn find_symbol_offset(elf: &object::File<'_>, symbol_name: &str) -> Option<u64> {
-    elf.symbols()
-        .find(|symbol| {
-            matches!(symbol.kind(), SymbolKind::Text)
-                && symbol.name().is_ok_and(|name| name.contains(symbol_name))
-        })
-        .map(|symbol| symbol.address())
+/// How a symbol's name is matched.
+#[derive(Clone, Copy)]
+enum Name<'a> {
+    /// A C function, perhaps mangled.
+    Containing(&'a str),
+    /// A mangled C++ name.
+    Exact(&'a str),
 }
 
-/// The same for an exact (mangled) name.
-fn find_exact_symbol_offset(elf: &object::File<'_>, symbol_name: &str) -> Option<u64> {
-    elf.symbols()
-        .find(|symbol| {
-            matches!(symbol.kind(), SymbolKind::Text) && symbol.name() == Ok(symbol_name)
-        })
-        .map(|symbol| symbol.address())
+impl Name<'_> {
+    fn as_str(&self) -> &str {
+        match self {
+            Self::Containing(name) | Self::Exact(name) => name,
+        }
+    }
+
+    fn matches(&self, symbol: &str) -> bool {
+        match self {
+            Self::Containing(name) => symbol.contains(name),
+            Self::Exact(name) => symbol == *name,
+        }
+    }
 }
 
-/// Install one hook, storing the original function pointer.
-///
-/// # Safety
-/// `replacement` must have the same signature as the `F` stored in `original`.
-unsafe fn install_hook<F: Copy>(
+/// A loaded Bluetooth library and its symbols.
+struct Library<'a> {
     hook_fn: HookFn,
     base: usize,
-    offset: Option<u64>,
-    replacement: *mut c_void,
-    original_store: &OnceLock<F>,
-    name: &str,
-) {
-    let Some(offset) = offset else {
-        tracing::error!(symbol = name, "symbol not found");
-        return;
-    };
-    let target = (base + offset as usize) as *mut c_void;
-    let mut original: *mut c_void = ptr::null_mut();
+    /// The file, then its `.gnu_debugdata` (some builds strip the symbols
+    /// into it).
+    elfs: Vec<object::File<'a>>,
+}
 
-    let result = unsafe { hook_fn(target, replacement, &mut original) };
-
-    if result == 0 {
-        // A second load of the library keeps the first original.
-        let _ = original_store.set(unsafe { std::mem::transmute_copy(&original) });
-        tracing::info!(function_name=name, offset=%format_args!("{offset:#x}"), "hooked!");
-    } else {
-        tracing::error!(
-            function_name = name,
-            hook_fn_return = result,
-            "failed to hook :("
-        );
+impl Library<'_> {
+    /// A function's address, from the first ELF that has it.
+    fn find(&self, name: Name<'_>) -> Option<usize> {
+        self.elfs.iter().find_map(|elf| {
+            elf.symbols()
+                .find(|symbol| {
+                    matches!(symbol.kind(), SymbolKind::Text)
+                        && symbol.name().is_ok_and(|symbol| name.matches(symbol))
+                })
+                .map(|symbol| self.base + symbol.address() as usize)
+        })
     }
+
+    fn find_or_log(&self, name: Name<'_>) -> Option<usize> {
+        let address = self.find(name);
+        if address.is_none() {
+            tracing::error!(symbol = name.as_str(), "symbol not found");
+        }
+        address
+    }
+
+    /// Store a function the hooks call.
+    ///
+    /// # Safety
+    /// `F` must be the function pointer type of `name`.
+    unsafe fn resolve<F: Copy>(&self, name: &str, store: &OnceLock<F>) {
+        const { assert!(size_of::<F>() == size_of::<usize>()) };
+        if let Some(address) = self.find_or_log(Name::Exact(name)) {
+            let _ = store.set(unsafe { std::mem::transmute_copy(&address) });
+        }
+    }
+
+    /// Replace a function, storing the original.
+    ///
+    /// # Safety
+    /// `F` must be the function pointer type of `name`.
+    unsafe fn hook<F: Copy>(&self, name: Name<'_>, replacement: F, original: &OnceLock<F>) {
+        const { assert!(size_of::<F>() == size_of::<*mut c_void>()) };
+        let Some(target) = self.find_or_log(name) else {
+            return;
+        };
+        let replacement: *mut c_void = unsafe { std::mem::transmute_copy(&replacement) };
+        let mut backup: *mut c_void = ptr::null_mut();
+        let result = unsafe { (self.hook_fn)(target as *mut c_void, replacement, &mut backup) };
+        if result == 0 {
+            // A second load of the library keeps the first original.
+            let _ = original.set(unsafe { std::mem::transmute_copy(&backup) });
+            tracing::info!(
+                symbol = name.as_str(),
+                offset = %format_args!("{:#x}", target - self.base),
+                "hooked"
+            );
+        } else {
+            tracing::error!(symbol = name.as_str(), result, "hooking failed");
+        }
+    }
+}
+
+/// `.gnu_debugdata`, decompressed (xz).
+fn gnu_debugdata(elf: &object::File<'_>) -> Option<Vec<u8>> {
+    let data = elf.section_by_name(".gnu_debugdata")?.data().ok()?;
+    let mut decompressed = Vec::new();
+    XzReader::new(data, false)
+        .read_to_end(&mut decompressed)
+        .ok()?;
+    Some(decompressed)
 }
 
 /// Install hooks into a Bluetooth library.
@@ -93,90 +140,47 @@ fn hook_library(library_name: &str) -> anyhow::Result<()> {
     );
 
     let elf_data = std::fs::read(&module.path)?;
-    let elf_file = object::File::parse(elf_data.as_slice())?;
-
-    // Some Android builds strip symbols into a compressed .gnu_debugdata section.
-    let gnu_debugdata = elf_file
-        .section_by_name(".gnu_debugdata")
-        .and_then(|section| {
-            let mut reader = XzReader::new(section.data().ok()?, false);
-            let mut decompressed = vec![];
-            reader.read_to_end(&mut decompressed).ok()?;
-            Some(decompressed)
-        });
-    let gnu_debugdata_elf = gnu_debugdata
-        .as_ref()
-        .and_then(|data| object::File::parse(data.as_slice()).ok());
-
-    // Look up symbol in main ELF, falling back to .gnu_debugdata.
-    let find_symbol = |name: &str| -> Option<u64> {
-        find_symbol_offset(&elf_file, name).or_else(|| {
-            gnu_debugdata_elf
-                .as_ref()
-                .and_then(|f| find_symbol_offset(f, name))
-        })
+    let elf = object::File::parse(elf_data.as_slice())?;
+    let debugdata = gnu_debugdata(&elf);
+    let library = Library {
+        hook_fn,
+        base: module.base_address,
+        elfs: std::iter::once(elf)
+            .chain(
+                debugdata
+                    .as_deref()
+                    .and_then(|data| object::File::parse(data).ok()),
+            )
+            .collect(),
     };
-    let find_exact = |name: &str| -> Option<u64> {
-        find_exact_symbol_offset(&elf_file, name).or_else(|| {
-            gnu_debugdata_elf
-                .as_ref()
-                .and_then(|f| find_exact_symbol_offset(f, name))
-        })
-    };
-
-    // Functions the hooks call, not hook.
-    let function = |name: &str| {
-        let address = find_exact(name).map(|offset| module.base_address + offset as usize);
-        if address.is_none() {
-            tracing::error!(symbol = name, "symbol not found");
-        }
-        address
-    };
-    if let Some(clear) = function(remote_suspend::CLEAR_REMOTE_SUSPEND) {
-        let _ = remote_suspend::CLEAR.set(unsafe {
-            std::mem::transmute::<usize, remote_suspend::ClearRemoteSuspend>(clear)
-        });
-    }
-    if let Some(start) = function(remote_suspend::START) {
-        let _ = remote_suspend::START_FN
-            .set(unsafe { std::mem::transmute::<usize, remote_suspend::Start>(start) });
-    }
 
     unsafe {
-        install_hook(
-            hook_fn,
-            module.base_address,
-            find_symbol(l2c_fcr_chk_chan_modes::SYMBOL),
-            l2c_fcr_chk_chan_modes::l2c_fcr_chk_chan_modes as *mut c_void,
+        library.resolve(remote_suspend::CLEAR_REMOTE_SUSPEND, &remote_suspend::CLEAR);
+        library.resolve(remote_suspend::START, &remote_suspend::START_FN);
+        library.hook(
+            Name::Containing(l2c_fcr_chk_chan_modes::SYMBOL),
+            l2c_fcr_chk_chan_modes::l2c_fcr_chk_chan_modes as l2c_fcr_chk_chan_modes::Signature,
             &l2c_fcr_chk_chan_modes::ORIGINAL_FN,
-            l2c_fcr_chk_chan_modes::SYMBOL,
         );
-        install_hook(
-            hook_fn,
-            module.base_address,
-            find_symbol(bta_dm_set_local_di_record::SYMBOL),
-            bta_dm_set_local_di_record::BTA_DmSetLocalDiRecord as *mut c_void,
+        library.hook(
+            Name::Containing(bta_dm_set_local_di_record::SYMBOL),
+            bta_dm_set_local_di_record::bta_dm_set_local_di_record
+                as bta_dm_set_local_di_record::Signature,
             &bta_dm_set_local_di_record::ORIGINAL_FN,
-            bta_dm_set_local_di_record::SYMBOL,
         );
         // The interface's member where it exists (Android 17): the free
         // function forwards to it.
-        match find_exact(remote_suspend::IMPL_DATA_WRITE) {
-            Some(offset) => install_hook(
-                hook_fn,
-                module.base_address,
-                Some(offset),
-                remote_suspend::calvados_impl_l2ca_data_write as *mut c_void,
+        let member = Name::Exact(remote_suspend::IMPL_DATA_WRITE);
+        match library.find(member) {
+            Some(_) => library.hook(
+                member,
+                remote_suspend::impl_l2ca_data_write as remote_suspend::ImplDataWrite,
                 &remote_suspend::ORIGINAL_IMPL_DATA_WRITE,
-                remote_suspend::IMPL_DATA_WRITE,
             ),
-            None => install_hook(
-                hook_fn,
-                module.base_address,
-                find_exact(remote_suspend::DATA_WRITE),
-                remote_suspend::L2CA_DataWrite as *mut c_void,
+            None => library.hook(
+                Name::Exact(remote_suspend::DATA_WRITE),
+                remote_suspend::l2ca_data_write as remote_suspend::DataWrite,
                 &remote_suspend::ORIGINAL_DATA_WRITE,
-                remote_suspend::DATA_WRITE,
             ),
         }
     }
@@ -187,7 +191,6 @@ fn hook_library(library_name: &str) -> anyhow::Result<()> {
 /// # Safety
 /// `name` must be either a valid C string or null.
 #[unsafe(no_mangle)]
-#[tracing::instrument]
 pub unsafe extern "C" fn on_library_loaded(name: *const c_char, _handle: *mut c_void) {
     if name.is_null() {
         return;
@@ -237,7 +240,6 @@ static HOOK_FUNC: OnceLock<HookFn> = OnceLock::new();
 /// # Safety
 /// `entries` must be a valid pointer.
 #[unsafe(no_mangle)]
-#[tracing::instrument]
 pub unsafe extern "C" fn native_init(entries: *const LSPosedNativeApiEntries) -> OnModuleLoaded {
     tracing_subscriber::registry()
         .with(
@@ -246,7 +248,6 @@ pub unsafe extern "C" fn native_init(entries: *const LSPosedNativeApiEntries) ->
         )
         .with(
             paranoid_android::layer(env!("CARGO_CRATE_NAME"))
-                .with_span_events(FmtSpan::CLOSE)
                 .with_file(true)
                 .with_line_number(true)
                 .with_thread_names(true)

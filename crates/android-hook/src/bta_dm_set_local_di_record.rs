@@ -33,9 +33,7 @@ pub struct SdpDiRecord {
 /// This function sets the local Device Information record in SDP.
 /// We modify it to spoof Apple's vendor ID (0x004C) so AirPods
 /// trust the connection.
-#[unsafe(no_mangle)]
-#[tracing::instrument]
-pub unsafe extern "C" fn BTA_DmSetLocalDiRecord(
+pub unsafe extern "C" fn bta_dm_set_local_di_record(
     p_device_info: *mut SdpDiRecord,
     p_handle: *mut u32,
 ) -> BtaStatus {

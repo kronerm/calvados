@@ -82,8 +82,7 @@ unsafe fn observe(p_data: *const BtHdr) {
     }
 }
 
-#[unsafe(no_mangle)]
-pub unsafe extern "C" fn L2CA_DataWrite(cid: u16, p_data: *mut BtHdr) -> u8 {
+pub unsafe extern "C" fn l2ca_data_write(cid: u16, p_data: *mut BtHdr) -> u8 {
     // Before the original takes the buffer.
     unsafe { observe(p_data) };
     match ORIGINAL_DATA_WRITE.get() {
@@ -92,8 +91,7 @@ pub unsafe extern "C" fn L2CA_DataWrite(cid: u16, p_data: *mut BtHdr) -> u8 {
     }
 }
 
-#[unsafe(no_mangle)]
-pub unsafe extern "C" fn calvados_impl_l2ca_data_write(
+pub unsafe extern "C" fn impl_l2ca_data_write(
     this: *mut c_void,
     cid: u16,
     p_data: *mut BtHdr,
