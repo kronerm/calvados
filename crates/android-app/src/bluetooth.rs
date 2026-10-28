@@ -223,14 +223,14 @@ mod prefs {
 }
 
 /// The running `PersistentService`, which is also the A2DP `ServiceListener`.
-pub(crate) static SERVICE: Mutex<Option<Arc<Global<JObject<'static>>>>> = Mutex::new(None);
+static SERVICE: Mutex<Option<Arc<Global<JObject<'static>>>>> = Mutex::new(None);
 
 /// MAC to connect once the A2DP proxy arrives.
-pub(crate) static PROXY_JOBS: Mutex<Vec<ProxyJob>> = Mutex::new(Vec::new());
+static PROXY_JOBS: Mutex<Vec<ProxyJob>> = Mutex::new(Vec::new());
 
 /// Work waiting for the A2DP profile proxy, which arrives asynchronously.
 #[derive(Debug)]
-pub(crate) enum ProxyJob {
+enum ProxyJob {
     /// Connect A2DP to this MAC.
     Connect(MacAddress),
     /// Report whether paired AirPods are connected right now.

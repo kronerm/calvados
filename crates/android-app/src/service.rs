@@ -471,14 +471,14 @@ fn toggle(engine: &mut Engine, setting: Setting) {
 }
 
 /// Start connecting to the paired AirPods; returns their MAC.
-pub(crate) fn connect_to_airpods() -> anyhow::Result<MacAddress> {
+fn connect_to_airpods() -> anyhow::Result<MacAddress> {
     let mac =
         bluetooth::paired_airpods()?.ok_or_else(|| anyhow::anyhow!("no paired AirPods found"))?;
     link::connect(mac, |event| post(Event::Bluetooth(event)));
     Ok(mac)
 }
 
-pub(crate) fn resolve_local_mac() -> Option<MacAddress> {
+fn resolve_local_mac() -> Option<MacAddress> {
     match bluetooth::local_mac() {
         Ok(Some(mac)) => {
             tracing::info!(%mac, "local MAC known, smart routing enabled");

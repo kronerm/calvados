@@ -1,6 +1,6 @@
 //! Calvados Android app: the foreground service behind `PersistentService.java`.
 
-pub use protocol as proto;
+use protocol as proto;
 
 mod bluetooth;
 mod exports;

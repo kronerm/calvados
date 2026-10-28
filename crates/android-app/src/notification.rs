@@ -23,12 +23,12 @@ use crate::proto::state::PeerUpdate;
 use crate::proto::update::UpdateStatus;
 use crate::service::Conn;
 
-pub(crate) const CHANNEL_ID: &str = "calvados_persistent";
+const CHANNEL_ID: &str = "calvados_persistent";
 
-pub(crate) const NOTIFICATION_ID: i32 = 1;
+const NOTIFICATION_ID: i32 = 1;
 
 /// `Notification.FOREGROUND_SERVICE_IMMEDIATE`
-pub(crate) const FOREGROUND_SERVICE_IMMEDIATE: i32 = 1;
+const FOREGROUND_SERVICE_IMMEDIATE: i32 = 1;
 
 /// Create the notification channel and enter the foreground with a
 /// placeholder; the loop replaces it within one tick.

@@ -21,10 +21,10 @@ use crate::proto::MacAddress;
 use crate::proto::connection::{AIRPODS_PSM, AIRPODS_UUID};
 
 /// Android's hidden `BluetoothSocket.TYPE_L2CAP`.
-pub(crate) const TYPE_L2CAP: i32 = 3;
+const TYPE_L2CAP: i32 = 3;
 
 /// "No existing fd" for the socket constructors that take one.
-pub(crate) const NO_FD: i32 = -1;
+const NO_FD: i32 = -1;
 
 #[derive(Debug, Clone)]
 pub(crate) enum BluetoothEvent {
@@ -34,16 +34,16 @@ pub(crate) enum BluetoothEvent {
     Closed(String),
 }
 
-pub(crate) type Socket = BluetoothSocket<Global<JObject<'static>>>;
+type Socket = BluetoothSocket<Global<JObject<'static>>>;
 
 /// The current link. `generation` bumps on every connect/disconnect, so a
 /// stale connect attempt or read loop can tell it has been superseded.
-pub(crate) struct Link {
+struct Link {
     generation: u64,
     socket: Option<Arc<Socket>>,
 }
 
-pub(crate) static LINK: Mutex<Link> = Mutex::new(Link {
+static LINK: Mutex<Link> = Mutex::new(Link {
     generation: 0,
     socket: None,
 });
@@ -111,13 +111,13 @@ pub(crate) fn send(data: &[u8]) -> anyhow::Result<()> {
     with_env(|env| socket.get_output_stream(env)?.write(env, data))
 }
 
-pub(crate) fn close(socket: &Socket) {
+fn close(socket: &Socket) {
     if let Err(e) = with_env(|env| socket.close(env)) {
         tracing::warn!("closing socket failed: {e:#}");
     }
 }
 
-pub(crate) fn open_socket(mac: MacAddress) -> anyhow::Result<Socket> {
+fn open_socket(mac: MacAddress) -> anyhow::Result<Socket> {
     tracing::info!(%mac, "connecting AACP");
     with_env(|env| {
         let adapter = BluetoothAdapter::default_adapter(env)?;
@@ -130,7 +130,7 @@ pub(crate) fn open_socket(mac: MacAddress) -> anyhow::Result<Socket> {
 
 /// The L2CAP `BluetoothSocket` constructor is hidden and its signature varies
 /// across Android releases, so try every known argument order via reflection.
-pub(crate) fn create_l2cap_socket<'local>(
+fn create_l2cap_socket<'local>(
     env: &mut Env<'local>,
     adapter: &BluetoothAdapter<JObject<'_>>,
     device: &BluetoothDevice<JObject<'_>>,
