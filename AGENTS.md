@@ -11,7 +11,7 @@ the reasoning behind individual changes lives in commit messages.
 | `firmware-fetch` | Apple's firmware catalog and the update's package, for both platforms | Blocking I/O (ureq, zip); the platforms pick the thread and the cache dir. |
 | `linux` (binary `calvados`) | BlueZ daemon (`bluer`, tokio, D-Bus via `zbus`) | Transport + effects only; all decisions come from `Engine`. |
 | `android-app` (`libcalvados.so`) | Android foreground service (cdylib) + thin Java shell | Transport + effects + notification; decisions from `Engine`. |
-| `android-hook` (`libcalvados_hook.so`) | LSPosed native hook in the system Bluetooth process | `#![cfg(target_os = "android")]`; empty on the host. |
+| `android-hook` (`libcalvados_hook.so`) | Native hook in the system Bluetooth process: Apple's Device ID (`BTA_DmSetLocalDiRecord`), L2CAP channel modes (`l2c_fcr_chk_chan_modes`, forced to pass; Android 17's stack accepts them itself, it logs which), the remote suspend after a take (below). Symbols from `libbluetooth_jni.so`'s `.gnu_debugdata` | `#![cfg(target_os = "android")]`; empty on the host. |
 | `android-xposed` | Host build tool: the app via cargo-apk2, then the same APK made the Xposed module (the hook, the entry class as `classes2.dex`, `META-INF/xposed`; libxposed API 101+, targeting 102: Vector 2.1+; the compile-only API in `assets/libxposed-api.jar`), aligned and signed again with cargo-apk2's key | Shells out to cargo-apk2 and SDK tools. |
 
 ## Building
@@ -260,7 +260,9 @@ power-on (`LinkChange`). Its length caps at 255, i.e. 15 events.
   `Event::Package`; the package is cached in the app's cache dir
   (`getCacheDir`, `<build>.uarp`). Hence the `INTERNET` permission, the
   app's only network use.
-- `link.rs` — the AACP L2CAP socket (connect / send / read thread).
+- `link.rs` — the AACP L2CAP socket (connect / send / read thread),
+  through a hidden `BluetoothSocket` constructor by reflection, trying each
+  known argument order (Android 17 takes the `BluetoothAdapter` first).
 - `bluetooth.rs` — paired AirPods, local MAC, A2DP routing, and the
   presence scan: a `BluetoothLeScanner` scan (Apple manufacturer data `07`
   with the lid open, masked: pods charging in the closed case advertise
@@ -584,15 +586,21 @@ texts are written twice. A change to one side needs the other:
   PipeWire profile off and pauses its MPRIS players (otherwise playback
   falls back to the speakers); Android sends a pause key, as the pods do too.
 - Android after a take: the pods remotely suspended our A2DP stream when
-  another host took over, and `btif_av` won't restart a remotely suspended
-  stream; only rebuilding the audio output clears it (a seek, or Android
-  after ~10 s of a stalled output). `RouteAudio` therefore toggles
+  another host took over, and `btif_av` then sets `kFlagRemoteSuspend`,
+  refusing every start from the audio HAL until a local suspend or the
+  remote's AVRCP PLAY (AOSP `btif_av.cc`), which the pods never send: the
+  take stays silent until a seek. The hook clears it: it watches L2CAP
+  sends (`l2cap::Impl::L2CA_DataWrite` on Android 17, else the free
+  `L2CA_DataWrite`) for our AACP `OwnsConnection = 1` claim and calls
+  `btif_av_clear_remote_suspend_flag(kSource)` and
+  `btif_av_stream_start_with_latency(false)` (the Pixel HAL doesn't ask
+  again by itself). Takes back to the phone are then immediate (Android
+  17, Pixel 9). A take without a claim (`PodsOwner` already us) isn't
+  covered. Before that, `RouteAudio` toggled
   `AudioManager.setParameters("A2dpSuspended=true/false")`, 200 ms apart,
-  right away: the output is torn down (to no device, not the speaker) and
-  rebuilt; the source switches right after (~0.5 s after the take).
-  Every take after another host had the audio stalls, so Android ignores
-  the stream check (waiting first cost ~1 s). Verified on a Pixel 9
-  (Android 16); it's HAL-dependent.
+  which rebuilt the output (a local suspend) on Android 16; it still does,
+  but Android 17's Pixel HAL ignores it (`setEnabled: skipped when
+  AMSCO`). Android ignores the stream check (waiting first cost ~1 s).
 - A paused Android player leaves its A2DP stream started; the pods
   suspend it only when they switch, and they don't switch within ~5 s of
   switching to this host (the Linux stall: a laptop take right after a
