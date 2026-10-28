@@ -23,26 +23,26 @@ enum Command {
 
 pub struct Media {
     commands: mpsc::UnboundedSender<Command>,
-    /// The last player status change: `Some(true)` once one starts playing.
-    playback: watch::Receiver<Option<bool>>,
+    /// The last player status change: `true` once one starts playing.
+    playback: watch::Receiver<bool>,
 }
 
 impl Media {
     pub async fn spawn() -> zbus::Result<Self> {
         let bus = Connection::session().await?;
         let (commands, rx) = mpsc::unbounded_channel();
-        let (playback_tx, playback) = watch::channel(None);
+        let (playback_tx, playback) = watch::channel(false);
         let changes = playback_changes(&bus).await?;
         tokio::spawn(run(bus, rx));
         // Changes only: players repeat their status (Plezy every second
         // while playing), and each `true` would be media starting again.
         tokio::spawn(changes.for_each(move |playing| {
             playback_tx.send_if_modified(|last| {
-                let changed = *last != Some(playing);
+                let changed = *last != playing;
                 if changed {
                     tracing::debug!(playing, "MPRIS playback changed");
                 }
-                *last = Some(playing);
+                *last = playing;
                 changed
             });
             std::future::ready(())
@@ -51,7 +51,7 @@ impl Media {
     }
 
     /// Player status changes from now on: `true` when one starts playing.
-    pub fn playback(&self) -> watch::Receiver<Option<bool>> {
+    pub fn playback(&self) -> watch::Receiver<bool> {
         let mut playback = self.playback.clone();
         playback.mark_unchanged();
         playback

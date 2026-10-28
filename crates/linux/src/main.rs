@@ -434,11 +434,11 @@ async fn connected_airpods(adapter: &bluer::Adapter) -> (bluer::Device, Link) {
 }
 
 /// The next local player status change; never, without MPRIS.
-async fn playback_change(playback: &mut Option<watch::Receiver<Option<bool>>>) -> Option<bool> {
+async fn playback_change(playback: &mut Option<watch::Receiver<bool>>) -> Option<bool> {
     match playback {
         Some(rx) => {
             rx.changed().await.ok()?;
-            *rx.borrow_and_update()
+            Some(*rx.borrow_and_update())
         }
         None => std::future::pending().await,
     }
