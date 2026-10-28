@@ -82,27 +82,10 @@ impl News {
     }
 }
 
-const REFUSALS: [Refusal; 7] = [
-    Refusal::NotConnected,
-    Refusal::NoRelease,
-    Refusal::Running,
-    Refusal::PeerRunning,
-    Refusal::NotInCase,
-    Refusal::VersionUnknown,
-    Refusal::NotNewer,
-];
-
 fn failure_code(failure: Failure) -> (u8, u8) {
     match failure {
         Failure::Download => (1, 0),
-        Failure::Refused(refusal) => (
-            2,
-            REFUSALS
-                .iter()
-                .position(|known| *known == refusal)
-                .and_then(|at| u8::try_from(at).ok())
-                .unwrap_or(u8::MAX),
-        ),
+        Failure::Refused(refusal) => (2, refusal.into()),
         // 3, 4, 5.
         Failure::Rejected(rejection, reason) => (u8::from(rejection) + 1, reason),
         Failure::NotStarted => (6, 0),
@@ -115,7 +98,7 @@ fn failure_code(failure: Failure) -> (u8, u8) {
 fn failure_of(code: u8, argument: u8) -> Option<Failure> {
     Some(match code {
         1 => Failure::Download,
-        2 => Failure::Refused(*REFUSALS.get(usize::from(argument))?),
+        2 => Failure::Refused(Refusal::try_from(argument).ok()?),
         3..=5 => Failure::Rejected(Rejection::try_from(code - 1).ok()?, argument),
         6 => Failure::NotStarted,
         7 => Failure::Stalled,

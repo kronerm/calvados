@@ -140,10 +140,13 @@ impl fmt::Display for Failure {
     }
 }
 
-/// Why an update isn't started.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+/// Why an update isn't started; the values are its code in [`crate::news`].
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, num_enum::TryFromPrimitive, num_enum::IntoPrimitive,
+)]
+#[repr(u8)]
 pub enum Refusal {
-    NotConnected,
+    NotConnected = 0,
     /// No release known for the pods yet (the platform's catalog check).
     NoRelease,
     /// This host already updates them.
