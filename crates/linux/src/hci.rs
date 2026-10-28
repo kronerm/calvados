@@ -15,6 +15,7 @@ use std::os::fd::{AsRawFd as _, FromRawFd as _, OwnedFd};
 use std::time::{Duration, Instant};
 
 use protocol::MacAddress;
+use protocol::aacp::HexDump;
 use protocol::connection::AIRPODS_PSM;
 
 const BTPROTO_HCI: libc::c_int = 1;
@@ -171,7 +172,7 @@ fn log(note: &Note) {
             label,
             signal = avdtp_signal(*signal),
             kind = avdtp_message(*message),
-            rest = %HexBytes(rest),
+            rest = ?HexDump(rest),
             "hci: avdtp"
         ),
         Note::Avrcp {
@@ -187,7 +188,7 @@ fn log(note: &Note) {
             "hci: avrcp"
         ),
         Note::MediaFlowing { dir } => tracing::debug!(%dir, "hci: a2dp media flowing"),
-        Note::Aacp { dir, frame } => tracing::debug!(%dir, hex = %HexBytes(frame), "hci: aacp"),
+        Note::Aacp { dir, frame } => tracing::debug!(%dir, hex = ?HexDump(frame), "hci: aacp"),
     }
 }
 
@@ -686,17 +687,6 @@ struct Hex(u8);
 impl fmt::Display for Hex {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "0x{:02x}", self.0)
-    }
-}
-
-struct HexBytes<'a>(&'a [u8]);
-
-impl fmt::Display for HexBytes<'_> {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        self.0.iter().enumerate().try_for_each(|(i, byte)| match i {
-            0 => write!(f, "{byte:02x}"),
-            _ => write!(f, " {byte:02x}"),
-        })
     }
 }
 

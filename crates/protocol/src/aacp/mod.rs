@@ -111,7 +111,7 @@ impl std::fmt::Debug for Opaque {
 }
 
 /// Bytes as space-separated hex, `01 55 00`.
-pub(crate) struct HexDump<'a>(pub &'a [u8]);
+pub struct HexDump<'a>(pub &'a [u8]);
 
 impl std::fmt::Debug for HexDump<'_> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
