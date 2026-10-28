@@ -12,7 +12,7 @@ use std::fmt;
 use std::time::{Duration, Instant};
 
 use crate::aacp::control_command::Cycle;
-use crate::firmware::{ExactVersion, Version};
+use crate::firmware::ExactVersion;
 use crate::state::DeviceState;
 use crate::superbinary::Package;
 use crate::uarp::{MAX_DATA, Message, Processing, Received, UNKNOWN_ASSET};
@@ -202,7 +202,7 @@ impl std::error::Error for Refusal {}
 pub fn check(state: &DeviceState, version: ExactVersion) -> Result<(), Refusal> {
     let newer = match (state.firmware.exact, state.firmware.version()) {
         (Some(exact), _) => version > exact,
-        (None, Some(running)) => version.version > running,
+        (None, Some(running)) => version.major_minor() > running,
         (None, None) => return Err(Refusal::VersionUnknown),
     };
     match (state.in_case(), newer) {
@@ -559,37 +559,27 @@ impl News {
     /// two arguments + version (zero unless done), or `3` + the cycle's
     /// mask.
     pub fn encode(self) -> Vec<u8> {
-        let version = |version: ExactVersion| {
-            [
-                version.version.major,
-                version.version.minor,
-                version.release,
-            ]
-            .into_iter()
-            .flat_map(u32::to_be_bytes)
-            .collect::<Vec<_>>()
-        };
-        let none = ExactVersion {
-            version: Version { major: 0, minor: 0 },
-            release: 0,
-        };
         let body = match self {
-            Self::Firmware(running) => [&[1][..], &version(running)].concat(),
+            Self::Firmware(running) => [&[1][..], &running.to_be_bytes()].concat(),
             Self::Update(status) => {
-                let (state, a, b, done) = match status {
-                    UpdateStatus::Downloading => (1, 0, 0, none),
-                    UpdateStatus::Offered => (2, 0, 0, none),
-                    UpdateStatus::Deferred => (3, 0, 0, none),
-                    UpdateStatus::Transferring { percent } => (4, percent, 0, none),
-                    UpdateStatus::Interrupted { percent } => (5, percent, 0, none),
-                    UpdateStatus::Staged => (6, 0, 0, none),
-                    UpdateStatus::Done(version) => (7, 0, 0, version),
+                let (state, a, b) = match status {
+                    UpdateStatus::Downloading => (1, 0, 0),
+                    UpdateStatus::Offered => (2, 0, 0),
+                    UpdateStatus::Deferred => (3, 0, 0),
+                    UpdateStatus::Transferring { percent } => (4, percent, 0),
+                    UpdateStatus::Interrupted { percent } => (5, percent, 0),
+                    UpdateStatus::Staged => (6, 0, 0),
+                    UpdateStatus::Done(_) => (7, 0, 0),
                     UpdateStatus::Failed(failure) => {
                         let (code, argument) = failure_code(failure);
-                        (8, code, argument, none)
+                        (8, code, argument)
                     }
                 };
-                [&[2, state, a, b][..], &version(done)].concat()
+                let done = match status {
+                    UpdateStatus::Done(version) => version.to_be_bytes(),
+                    _ => [0; 12],
+                };
+                [&[2, state, a, b][..], &done].concat()
             }
             Self::Cycle(cycle) => vec![3, cycle.modes().bits()],
         };
@@ -603,22 +593,7 @@ impl News {
         if format != Self::FORMAT {
             return None;
         }
-        let version = |bytes: &[u8]| {
-            let words = bytes
-                .get(..12)?
-                .as_chunks::<4>()
-                .0
-                .iter()
-                .map(|word| u32::from_be_bytes(*word))
-                .collect::<Vec<_>>();
-            let [major, minor, release] = words[..] else {
-                return None;
-            };
-            Some(ExactVersion {
-                version: Version { major, minor },
-                release,
-            })
-        };
+        let version = |bytes: &[u8]| bytes.first_chunk().map(ExactVersion::from_be_bytes);
         match rest {
             [1, running @ ..] => Some(Self::Firmware(version(running)?)),
             [2, state, a, b, done @ ..] => Some(Self::Update(match (state, a) {
@@ -1045,6 +1020,33 @@ mod tests {
             .chain([News::Firmware(version), News::Cycle(Cycle::OFFERED)]);
         for news in news {
             assert_eq!(News::decode(&news.encode()), Some(news));
+        }
+        // The wire format, after `calvados` and the format.
+        let zeros = "0".repeat(24);
+        for (news, hex) in [
+            (
+                News::Firmware(version),
+                "0100000009000000000000015c".to_owned(),
+            ),
+            (
+                News::Update(UpdateStatus::Done(version)),
+                "0207000000000009000000000000015c".to_owned(),
+            ),
+            (
+                News::Update(UpdateStatus::Transferring { percent: 40 }),
+                format!("02042800{zeros}"),
+            ),
+            (
+                News::Update(UpdateStatus::Failed(Failure::Denied { reason: 2 })),
+                format!("02080302{zeros}"),
+            ),
+            (
+                News::Update(UpdateStatus::Failed(Failure::Refused(Refusal::NotInCase))),
+                format!("02080204{zeros}"),
+            ),
+            (News::Cycle(Cycle::OFFERED), "030e".to_owned()),
+        ] {
+            assert_eq!(hex::encode(&news.encode()[9..]), hex, "{news:?}");
         }
         let firmware = News::Firmware(version).encode();
         assert!(firmware.starts_with(b"calvados\x01\x01"));

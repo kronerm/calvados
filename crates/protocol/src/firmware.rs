@@ -44,13 +44,41 @@ impl fmt::Display for Version {
 /// catalog names. Several releases share a major.minor.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub struct ExactVersion {
-    pub version: Version,
+    pub major: u32,
+    pub minor: u32,
     pub release: u32,
+}
+
+impl ExactVersion {
+    pub fn major_minor(self) -> Version {
+        Version {
+            major: self.major,
+            minor: self.minor,
+        }
+    }
+
+    /// Major, minor and release as u32 BE, as UARP and `News` carry it.
+    pub fn to_be_bytes(self) -> [u8; 12] {
+        let words = [self.major, self.minor, self.release].map(u32::to_be_bytes);
+        let mut bytes = [0; 12];
+        bytes.copy_from_slice(words.as_flattened());
+        bytes
+    }
+
+    pub fn from_be_bytes(bytes: &[u8; 12]) -> Self {
+        let [major, minor, release] =
+            [0, 4, 8].map(|at| u32::from_be_bytes(*bytes[at..].first_chunk().expect("12 bytes")));
+        Self {
+            major,
+            minor,
+            release,
+        }
+    }
 }
 
 impl fmt::Display for ExactVersion {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "{}.{}", self.version, self.release)
+        write!(f, "{}.{}", self.major_minor(), self.release)
     }
 }
 
@@ -65,7 +93,8 @@ impl FromStr for ExactVersion {
             .ok_or(())?[..]
         {
             [major, minor, release] => Ok(Self {
-                version: Version { major, minor },
+                major,
+                minor,
                 release,
             }),
             _ => Err(()),
@@ -105,7 +134,7 @@ impl Firmware {
     /// The major.minor, exact or reported.
     pub fn version(&self) -> Option<Version> {
         self.exact
-            .map(|exact| exact.version)
+            .map(ExactVersion::major_minor)
             .or_else(|| Version::of_running(self.reported.as_deref()?))
     }
 }
@@ -127,7 +156,7 @@ impl Release {
     pub fn is_newer_than(&self, running: &Firmware) -> bool {
         match (running.exact, running.version()) {
             (Some(exact), _) => self.version > exact,
-            (None, Some(version)) => self.version.version > version,
+            (None, Some(version)) => self.version.major_minor() > version,
             (None, None) => false,
         }
     }

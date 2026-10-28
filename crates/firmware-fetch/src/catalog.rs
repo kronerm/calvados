@@ -1,6 +1,6 @@
 //! Apple's firmware catalog: where each model's is, and its current release.
 
-use protocol::firmware::{ExactVersion, Release, Version};
+use protocol::firmware::{ExactVersion, Release};
 
 /// Models of one product: the catalog serves some and refuses others (403),
 /// and the served ones carry the same build. Served first.
@@ -44,10 +44,8 @@ pub fn parse(xml: &[u8]) -> Option<Release> {
                     .zip(text("__RelativePath"))
                     .map(|(base, path)| format!("{base}{path}")),
                 version: ExactVersion {
-                    version: Version {
-                        major: number("FirmwareVersionMajor")?,
-                        minor: number("FirmwareVersionMinor")?,
-                    },
+                    major: number("FirmwareVersionMajor")?,
+                    minor: number("FirmwareVersionMinor")?,
                     release: number("FirmwareVersionRelease")?,
                 },
                 build: text("Build")?.to_owned(),

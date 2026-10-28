@@ -7,7 +7,7 @@ use std::ops::Range;
 
 use sha2::{Digest as _, Sha256};
 
-use crate::firmware::{ExactVersion, Version};
+use crate::firmware::ExactVersion;
 
 /// Format, header length, binary length, version (4 × u32), metadata
 /// (offset, length), payload headers (offset, length).
@@ -153,8 +153,8 @@ impl Package {
         if usize::try_from(length).map_or(true, |len| len > bytes.len()) || length < HEADER_LEN {
             return Err(PackageError::Length(length));
         }
-        let [major, minor, release, _build] =
-            [12, 16, 20, 24].map(|at| be32(&bytes, at).unwrap_or(0));
+        let version =
+            ExactVersion::from_be_bytes(bytes[12..].first_chunk().ok_or(PackageError::TooShort)?);
         let raw_version = bytes[12..28]
             .try_into()
             .map_err(|_| PackageError::TooShort)?;
@@ -186,10 +186,7 @@ impl Package {
         }
         Ok(Self {
             raw_version,
-            version: ExactVersion {
-                version: Version { major, minor },
-                release,
-            },
+            version,
             length,
             payloads: u16::try_from(payloads.len())
                 .map_err(|_| PackageError::Range("payload count"))?,

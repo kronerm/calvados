@@ -9,7 +9,7 @@ use nom::IResult;
 use nom::Parser as _;
 
 use crate::aacp::frame::data_frame;
-use crate::firmware::{ExactVersion, Version};
+use crate::firmware::ExactVersion;
 
 /// AACP's opcode for UARP: `[len 2 LE]` + one whole message, both ways.
 pub const OPCODE: u16 = 0x4F;
@@ -333,19 +333,9 @@ pub fn running_version(message: &[u8]) -> Option<ExactVersion> {
     let running = kind == ReceivedType::InformationResponse as u16
         && u16::from_be_bytes(*status) == 0
         && u32::from_be_bytes(*tag) == InfoTag::RunningFirmware as u32;
-    let words = value
-        .as_chunks::<4>()
-        .0
-        .iter()
-        .map(|word| u32::from_be_bytes(*word))
-        .collect::<Vec<_>>();
-    match (running, words.as_slice()) {
-        (true, &[major, minor, release, ..]) => Some(ExactVersion {
-            version: Version { major, minor },
-            release,
-        }),
-        _ => None,
-    }
+    running
+        .then(|| value.first_chunk().map(ExactVersion::from_be_bytes))
+        .flatten()
 }
 
 #[cfg(test)]
