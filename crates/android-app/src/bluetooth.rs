@@ -25,9 +25,7 @@ use crate::proto::aacp::KeyType;
 use crate::proto::ble::{APPLE_COMPANY_ID, Pattern, PodsKeys};
 use crate::proto::settings::Setting;
 
-pub(crate) const PREFS_NAME: &str = "calvados_prefs";
-
-pub(crate) const KEY_LOCAL_MAC: &str = "local_bt_mac";
+const KEY_LOCAL_MAC: &str = "local_bt_mac";
 
 /// `BluetoothLeScanner.EXTRA_LIST_SCAN_RESULT`.
 const EXTRA_LIST_SCAN_RESULT: &str = "android.bluetooth.le.extra.LIST_SCAN_RESULT";
@@ -36,24 +34,13 @@ const NEARBY_REQUEST_CODE: i32 = 0x0B1E;
 
 /// A remembered setting (preferences), on until first turned off.
 pub(crate) fn load_setting(setting: Setting) -> bool {
-    with_env(|env| {
-        app_context(env)?
-            .get_shared_preferences(env, PREFS_NAME)?
-            .get_boolean(env, setting.key(), true)
-    })
-    .inspect_err(|e| tracing::warn!(?setting, "reading the setting: {e:#}"))
-    .unwrap_or(true)
+    prefs::boolean(setting.key(), true)
+        .inspect_err(|e| tracing::warn!(?setting, "reading the setting: {e:#}"))
+        .unwrap_or(true)
 }
 
 pub(crate) fn save_setting(setting: Setting, enabled: bool) {
-    let saved = with_env(|env| {
-        app_context(env)?
-            .get_shared_preferences(env, PREFS_NAME)?
-            .edit(env)?
-            .put_boolean(env, setting.key(), enabled)?
-            .apply(env)
-    });
-    if let Err(e) = saved {
+    if let Err(e) = prefs::put_boolean(setting.key(), enabled) {
         tracing::warn!(?setting, "remembering the setting: {e:#}");
     }
 }
@@ -73,13 +60,7 @@ fn key_preference(pods: MacAddress, kind: KeyType) -> String {
 }
 
 pub(crate) fn save_key(pods: MacAddress, kind: KeyType, key: [u8; 16]) -> anyhow::Result<()> {
-    with_env(|env| {
-        app_context(env)?
-            .get_shared_preferences(env, PREFS_NAME)?
-            .edit(env)?
-            .put_string(env, &key_preference(pods, kind), &hex::encode(key))?
-            .apply(env)
-    })
+    prefs::put_string(&key_preference(pods, kind), &hex::encode(key))
 }
 
 /// The paired pods and their stored keys, if the IRK is known.
@@ -88,12 +69,7 @@ pub(crate) fn stored_keys() -> anyhow::Result<Option<(MacAddress, PodsKeys)>> {
         return Ok(None);
     };
     let read = |kind| -> anyhow::Result<Option<[u8; 16]>> {
-        let stored = with_env(|env| {
-            app_context(env)?
-                .get_shared_preferences(env, PREFS_NAME)?
-                .get_string(env, &key_preference(pods, kind))
-        })?;
-        Ok(stored
+        Ok(prefs::string(&key_preference(pods, kind))?
             .and_then(|stored| hex::decode(stored).ok())
             .and_then(|key| key.try_into().ok()))
     };
@@ -188,22 +164,52 @@ pub(crate) fn paired_airpods() -> anyhow::Result<Option<String>> {
 /// This phone's Bluetooth MAC, as learned from the AirPods and saved; apps
 /// can't read it (`getAddress()` only answers privileged ones).
 pub(crate) fn local_mac() -> anyhow::Result<Option<MacAddress>> {
-    with_env(|env| {
-        let saved = app_context(env)?
-            .get_shared_preferences(env, PREFS_NAME)?
-            .get_string(env, KEY_LOCAL_MAC)?;
-        Ok(saved.and_then(|saved| saved.parse().ok()))
-    })
+    Ok(prefs::string(KEY_LOCAL_MAC)?.and_then(|saved| saved.parse().ok()))
 }
 
 pub(crate) fn save_local_mac(mac: MacAddress) -> anyhow::Result<()> {
-    with_env(|env| {
-        app_context(env)?
-            .get_shared_preferences(env, PREFS_NAME)?
-            .edit(env)?
-            .put_string(env, KEY_LOCAL_MAC, &mac.to_hex_string())?
-            .apply(env)
-    })
+    prefs::put_string(KEY_LOCAL_MAC, &mac.to_hex_string())
+}
+
+/// The app's preferences (`calvados_prefs`).
+mod prefs {
+    use jni::Env;
+    use jni::objects::JObject;
+
+    use crate::jni::android::content::shared_preferences::{Editor, SharedPreferences};
+    use crate::jni::{app_context, with_env};
+
+    fn open<'local>(env: &mut Env<'local>) -> anyhow::Result<SharedPreferences<JObject<'local>>> {
+        app_context(env)?.get_shared_preferences(env, "calvados_prefs")
+    }
+
+    fn edit(
+        put: impl for<'local> FnOnce(
+            &mut Env<'local>,
+            Editor<JObject<'local>>,
+        ) -> anyhow::Result<Editor<JObject<'local>>>,
+    ) -> anyhow::Result<()> {
+        with_env(|env| {
+            let editor = open(env)?.edit(env)?;
+            put(env, editor)?.apply(env)
+        })
+    }
+
+    pub(super) fn string(key: &str) -> anyhow::Result<Option<String>> {
+        with_env(|env| open(env)?.get_string(env, key))
+    }
+
+    pub(super) fn boolean(key: &str, default: bool) -> anyhow::Result<bool> {
+        with_env(|env| open(env)?.get_boolean(env, key, default))
+    }
+
+    pub(super) fn put_string(key: &str, value: &str) -> anyhow::Result<()> {
+        edit(|env, editor| editor.put_string(env, key, value))
+    }
+
+    pub(super) fn put_boolean(key: &str, value: bool) -> anyhow::Result<()> {
+        edit(|env, editor| editor.put_boolean(env, key, value))
+    }
 }
 
 /// The running `PersistentService`, which is also the A2DP `ServiceListener`.
