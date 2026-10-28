@@ -137,6 +137,17 @@ impl Firmware {
             .map(ExactVersion::major_minor)
             .or_else(|| Version::of_running(self.reported.as_deref()?))
     }
+
+    /// Whether `version` is newer: exactly when UARP told, else by
+    /// major.minor (`0x1D` carries no release number); `None` when unknown.
+    pub fn older_than(&self, version: ExactVersion) -> Option<bool> {
+        match self.exact {
+            Some(exact) => Some(exact < version),
+            None => self
+                .version()
+                .map(|running| running < version.major_minor()),
+        }
+    }
 }
 
 /// The catalog's current release.
@@ -151,14 +162,9 @@ pub struct Release {
 }
 
 impl Release {
-    /// Newer than what runs: exactly when UARP told, else by major.minor
-    /// (the `0x1D` string carries no release number).
+    /// Newer than what runs ([`Firmware::older_than`]); not while unknown.
     pub fn is_newer_than(&self, running: &Firmware) -> bool {
-        match (running.exact, running.version()) {
-            (Some(exact), _) => self.version > exact,
-            (None, Some(version)) => self.version.major_minor() > version,
-            (None, None) => false,
-        }
+        running.older_than(self.version).unwrap_or(false)
     }
 }
 

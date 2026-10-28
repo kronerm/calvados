@@ -196,15 +196,16 @@ impl fmt::Display for Refusal {
 impl std::error::Error for Refusal {}
 
 /// Whether pods in `state` take `version`: both buds in the open case (an
-/// AACP session reports their ears) and `version` newer than what they run:
-/// exactly when known, else by major.minor (equal counts as not newer).
-/// Power is the pods' call: they defer an offer until the case charges.
+/// AACP session reports their ears) and `version` newer than what they run
+/// ([`Firmware::older_than`]). Power is the pods' call: they defer an offer
+/// until the case charges.
+///
+/// [`Firmware::older_than`]: crate::firmware::Firmware::older_than
 pub fn check(state: &DeviceState, version: ExactVersion) -> Result<(), Refusal> {
-    let newer = match (state.firmware.exact, state.firmware.version()) {
-        (Some(exact), _) => version > exact,
-        (None, Some(running)) => version.major_minor() > running,
-        (None, None) => return Err(Refusal::VersionUnknown),
-    };
+    let newer = state
+        .firmware
+        .older_than(version)
+        .ok_or(Refusal::VersionUnknown)?;
     match (state.in_case(), newer) {
         (false, _) => Err(Refusal::NotInCase),
         (true, false) => Err(Refusal::NotNewer),

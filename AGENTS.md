@@ -121,9 +121,10 @@ main as the rolling pre-release `testing`: a release is
   `catalog`: `url`, `models` (a product's models, served first: AirPods
   Pro 2 USB-C asks A3048, the case A2968, then A3047, which gets a 403; an
   unknown model only itself) and `parse` (the `plist` crate; the newest of
-  `Assets`: `FirmwareVersionMajor`/`Minor`/`Release`, `Build`)). The running string carries no release number (9A348
-  is `90.…`; 7B19–7B21 all read 7.1), so `Release::is_newer_than`
-  compares exactly when UARP told, else major.minor only.
+  `Assets`: `FirmwareVersionMajor`/`Minor`/`Release`, `Build`)). The
+  running string carries no release number (9A348 is `90.…`; 7B19–7B21
+  all read 7.1), so `Firmware::older_than` (`Release::is_newer_than`,
+  `update::check`) compares exactly when UARP told, else major.minor only.
   `DeviceState::firmware` (`Firmware`: model, 0x1D string, exact version)
   is carried over a reconnect like the name, never stored: a session
   joining while another host is connected often gets no 0x1D (the phone,
