@@ -13,6 +13,7 @@ use crate::aacp::{
 };
 use crate::ble;
 use crate::firmware::ExactVersion;
+use crate::news::News;
 use crate::protocol::{
     self, handshake, hijack_sequence, request_notifications, session_setup_frames, set_cycle,
     set_noise_control, set_ownership,
@@ -21,7 +22,7 @@ use crate::settings::{Setting, Settings};
 use crate::state::DeviceState;
 use crate::superbinary::Package;
 use crate::uarp::{self, Message, Received};
-use crate::update::{self, Failure, News, Output, Refusal, UpdateStatus, Updater};
+use crate::update::{self, Failure, Output, Refusal, UpdateStatus, Updater};
 
 /// How long after the handshake, and after each retry, the startup is
 /// checked ([`Engine::check_startup`]).

@@ -1,10 +1,9 @@
 //! Wire level: splitting transport bytes into frames, and building commands.
 
-use crate::MacAddress;
 use crate::aacp::frame::{DATA_MAGIC, HANDSHAKE_ACK_MAGIC, HANDSHAKE_MAGIC, data_frame};
 use crate::aacp::{ControlId, Cycle, HexDump, NoiseControlMode, Packet, smart_routing};
 
-pub use smart_routing::{hijack_request, media_information, news, show_ui};
+pub use smart_routing::{hijack_sequence, news};
 
 // === Commands ===
 
@@ -69,15 +68,6 @@ pub fn set_cycle(cycle: Cycle) -> Vec<u8> {
         ControlId::ListeningModeConfigs,
         [cycle.modes().bits(), 0, 0, 0],
     )
-}
-
-/// The takeover sequence for one peer, sent after [`set_ownership`]`(true)`.
-pub fn hijack_sequence(local: MacAddress, peer: MacAddress) -> [Vec<u8>; 3] {
-    [
-        media_information(local, peer, true),
-        show_ui(peer),
-        hijack_request(peer),
-    ]
 }
 
 // === Framing ===

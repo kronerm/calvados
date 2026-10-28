@@ -9,7 +9,8 @@ use crate::aacp::{
     Routing, RoutingResponse,
 };
 use crate::firmware::Firmware;
-use crate::update::{News, UpdateStatus};
+use crate::news::News;
+use crate::update::UpdateStatus;
 
 #[derive(Debug, Clone, Default)]
 pub struct DeviceState {

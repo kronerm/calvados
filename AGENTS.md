@@ -171,7 +171,8 @@ main as the rolling pre-release `testing`: a release is
   the image to the other bud and applies both (~30 min). `check`: both
   buds in the case and the release newer than the
   running firmware, exactly when known, else by major.minor (equal is not
-  newer: the pods refuse equal and older anyway). `News`: calvados to
+  newer: the pods refuse equal and older anyway).
+- `news.rs` — `News`: calvados to
   calvados, `calvados` + format 1 + `1` exact firmware (3 × u32 BE),
   `2` + update state, two arguments, a version, or `3` + the cycle's mask;
   carried by smart routing

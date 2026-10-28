@@ -2,7 +2,7 @@
 //! `[peer mac 6, reversed]` followed by a string-keyed TLV blob.
 
 use crate::MacAddress;
-use crate::update::News;
+use crate::news::News;
 
 use super::frame::data_frame;
 
@@ -12,8 +12,6 @@ pub const RESPONSE_OPCODE: u16 = 0x11;
 /// A peer's routing frame, relayed by the pods. A peer taking the audio
 /// sends three: [`Routing::PeerMedia`], [`Routing::ShowNearbyUi`], then
 /// [`Routing::YieldRequest`] (our own [`hijack_sequence`] mirrors it).
-///
-/// [`hijack_sequence`]: crate::protocol::hijack_sequence
 #[derive(Debug, Clone, Copy)]
 #[cfg_attr(test, derive(PartialEq, Eq))]
 pub enum Routing {
@@ -95,12 +93,21 @@ fn frame(target: MacAddress, len: usize, fields: &[&[u8]]) -> Vec<u8> {
 pub fn news(target: MacAddress, news: News) -> Vec<u8> {
     let news = news.encode();
     let len = u16::try_from(news.len()).expect("short news");
-    let body = [&super::to_reversed(target)[..], &len.to_le_bytes(), &news].concat();
-    data_frame(OPCODE, &body)
+    frame(target, 8 + news.len(), &[&len.to_le_bytes(), &news])
+}
+
+/// The takeover sequence for one peer, sent after
+/// [`set_ownership`](crate::protocol::set_ownership)`(true)`.
+pub fn hijack_sequence(local: MacAddress, peer: MacAddress) -> [Vec<u8>; 3] {
+    [
+        media_information(local, peer, true),
+        show_ui(peer),
+        hijack_request(peer),
+    ]
 }
 
 /// Ask the firmware to move audio from `target` to us.
-pub fn hijack_request(target: MacAddress) -> Vec<u8> {
+fn hijack_request(target: MacAddress) -> Vec<u8> {
     frame(
         target,
         106,
@@ -123,7 +130,7 @@ pub fn hijack_request(target: MacAddress) -> Vec<u8> {
 }
 
 /// Tell the firmware about our streaming state.
-pub fn media_information(local: MacAddress, target: MacAddress, streaming: bool) -> Vec<u8> {
+fn media_information(local: MacAddress, target: MacAddress, streaming: bool) -> Vec<u8> {
     frame(
         target,
         138,
@@ -152,7 +159,7 @@ pub fn media_information(local: MacAddress, target: MacAddress, streaming: bool)
 }
 
 /// Make `target` show the "audio moved" banner.
-pub fn show_ui(target: MacAddress) -> Vec<u8> {
+fn show_ui(target: MacAddress) -> Vec<u8> {
     frame(
         target,
         134,
