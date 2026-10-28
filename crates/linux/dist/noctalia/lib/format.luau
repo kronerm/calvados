@@ -1,8 +1,12 @@
 --!nonstrict
--- Shared by the bar and the panel: glyphs and labels from `calvados watch`'s
--- state (Tabler glyphs, shipped with Noctalia).
+-- Shared by the entries: the state key, and glyphs and labels from
+-- `calvados watch`'s state (Tabler glyphs, shipped with Noctalia).
 
 local format = {}
+
+-- The `noctalia.state` key the service publishes `calvados watch`'s state
+-- under.
+format.STATE = "calvados.state"
 
 format.MODES = {
   { name = "anc", label = "Noise cancelling", short = "ANC", glyph = "ear-off" },
@@ -160,6 +164,11 @@ function format.update(state)
   local peer = state.peer_update
   line = updateLine(peer)
   return line and `{line} · {peer.host}` or nil
+end
+
+-- The daemon runs and the AirPods are connected.
+function format.connected(state)
+  return state.running == true and state.connected == true
 end
 
 function format.ownership(state)

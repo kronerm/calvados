@@ -5,7 +5,7 @@
 
 local format = require("./lib/format.luau")
 
-local state = noctalia.state.get("calvados.state") or { running = false }
+local state = noctalia.state.get(format.STATE) or { running = false }
 
 -- The daemon applies it; the next `watch` line re-renders.
 local function set(setting, value)
@@ -18,7 +18,7 @@ end
 
 local function header()
   local running = state.running == true
-  local connected = running and state.connected == true
+  local connected = format.connected(state)
   local title = not running and "Calvados isn't running"
     or (state.name ~= "" and state.name or "AirPods")
   local status = not running and "" or (connected and format.ownership(state) or "Not connected")
@@ -112,7 +112,7 @@ end
 -- selection: the host diffs retained nodes and keeps a dropped prop (the
 -- old fill), so a tile whose selection changed is built anew instead.
 local function noiseControl()
-  local connected = state.running == true and state.connected == true
+  local connected = format.connected(state)
   local tiles = {}
   for _, mode in ipairs(format.MODES) do
     local selected = state.noise_mode == mode.name
@@ -178,7 +178,7 @@ local function firmware()
     return nil
   end
   local line = ui.label({ text = text, fontSize = 12, color = "on_surface_variant", maxLines = 1, flexGrow = 1 })
-  local action = state.connected == true and format.updateAction(state)
+  local action = format.connected(state) and format.updateAction(state)
   if not action then
     return line
   end
@@ -223,7 +223,7 @@ local function render()
   panel.render(ui.column({ flexGrow = 1, gap = 18, align = "stretch" }, rows))
 end
 
-noctalia.state.watch("calvados.state", function(value)
+noctalia.state.watch(format.STATE, function(value)
   state = value or { running = false }
   render()
 end)

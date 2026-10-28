@@ -6,7 +6,7 @@
 
 local format = require("./lib/format.luau")
 
-local state = noctalia.state.get("calvados.state") or { running = false }
+local state = noctalia.state.get(format.STATE) or { running = false }
 
 local function tooltip()
   if state.running ~= true then
@@ -31,7 +31,7 @@ local function tooltip()
 end
 
 local function render()
-  local connected = state.running == true and state.connected == true
+  local connected = format.connected(state)
   local glyph = ui.glyph({
     name = "device-airpods",
     color = state.ownership == "owning" and "primary" or "on_surface",
@@ -61,7 +61,7 @@ local function render()
   barWidget.setTooltip(tooltip())
 end
 
-noctalia.state.watch("calvados.state", function(value)
+noctalia.state.watch(format.STATE, function(value)
   state = value or { running = false }
   render()
 end)
