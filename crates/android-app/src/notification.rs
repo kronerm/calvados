@@ -3,12 +3,11 @@
 use jni::JavaVM;
 use jni::objects::JObject;
 
-use crate::intents::{self, Request};
+use crate::intents::Request;
 use crate::jni::android::app::activity_thread::ActivityThread;
 use crate::jni::android::app::notification::{
     Action, DecoratedCustomViewStyle, Importance, Notification, NotificationChannel,
 };
-use crate::jni::android::app::pending_intent::{Flags, PendingIntent};
 use crate::jni::android::app::service::Service;
 use crate::jni::android::content::context::Context;
 use crate::jni::android::content::res::Resources;
@@ -246,10 +245,7 @@ impl Content {
         };
         let builder = match self.update_action {
             Some(action) => {
-                let intent = intents::service_intent(env, context, &action.request().action())?;
-                let flags = Flags::IMMUTABLE | Flags::UPDATE_CURRENT;
-                let pending =
-                    PendingIntent::get_foreground_service(env, context, 20, &intent, flags)?;
+                let pending = action.request().pending_intent(env, context, 20)?;
                 let action = Action::new(env, action.label(), &pending)?;
                 builder.add_action(env, &action)?
             }
@@ -487,10 +483,7 @@ impl<'local> Ui<'_, 'local> {
         request: Request,
     ) -> anyhow::Result<()> {
         let id = self.id(env, id)?;
-        let intent = intents::service_intent(env, context, &request.action())?;
-        let flags = Flags::IMMUTABLE | Flags::UPDATE_CURRENT;
-        let pending =
-            PendingIntent::get_foreground_service(env, context, request_code, &intent, flags)?;
+        let pending = request.pending_intent(env, context, request_code)?;
         self.views.set_on_click_pending_intent(env, id, &pending)
     }
 }

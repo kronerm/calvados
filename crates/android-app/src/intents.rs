@@ -4,6 +4,7 @@
 use jni::Env;
 use jni::objects::JObject;
 
+use crate::jni::android::app::pending_intent::{Flags, PendingIntent};
 use crate::jni::android::bluetooth::device::BluetoothDevice;
 use crate::jni::android::content::context::Context;
 use crate::jni::android::content::intent::Intent;
@@ -81,6 +82,19 @@ impl Request {
             Self::StartUpdate => ACTION_UPDATE_FIRMWARE.to_owned(),
             Self::CancelUpdate => ACTION_CANCEL_UPDATE.to_owned(),
         }
+    }
+
+    /// An immutable `PendingIntent` sending this to the service, one per
+    /// `request_code`.
+    pub(crate) fn pending_intent<'local>(
+        self,
+        env: &mut Env<'local>,
+        context: &Context<impl jni::refs::Reference + AsRef<JObject<'local>>>,
+        request_code: i32,
+    ) -> anyhow::Result<PendingIntent<JObject<'local>>> {
+        let intent = service_intent(env, context, &self.action())?;
+        let flags = Flags::IMMUTABLE | Flags::UPDATE_CURRENT;
+        PendingIntent::get_foreground_service(env, context, request_code, &intent, flags)
     }
 
     fn parse(action: &str) -> Option<Self> {
