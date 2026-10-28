@@ -117,7 +117,11 @@ pub(crate) fn post(event: Event) {
 /// AACP channel lifecycle; ownership lives in the [`Engine`].
 #[derive(Debug, Clone, Copy)]
 pub(crate) enum Conn {
-    Disconnected,
+    /// Attaching again at `attach_at` while the pods' ACL is up, so a
+    /// flapping channel can't busy-loop.
+    Disconnected {
+        attach_at: Instant,
+    },
     /// Awaiting `BluetoothEvent::Connected`.
     Connecting {
         mac: MacAddress,
@@ -127,6 +131,15 @@ pub(crate) enum Conn {
     },
 }
 
+impl Conn {
+    /// A channel just dropped: attach again after [`RECONNECT_DELAY`].
+    fn dropped(now: Instant) -> Self {
+        Self::Disconnected {
+            attach_at: now + RECONNECT_DELAY,
+        }
+    }
+}
+
 fn service_main(jvm: JavaVM, events: crossbeam_channel::Receiver<Event>) {
     // `None` disables the peer handoff; local playback still works.
     let settings = Settings::load(bluetooth::load_setting);
@@ -134,16 +147,15 @@ fn service_main(jvm: JavaVM, events: crossbeam_channel::Receiver<Event>) {
     // L2CAP is a byte stream here; reset per socket.
     let mut decoder = Decoder::default();
 
-    let mut conn = Conn::Disconnected;
+    let mut conn = Conn::Disconnected {
+        attach_at: Instant::now(),
+    };
     // The AACP channel opens only over an ACL the OS / the AirPods brought up
     // (opening the socket over a live ACL doesn't dial); paging happens only
     // through an A2DP connect (`Effect::ConnectPods`). `available` mirrors
     // the ACL_CONNECTED/DISCONNECTED broadcasts (`AclUp`/`AclDown`); we
     // attach only while it's set. Starts false — an `AclUp` attaches us.
-    // `reconnect_at` just rate-limits re-attach attempts so a flapping
-    // channel can't busy-loop.
     let mut available = false;
-    let mut reconnect_at = Instant::now();
     // Shown notification content, and when it was last posted.
     let mut shown: Option<(Content, Instant)> = None;
     let mut playing = Playing::default();
@@ -170,7 +182,10 @@ fn service_main(jvm: JavaVM, events: crossbeam_channel::Receiver<Event>) {
         let deadline = [
             notify_at,
             engine.next_wake(),
-            (matches!(conn, Conn::Disconnected) && available).then_some(reconnect_at),
+            match conn {
+                Conn::Disconnected { attach_at } if available => Some(attach_at),
+                _ => None,
+            },
         ]
         .into_iter()
         .flatten()
@@ -211,7 +226,7 @@ fn service_main(jvm: JavaVM, events: crossbeam_channel::Receiver<Event>) {
                 if let Err(e) = bluetooth::set_presence_scan(false) {
                     tracing::warn!("stopping the AirPods presence scan: {e:#}");
                 }
-                if !matches!(conn, Conn::Disconnected) {
+                if !matches!(conn, Conn::Disconnected { .. }) {
                     link::disconnect();
                 }
                 break;
@@ -220,8 +235,8 @@ fn service_main(jvm: JavaVM, events: crossbeam_channel::Receiver<Event>) {
             // down (case / out of range / other device) stops us.
             Some(Event::AclUp) => {
                 available = true;
-                if matches!(conn, Conn::Disconnected) {
-                    reconnect_at = now;
+                if let Conn::Disconnected { attach_at } = &mut conn {
+                    *attach_at = now;
                 }
             }
             Some(Event::AclDown) => available = false,
@@ -257,7 +272,7 @@ fn service_main(jvm: JavaVM, events: crossbeam_channel::Receiver<Event>) {
             },
             Some(Event::Bluetooth(event)) => match event {
                 BluetoothEvent::Connected => match conn {
-                    Conn::Disconnected => {
+                    Conn::Disconnected { .. } => {
                         tracing::warn!("BT: ignoring connected event while disconnected");
                     }
                     Conn::Connecting { mac } | Conn::Connected { mac } => {
@@ -269,14 +284,13 @@ fn service_main(jvm: JavaVM, events: crossbeam_channel::Receiver<Event>) {
                 },
                 // The bridge reports a dead link once; a stale report while
                 // already disconnected is ignored.
-                BluetoothEvent::Closed(_) if matches!(conn, Conn::Disconnected) => {}
+                BluetoothEvent::Closed(_) if matches!(conn, Conn::Disconnected { .. }) => {}
                 BluetoothEvent::Closed(reason) => {
                     tracing::info!("BT: link closed: {reason}");
                     link::disconnect();
                     engine.disconnected(now);
-                    conn = Conn::Disconnected;
                     // An AACP blip over a live ACL reconnects on the next try.
-                    reconnect_at = now + RECONNECT_DELAY;
+                    conn = Conn::dropped(now);
                 }
                 BluetoothEvent::Received(data) => {
                     effects.extend(
@@ -295,8 +309,7 @@ fn service_main(jvm: JavaVM, events: crossbeam_channel::Receiver<Event>) {
             if !execute_effect(&conn, effect, playing.in_call()) {
                 link::disconnect();
                 engine.disconnected(now);
-                conn = Conn::Disconnected;
-                reconnect_at = now + RECONNECT_DELAY;
+                conn = Conn::dropped(now);
                 break;
             }
         }
@@ -304,16 +317,16 @@ fn service_main(jvm: JavaVM, events: crossbeam_channel::Receiver<Event>) {
         // --- Attach our AACP channel while the pods are ACL-connected. Over a
         // live ACL this just opens the channel (no paging); if the ACL is actually
         // down it would page, so a failed open clears `available` and we wait for
-        // the next AVAILABLE broadcast instead of dialing again. ---
-        if matches!(conn, Conn::Disconnected) && available && now >= reconnect_at {
+        // the next ACL broadcast instead of dialing again. ---
+        if let Conn::Disconnected { attach_at } = conn
+            && available
+            && now >= attach_at
+        {
             match connect_to_airpods() {
-                Ok(mac) => {
-                    conn = Conn::Connecting { mac };
-                }
+                Ok(mac) => conn = Conn::Connecting { mac },
                 Err(e) => {
                     tracing::warn!("connect failed: {e}");
                     available = false;
-                    reconnect_at = now + RECONNECT_DELAY;
                 }
             }
         }

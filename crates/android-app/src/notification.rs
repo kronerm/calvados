@@ -148,7 +148,7 @@ impl Content {
         let connected = matches!(conn, Conn::Connected { .. });
         let newer = latest.filter(|latest| latest.is_newer_than(&state.firmware));
         let text = match conn {
-            Conn::Disconnected => "Not connected",
+            Conn::Disconnected { .. } => "Not connected",
             Conn::Connecting { .. } => "Connecting…",
             Conn::Connected { .. } if engine.local_mac().is_none() => {
                 "No handoff: this phone's MAC is unknown"
