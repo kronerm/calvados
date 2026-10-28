@@ -23,6 +23,7 @@ use crate::jni::{app_context, with_env};
 use crate::proto::MacAddress;
 use crate::proto::aacp::KeyType;
 use crate::proto::ble::{APPLE_COMPANY_ID, Pattern, PodsKeys};
+use crate::proto::connection::is_airpods_name;
 use crate::proto::settings::Setting;
 
 const KEY_LOCAL_MAC: &str = "local_bt_mac";
@@ -144,7 +145,7 @@ pub(crate) fn nearby_advertisers<'local>(
         .collect()
 }
 
-/// MAC of the first bonded device named like AirPods.
+/// MAC of the first bonded device named like AirPods ([`is_airpods_name`]).
 pub(crate) fn paired_airpods() -> anyhow::Result<Option<String>> {
     with_env(|env| {
         let devices = BluetoothAdapter::default_adapter(env)?
@@ -152,8 +153,10 @@ pub(crate) fn paired_airpods() -> anyhow::Result<Option<String>> {
             .iterator(env)?;
         while devices.has_next(env)? {
             let device = BluetoothDevice(devices.next(env)?);
-            let name = device.get_name(env)?.unwrap_or_default();
-            if name.to_lowercase().contains("airpod") {
+            if device
+                .get_name(env)?
+                .is_some_and(|name| is_airpods_name(&name))
+            {
                 return device.get_address(env).map(Some);
             }
         }
@@ -302,6 +305,6 @@ fn airpods_among<'local>(
 ) -> anyhow::Result<bool> {
     (0..devices.size(env)?).try_fold(false, |found, i| {
         let name = BluetoothDevice(devices.get(env, i)?).get_name(env)?;
-        Ok(found || name.is_some_and(|name| name.to_lowercase().starts_with("airpod")))
+        Ok(found || name.is_some_and(|name| is_airpods_name(&name)))
     })
 }

@@ -39,7 +39,7 @@ pub async fn find_airpods(adapter: &bluer::Adapter) -> anyhow::Result<bluer::Dev
         let is_airpods = device
             .name()
             .await?
-            .is_some_and(|name| name.to_lowercase().starts_with("airpod"));
+            .is_some_and(|name| protocol::connection::is_airpods_name(&name));
         if is_airpods && device.is_paired().await? {
             return Ok(device);
         }

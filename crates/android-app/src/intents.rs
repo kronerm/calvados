@@ -7,6 +7,7 @@ use jni::objects::JObject;
 use crate::jni::android::bluetooth::device::BluetoothDevice;
 use crate::jni::android::content::context::Context;
 use crate::jni::android::content::intent::Intent;
+use crate::proto::connection::is_airpods_name;
 use crate::service::Event;
 
 /// Set the noise control mode: `NOISE:` and its name
@@ -98,12 +99,8 @@ pub(crate) fn parse<'local>(
                 return Ok(None);
             };
             // `getName` needs BLUETOOTH_CONNECT; treat a failure as not ours.
-            let name = BluetoothDevice(device)
-                .get_name(env)
-                .ok()
-                .flatten()
-                .unwrap_or_default();
-            if !name.to_lowercase().starts_with("airpod") {
+            let name = BluetoothDevice(device).get_name(env).ok().flatten();
+            if !name.is_some_and(|name| is_airpods_name(&name)) {
                 env.exception_clear();
                 return Ok(None);
             }
