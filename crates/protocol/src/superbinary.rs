@@ -8,6 +8,7 @@ use std::ops::Range;
 use sha2::{Digest as _, Sha256};
 
 use crate::firmware::ExactVersion;
+use crate::uarp::Message;
 
 /// Format, header length, binary length, version (4 × u32), metadata
 /// (offset, length), payload headers (offset, length).
@@ -24,8 +25,6 @@ const DIGEST: u32 = 0xCCD2_8107;
 /// A checked SuperBinary, ready to offer.
 pub struct Package {
     bytes: Vec<u8>,
-    /// As in the header, for the offer.
-    raw_version: [u8; 16],
     version: ExactVersion,
     /// The header's binary length: what's offered and served.
     length: u32,
@@ -155,9 +154,6 @@ impl Package {
         }
         let version =
             ExactVersion::from_be_bytes(bytes[12..].first_chunk().ok_or(PackageError::TooShort)?);
-        let raw_version = bytes[12..28]
-            .try_into()
-            .map_err(|_| PackageError::TooShort)?;
         range(&bytes, 28, length, "metadata")?;
         let headers = range(&bytes, 36, length, "payload headers")?;
         let payloads = (headers.start..headers.end)
@@ -185,7 +181,6 @@ impl Package {
             return Err(PackageError::DigestMismatch);
         }
         Ok(Self {
-            raw_version,
             version,
             length,
             payloads: u16::try_from(payloads.len())
@@ -200,18 +195,15 @@ impl Package {
         self.version
     }
 
-    /// The header's version bytes, as offered.
-    pub fn raw_version(&self) -> [u8; 16] {
-        self.raw_version
-    }
-
-    /// The binary length offered.
-    pub fn length(&self) -> u32 {
-        self.length
-    }
-
-    pub fn payloads(&self) -> u16 {
-        self.payloads
+    /// Asset Available for it as `asset`: the header's version bytes,
+    /// binary length and payload count.
+    pub fn offer(&self, asset: u16) -> Message<'static> {
+        Message::Offer {
+            asset,
+            version: *self.bytes[12..].first_chunk().expect("a checked header"),
+            length: self.length,
+            payloads: self.payloads,
+        }
     }
 
     /// Where `FTAB`'s data lies: the bulk of a transfer, and its progress.
@@ -232,6 +224,7 @@ pub(crate) mod tests {
     use super::*;
 
     const AUCH_DATA: &[u8] = b"sound";
+    const TRAILER: &[u8] = b"trailer";
     const FTAB_DATA: &[u8] = b"rkosftab and the buds' images";
 
     /// A small SuperBinary like 9A348's: a sound, then FTAB with its
@@ -304,7 +297,7 @@ pub(crate) mod tests {
             ftab_metadata,
             AUCH_DATA.to_vec(),
             ftab.to_vec(),
-            b"trailer".to_vec(),
+            TRAILER.to_vec(),
         ]
         .concat()
     }
@@ -313,18 +306,31 @@ pub(crate) mod tests {
         Package::parse(package_bytes()).unwrap()
     }
 
+    /// Its binary length: without the trailer.
+    pub(crate) fn package_length() -> u32 {
+        u32::try_from(package_bytes().len() - TRAILER.len()).unwrap()
+    }
+
     #[test]
     fn a_superbinary_is_checked_and_read() {
         let bytes = package_bytes();
         let package = package();
         assert_eq!(package.version().to_string(), "9.0.348");
-        assert_eq!(package.raw_version()[..4], [0, 0, 0, 9]);
-        assert_eq!(package.payloads(), 2);
-        assert_eq!(package.length() as usize, bytes.len() - b"trailer".len());
+        let Message::Offer {
+            asset: 1,
+            version,
+            length,
+            payloads: 2,
+        } = package.offer(1)
+        else {
+            panic!("an offer of asset 1, two payloads");
+        };
+        assert_eq!(version[..], bytes[12..28]);
+        assert_eq!(length, package_length());
         let ftab = package.ftab();
         assert_eq!(&bytes[ftab.start as usize..ftab.end as usize], FTAB_DATA);
         assert_eq!(package.read(0, 4), Some(&[0, 0, 0, 3][..]));
-        let end = package.length();
+        let end = package_length();
         assert_eq!(
             package.read(end - 2, 475),
             Some(&FTAB_DATA[FTAB_DATA.len() - 2..])
@@ -370,7 +376,7 @@ pub(crate) mod tests {
         );
         assert_eq!(
             parse(&|bytes| {
-                let at = bytes.len() - b"trailer".len() - 1;
+                let at = bytes.len() - TRAILER.len() - 1;
                 bytes[at] ^= 1;
             }),
             Some(PackageError::DigestMismatch)

@@ -149,7 +149,8 @@ main as the rolling pre-release `testing`: a release is
   check it (format ≤ 4, header length 0x2c, binary length within the
   file, every metadata/payload range within it) and `FTAB`'s data against
   its metadata TLV `0xCCD28107` (SHA-256, `sha2`), before it's offered.
-  Offer fields from the header (version, binary length, payload count).
+  `Package::offer` builds the offer from the header (version, binary
+  length, payload count).
 - `update.rs` — the update, sans-IO. `Updater` (one per update): `up`
   (Sync, version, the offer: asset 1, tag 0, flags 1), `received`, `down`,
   `tick`, `cancel`, `running`; `Output::Write` (a message) and

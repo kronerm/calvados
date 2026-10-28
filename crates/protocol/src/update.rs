@@ -315,12 +315,7 @@ impl Updater {
             if let Phase::Deferred = updater.phase {
                 updater.phase = Phase::Offered;
             }
-            let offer = Message::Offer {
-                asset: ASSET,
-                version: updater.package.raw_version(),
-                length: updater.package.length(),
-                payloads: updater.package.payloads(),
-            };
+            let offer = updater.package.offer(ASSET);
             [Message::Sync, Message::VersionDiscovery, offer]
                 .into_iter()
                 .map(|message| updater.encode(message))
@@ -524,7 +519,7 @@ mod tests {
     use crate::aacp::{
         BatteryComponent, BatteryInfo, ChargingStatus, EarDetection, EarStatus, Packet,
     };
-    use crate::superbinary::tests::{package, package_bytes, package_bytes_with};
+    use crate::superbinary::tests::{package, package_bytes, package_bytes_with, package_length};
     use crate::uarp;
 
     fn now() -> Instant {
@@ -631,8 +626,7 @@ mod tests {
             (ftab.start + half, 475),
         ] {
             let outputs = updater.received(&request(offset, length), now());
-            let end =
-                (offset as usize + usize::from(length)).min(updater.package.length() as usize);
+            let end = (offset as usize + usize::from(length)).min(package_length() as usize);
             assert_eq!(served(&outputs), bytes[offset as usize..end]);
             sent.extend(outputs);
         }
@@ -677,7 +671,7 @@ mod tests {
     #[test]
     fn unknown_assets_and_offsets_get_a_status() {
         let mut updater = started();
-        let past = updater.package.length() + 1;
+        let past = package_length() + 1;
         let outputs = updater.received(&request(past, 4), now());
         let write = match &outputs[0] {
             Output::Write(write) => write.clone(),
