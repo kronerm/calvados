@@ -88,8 +88,8 @@ pub struct Firmware {
 
 impl Firmware {
     /// A `0x1D` report: it wins; the exact version holds unless the
-    /// reported one changed.
-    pub fn reported(&mut self, model: Option<String>, reported: Option<String>) {
+    /// reported one changed (`true`: the pods were updated).
+    pub fn reported(&mut self, model: Option<String>, reported: Option<String>) -> bool {
         let changed = self
             .reported
             .as_ref()
@@ -99,6 +99,7 @@ impl Firmware {
         }
         self.model = model.or(self.model.take());
         self.reported = reported.or(self.reported.take());
+        changed
     }
 
     /// The major.minor, exact or reported.

@@ -137,12 +137,7 @@ impl DeviceState {
     /// Both buds reported in the case (unlike [`Self::is_stowed`], not
     /// while unknown).
     pub fn in_case(&self) -> bool {
-        self.ear_detection.is_some_and(|ears| {
-            matches!(
-                (ears.primary, ears.secondary),
-                (EarStatus::InCase, EarStatus::InCase)
-            )
-        })
+        self.ear_detection.is_some_and(EarDetection::both_in_case)
     }
 
     pub fn apply(&mut self, packet: &Packet) {
@@ -158,8 +153,13 @@ impl DeviceState {
             Packet::PrimaryBud(primary) => self.primary_bud = Some(primary.bud),
             Packet::DeviceInformation(info) => {
                 self.name = info.name.clone();
-                self.firmware
+                let updated = self
+                    .firmware
                     .reported(info.model.clone(), info.firmware.clone());
+                // Updated pods start from the default cycle again.
+                if updated {
+                    self.cycle = None;
+                }
             }
             Packet::AudioSource(source) => self.audio_source = Some(*source),
             Packet::Control(ControlCommand {
@@ -278,9 +278,15 @@ impl DeviceState {
     }
 
     fn both_in_ear(&self) -> bool {
-        self.ear_detection.is_some_and(|ears| {
-            matches!(ears.primary, EarStatus::InEar) && matches!(ears.secondary, EarStatus::InEar)
-        })
+        self.ear_detection.is_some_and(EarDetection::both_in_ear)
+    }
+
+    /// The only host connected to the pods, once known.
+    pub fn sole_host(&self) -> Option<MacAddress> {
+        match self.hosts.as_deref()? {
+            [host] => Some(*host),
+            _ => None,
+        }
     }
 
     fn record_peer(&mut self, mac: MacAddress) {

@@ -42,6 +42,28 @@ pub struct EarDetection {
     pub secondary: EarStatus,
 }
 
+impl EarDetection {
+    pub fn any_in_ear(self) -> bool {
+        [self.primary, self.secondary]
+            .iter()
+            .any(|status| matches!(status, EarStatus::InEar))
+    }
+
+    pub fn both_in_ear(self) -> bool {
+        matches!(
+            (self.primary, self.secondary),
+            (EarStatus::InEar, EarStatus::InEar)
+        )
+    }
+
+    pub fn both_in_case(self) -> bool {
+        matches!(
+            (self.primary, self.secondary),
+            (EarStatus::InCase, EarStatus::InCase)
+        )
+    }
+}
+
 /// `[primary] [secondary]`
 pub fn parse(input: &[u8]) -> IResult<&[u8], EarDetection> {
     (u8, u8)

@@ -39,8 +39,7 @@ pub fn parse_connection(input: &[u8]) -> IResult<&[u8], DeviceConnectionStatus> 
         .parse(input)
 }
 
-#[derive(Debug, Clone, Copy, Hash, TryFromPrimitive)]
-#[cfg_attr(test, derive(PartialEq, Eq))]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, TryFromPrimitive)]
 #[repr(u8)]
 pub enum Bud {
     Left = 1,

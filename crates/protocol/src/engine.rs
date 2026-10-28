@@ -8,8 +8,8 @@ use std::time::{Duration, Instant};
 
 use crate::MacAddress;
 use crate::aacp::{
-    Activity, AudioSource, Bud, ControlCommand, ControlId, Cycle, DeviceRole, EarDetection,
-    EarStatus, KeyType, NoiseControlMode, Packet, Routing, RoutingResponse,
+    Activity, AudioSource, ControlCommand, ControlId, Cycle, DeviceRole, EarDetection, KeyType,
+    NoiseControlMode, Packet, Routing, RoutingResponse,
 };
 use crate::ble;
 use crate::firmware::ExactVersion;
@@ -23,13 +23,17 @@ use crate::superbinary::Package;
 use crate::uarp::{self, Message, Received};
 use crate::update::{self, Failure, News, Output, Refusal, UpdateStatus, Updater};
 
-/// How long after the handshake [`Engine::check_state_burst`] runs.
-const STATE_BURST_WAIT: Duration = Duration::from_secs(2);
+/// How long after the handshake, and after each retry, the startup is
+/// checked ([`Engine::check_startup`]).
+const STARTUP_WAIT: Duration = Duration::from_secs(2);
+
+/// The startup check asks again at most this many times.
+const STARTUP_RETRIES: u8 = 3;
 
 /// How long a disconnection may last for the next session with the same pods
 /// to start from the last one's display state ([`Engine::connected`]); a
 /// primary bud handing over is back within ~6 s.
-pub const CARRY_OVER: Duration = Duration::from_secs(60);
+const CARRY_OVER: Duration = Duration::from_secs(60);
 
 /// After the pods drop while not stowed, connect them this long after the
 /// drop and after each attempt (a primary handover takes ~3 s), this many
@@ -42,6 +46,18 @@ const REDIAL_ATTEMPTS: u8 = 3;
 /// [`Engine::check_stream`] runs. A healthy take streams within ~0.7 s.
 const STREAM_WAIT: Duration = Duration::from_secs(1);
 
+/// [`Engine::check_stream`] restarts at most this many times per take. The
+/// pods ignore a new source for some seconds after switching to one (a take
+/// right after the peer started: restarts at 1.5 and 3.5 s were ignored, 7.5 s
+/// worked), so it keeps trying past that.
+const STREAM_RESTARTS: u8 = 10;
+
+/// How long UARP waits after a connect or a primary change.
+const UARP_SETTLE: Duration = Duration::from_secs(5);
+
+/// Progress is told the other hosts in steps of this many percent.
+const TOLD_STEP: u8 = 5;
+
 /// Audio ownership.
 #[derive(Debug, Clone, Copy, Default)]
 #[cfg_attr(test, derive(PartialEq, Eq))]
@@ -51,8 +67,64 @@ pub enum Ownership {
     /// Take requested, until the firmware confirms.
     Claiming(Handoff),
     /// We hold the audio: the firmware confirmed it, we're streaming, or
-    /// we're the only host. Leaving it drops any ear pause with it.
-    Owning(Playback),
+    /// we're the only host. Leaving it drops the ear pause and the stream
+    /// watch with it.
+    Owning(Held),
+}
+
+/// The handoff from the other hosts, while claiming.
+#[derive(Debug, Clone, Copy)]
+#[cfg_attr(test, derive(PartialEq, Eq))]
+pub enum Handoff {
+    /// No other host known yet: sent once one is.
+    Pending,
+    Sent,
+}
+
+/// What goes with holding the audio.
+#[derive(Debug, Clone, Copy, Default)]
+#[cfg_attr(test, derive(PartialEq, Eq))]
+pub struct Held {
+    playback: Playback,
+    stream: Stream,
+}
+
+/// Our playback while we hold the audio.
+#[derive(Debug, Clone, Copy, Default)]
+#[cfg_attr(test, derive(PartialEq, Eq))]
+enum Playback {
+    #[default]
+    AsIs,
+    /// The ear rule paused it: resume once both buds are back in.
+    EarPaused,
+}
+
+/// Our A2DP stream after a confirmed take, for [`Engine::check_stream`].
+#[derive(Debug, Clone, Copy, Default)]
+#[cfg_attr(test, derive(PartialEq, Eq))]
+enum Stream {
+    #[default]
+    Unwatched,
+    /// Not reported streaming yet; restarted this many times, checked at
+    /// `check`.
+    Awaited { restarts: u8, check: Instant },
+}
+
+impl Ownership {
+    /// Holding or claiming the link.
+    pub fn is_held(self) -> bool {
+        !matches!(self, Self::Idle)
+    }
+}
+
+impl fmt::Display for Ownership {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(match self {
+            Self::Idle => "not-owning",
+            Self::Claiming(_) => "claiming",
+            Self::Owning(_) => "owning",
+        })
+    }
 }
 
 /// What plays on this host, as the platform last reported it (a call over
@@ -75,42 +147,6 @@ enum PodsOwner {
     Us,
     #[default]
     NotUs,
-}
-
-/// The handoff from the other hosts, while claiming.
-#[derive(Debug, Clone, Copy)]
-#[cfg_attr(test, derive(PartialEq, Eq))]
-pub enum Handoff {
-    /// No other host known yet: sent once one is.
-    Pending,
-    Sent,
-}
-
-/// Our playback while we hold the audio.
-#[derive(Debug, Clone, Copy, Default)]
-#[cfg_attr(test, derive(PartialEq, Eq))]
-pub enum Playback {
-    #[default]
-    AsIs,
-    /// The ear rule paused it: resume once both buds are back in.
-    EarPaused,
-}
-
-impl Ownership {
-    /// Holding or claiming the link.
-    pub fn is_held(self) -> bool {
-        !matches!(self, Self::Idle)
-    }
-}
-
-impl fmt::Display for Ownership {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.write_str(match self {
-            Self::Idle => "not-owning",
-            Self::Claiming(_) => "claiming",
-            Self::Owning(_) => "owning",
-        })
-    }
 }
 
 #[derive(Debug, Clone)]
@@ -152,7 +188,6 @@ pub enum Effect {
 
 /// What we know of this host's MAC, needed for the peer hijack.
 #[derive(Debug, Clone, Copy, Default)]
-#[cfg_attr(test, derive(PartialEq, Eq))]
 enum LocalMac {
     #[default]
     Unknown,
@@ -176,44 +211,123 @@ impl LocalMac {
 pub struct Engine {
     settings: Settings,
     local_mac: LocalMac,
-    /// The pods of the current or last session.
-    pods: Option<MacAddress>,
     link: Link,
     /// The session's state; after it, kept for display and the next one.
     state: DeviceState,
-    ownership: Ownership,
-    pods_owner: PodsOwner,
-    /// Where this session's startup stands, for [`Engine::check_state_burst`].
-    startup: Startup,
-    /// When [`Engine::check_state_burst`] runs next.
-    burst_check: Option<Instant>,
-    stream: Stream,
     local_audio: LocalAudio,
     /// This host's firmware update; kept across sessions with the same pods.
     update: Option<Update>,
-    /// The exact firmware this session's own UARP query found, for hosts
-    /// that join.
-    queried: Option<ExactVersion>,
+}
+
+/// The AACP session.
+#[derive(Debug)]
+enum Link {
+    Up(Session),
+    /// After the last session (`None`: never up), and the last connect we
+    /// asked for.
+    Down {
+        last: Option<Ended>,
+        dial: Option<Dial>,
+    },
+}
+
+impl Default for Link {
+    fn default() -> Self {
+        Self::Down {
+            last: None,
+            dial: None,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy)]
+struct Ended {
+    pods: MacAddress,
+    at: Instant,
+}
+
+/// An [`Effect::ConnectPods`] (or the drop that schedules the first), and
+/// how many redials are left after it.
+#[derive(Debug, Clone, Copy)]
+struct Dial {
+    at: Instant,
+    redials: u8,
+}
+
+/// What lives as long as one AACP session.
+#[derive(Debug)]
+struct Session {
+    pods: MacAddress,
+    ownership: Ownership,
+    pods_owner: PodsOwner,
+    startup: Startup,
+    uarp: Uarp,
     /// The update status last told the other hosts.
     told: Option<UpdateStatus>,
-    /// No UARP before this: right after a connect or a primary change (a
-    /// UARP frame reaching a bud that isn't primary aborts it).
-    uarp_hold: Option<Instant>,
-    /// This session's running-version query.
-    version_query: VersionQuery,
-    /// For the engine's own UARP messages (the updater counts its own).
-    uarp_id: u16,
 }
 
-#[derive(Debug, Clone, Copy, Default)]
+impl Session {
+    fn new(pods: MacAddress, now: Instant) -> Self {
+        Self {
+            pods,
+            ownership: Ownership::Idle,
+            pods_owner: PodsOwner::NotUs,
+            startup: Startup {
+                phase: Phase::Sent,
+                retries: 0,
+                check: Some(now + STARTUP_WAIT),
+            },
+            uarp: Uarp {
+                hold: Some(now + UARP_SETTLE),
+                query: VersionQuery::Due,
+                id: 0,
+            },
+            told: None,
+        }
+    }
+}
+
+/// This session's startup: how far the pods have answered, how often it
+/// was asked again, and when it's checked next (`None`: not again).
+#[derive(Debug, Clone, Copy)]
+struct Startup {
+    phase: Phase,
+    retries: u8,
+    check: Option<Instant>,
+}
+
+#[derive(Debug, Clone, Copy)]
+enum Phase {
+    /// Handshake sent, no ack: sessions opened right after the pods boot
+    /// can stay silent.
+    Sent,
+    /// Acked, and nothing else since. Once the pods sent nothing more for 53
+    /// minutes (Oct 18 13:36:54), not even a noise mode's echo, where a new
+    /// connection worked at once.
+    Acked,
+    /// Answering since the ack (the state half can be held back for ~25 s).
+    Answering,
+}
+
+/// UARP in this session.
+#[derive(Debug, Clone, Copy)]
+struct Uarp {
+    /// None before this: right after a connect or a primary change (a UARP
+    /// frame reaching a bud that isn't primary aborts it).
+    hold: Option<Instant>,
+    query: VersionQuery,
+    /// For the engine's own messages (the updater counts its own).
+    id: u16,
+}
+
+/// The session's running-version query.
+#[derive(Debug, Clone, Copy)]
 enum VersionQuery {
-    #[default]
     Due,
     Sent,
+    /// Its answer, for hosts that join.
+    Answered(ExactVersion),
 }
-
-/// How long UARP waits after a connect or a primary change.
-const UARP_SETTLE: Duration = Duration::from_secs(5);
 
 /// This host's firmware update.
 #[derive(Debug)]
@@ -243,77 +357,6 @@ impl Update {
     }
 }
 
-/// Progress is told the other hosts in steps of this many percent.
-const TOLD_STEP: u8 = 5;
-
-/// The AACP session.
-#[derive(Debug, Clone, Copy)]
-enum Link {
-    Up,
-    /// Since when (`None`: never up), and the last connect we asked for.
-    Down {
-        since: Option<Instant>,
-        dial: Option<Dial>,
-    },
-}
-
-impl Default for Link {
-    fn default() -> Self {
-        Self::Down {
-            since: None,
-            dial: None,
-        }
-    }
-}
-
-/// An [`Effect::ConnectPods`] (or the drop that schedules the first), and
-/// how many redials are left after it.
-#[derive(Debug, Clone, Copy)]
-struct Dial {
-    at: Instant,
-    redials: u8,
-}
-
-/// Our A2DP stream after a confirmed take, for [`Engine::check_stream`].
-#[derive(Debug, Clone, Copy, Default)]
-enum Stream {
-    #[default]
-    Unwatched,
-    /// Not reported streaming yet; restarted this many times, checked at
-    /// `check`.
-    Awaited { restarts: u8, check: Instant },
-}
-
-/// [`Engine::check_stream`] restarts at most this many times per take. The
-/// pods ignore a new source for some seconds after switching to one (a take
-/// right after the peer started: restarts at 1.5 and 3.5 s were ignored, 7.5 s
-/// worked), so it keeps trying past that.
-const STREAM_RESTARTS: u8 = 10;
-
-/// This session's startup, as far as the pods have answered.
-#[derive(Debug, Clone, Copy)]
-enum Startup {
-    /// Handshake sent, and again this many times, no ack: sessions opened
-    /// right after the pods boot can stay silent.
-    Sent { retries: u8 },
-    /// Acked, and nothing else since; asked again this many times. Once the
-    /// pods sent nothing more for 53 minutes (Oct 18 13:36:54), not even a
-    /// noise mode's echo, where a new connection worked at once.
-    Acked { retries: u8 },
-    /// Answering since the ack; asked again this many times for a missing
-    /// part (the state half can be held back for ~25 s).
-    Answering { retries: u8 },
-}
-
-impl Default for Startup {
-    fn default() -> Self {
-        Self::Sent { retries: 0 }
-    }
-}
-
-/// [`Engine::check_state_burst`] asks again at most this many times.
-const STARTUP_RETRIES: u8 = 3;
-
 impl Engine {
     pub fn new(local_mac: Option<MacAddress>, settings: Settings) -> Self {
         Self {
@@ -335,12 +378,7 @@ impl Engine {
 
     /// An AACP session is up.
     pub fn is_connected(&self) -> bool {
-        matches!(self.link, Link::Up)
-    }
-
-    /// The pods of the current or last session.
-    pub fn pods(&self) -> Option<MacAddress> {
-        self.pods
+        matches!(self.link, Link::Up(_))
     }
 
     pub fn state(&self) -> &DeviceState {
@@ -348,74 +386,70 @@ impl Engine {
     }
 
     pub fn ownership(&self) -> Ownership {
-        self.ownership
+        self.session().map_or(Ownership::Idle, |s| s.ownership)
     }
 
     pub fn local_mac(&self) -> Option<MacAddress> {
         self.local_mac.get()
     }
 
+    fn session(&self) -> Option<&Session> {
+        match &self.link {
+            Link::Up(session) => Some(session),
+            Link::Down { .. } => None,
+        }
+    }
+
+    fn session_mut(&mut self) -> Option<&mut Session> {
+        match &mut self.link {
+            Link::Up(session) => Some(session),
+            Link::Down { .. } => None,
+        }
+    }
+
+    /// The pods of the current or last session.
+    fn pods(&self) -> Option<MacAddress> {
+        match &self.link {
+            Link::Up(session) => Some(session.pods),
+            Link::Down { last, .. } => last.map(|last| last.pods),
+        }
+    }
+
+    fn set_ownership(&mut self, ownership: Ownership) {
+        if let Some(session) = self.session_mut() {
+            session.ownership = ownership;
+        }
+    }
+
     /// An AACP session with `pods` opened: starts it from scratch but for a
     /// known local MAC and, for the same pods within [`CARRY_OVER`], the
     /// display state ([`DeviceState::carried_over`]). Sends the handshake.
     pub fn connected(&mut self, pods: MacAddress, now: Instant) -> Vec<Effect> {
-        let recent = match self.link {
-            Link::Up => true,
-            Link::Down { since, .. } => {
-                since.is_some_and(|since| now.saturating_duration_since(since) <= CARRY_OVER)
+        let same = self.pods() == Some(pods);
+        let recent = match &self.link {
+            Link::Up(_) => true,
+            Link::Down { last, .. } => {
+                last.is_some_and(|last| now.saturating_duration_since(last.at) <= CARRY_OVER)
             }
         };
-        let carry_over = recent && self.pods == Some(pods);
+        let carry_over = same && recent;
         tracing::info!(%pods, carry_over, "session opened, handshaking");
-        let known = match self.local_mac {
-            LocalMac::Known(mac) => Some(mac),
-            _ => None,
+        if let LocalMac::Inferred(_) = self.local_mac {
+            self.local_mac = LocalMac::Unknown;
+        }
+        self.state = match carry_over {
+            true => self.state.carried_over(),
+            false => DeviceState::default(),
         };
-        // A running or staged update carries on; one that's over (done,
-        // failed, refused) has been seen and makes way for the firmware.
-        let update = self
+        // A running or staged update carries on once the session settles;
+        // one that's over (done, failed, refused) has been seen and makes way
+        // for the firmware.
+        self.update = self
             .update
             .take()
-            .filter(|update| self.pods == Some(pods) && !update.is_over());
-        *self = Self {
-            pods: Some(pods),
-            link: Link::Up,
-            state: match carry_over {
-                true => self.state.carried_over(),
-                false => DeviceState::default(),
-            },
-            burst_check: Some(now + STATE_BURST_WAIT),
-            local_audio: self.local_audio,
-            update,
-            uarp_hold: Some(now + UARP_SETTLE),
-            ..Self::new(known, self.settings)
-        };
-        // An update the session's drop interrupted resumes once it settles.
+            .filter(|update| same && !update.is_over());
+        self.link = Link::Up(Session::new(pods, now));
         vec![Effect::Send(handshake())]
-    }
-
-    /// The pods' exact running version, as our query found it: also told
-    /// the other hosts (they may not have asked).
-    fn exact_firmware(&mut self, exact: ExactVersion) -> Vec<Effect> {
-        self.queried = Some(exact);
-        self.running_firmware(exact)
-            .into_iter()
-            .chain(self.tell(News::Firmware(exact)))
-            .collect()
-    }
-
-    /// The exact running version, from our query or a peer's news; ends a
-    /// staged update once it's the new one.
-    fn running_firmware(&mut self, exact: ExactVersion) -> Vec<Effect> {
-        if self.state.firmware.exact != Some(exact) {
-            tracing::info!(%exact, "running firmware");
-            self.state.firmware.exact = Some(exact);
-        }
-        let done = match &mut self.update {
-            Some(Update::Running(updater)) => updater.running(exact),
-            _ => Vec::new(),
-        };
-        self.updated(done)
     }
 
     /// The AACP session ended. Unless both buds were put away (the case
@@ -423,23 +457,20 @@ impl Engine {
     /// that last had the audio, and the OS doesn't retry soon (BlueZ: not
     /// after a primary bud handing over; Android: never), so redial.
     pub fn disconnected(&mut self, now: Instant) {
-        if !self.is_connected() {
+        let Some(pods) = self.session().map(|session| session.pods) else {
             return;
-        }
+        };
         let redial = self.settings.auto_connect && !self.state.is_stowed();
         tracing::info!(redial, "session ended");
         self.link = Link::Down {
-            since: Some(now),
+            last: Some(Ended { pods, at: now }),
             dial: redial.then_some(Dial {
                 at: now,
                 redials: REDIAL_ATTEMPTS,
             }),
         };
-        self.ownership = Ownership::Idle;
-        self.stream = Stream::Unwatched;
-        self.burst_check = None;
         // Nothing to tell anyone without a session.
-        if let Some(Update::Running(updater)) = &mut self.update {
+        if let Some(updater) = self.updater() {
             updater.down(now);
         }
     }
@@ -459,7 +490,7 @@ impl Engine {
         let Some((pods, keys)) = ble::identify(address, keys) else {
             return Vec::new();
         };
-        if self.pods.is_none_or(|ours| ours == pods) {
+        if self.pods().is_none_or(|ours| ours == pods) {
             let level = keys
                 .encryption
                 .and_then(|key| ble::case_level(advertisement, &key));
@@ -467,7 +498,7 @@ impl Engine {
                 self.state.advertised_case_level(level);
             }
         }
-        let Link::Down { since, dial } = self.link else {
+        let Link::Down { dial, .. } = self.link else {
             return Vec::new();
         };
         if !self.settings.auto_connect || dial.is_some_and(|dial| now < dial.at + REDIAL_GAP) {
@@ -479,29 +510,38 @@ impl Engine {
             return Vec::new();
         }
         tracing::info!(%pods, ?proximity, "pods nearby: connecting");
-        self.link = Link::Down {
-            since,
-            dial: Some(Dial {
-                at: now,
-                redials: dial.map_or(0, |dial| dial.redials),
-            }),
-        };
+        self.dial(pods, now, dial.map_or(0, |dial| dial.redials))
+    }
+
+    /// Connect `pods` now, with this many redials left.
+    fn dial(&mut self, pods: MacAddress, now: Instant, redials: u8) -> Vec<Effect> {
+        if let Link::Down { dial, .. } = &mut self.link {
+            *dial = Some(Dial { at: now, redials });
+        }
         vec![Effect::ConnectPods(pods)]
     }
 
     /// When [`Engine::tick`] has something to do next.
     pub fn next_wake(&self) -> Option<Instant> {
-        let stream = match self.stream {
-            Stream::Awaited { check, .. } => Some(check),
-            Stream::Unwatched => None,
-        };
+        let session = self.session().map(|session| {
+            let stream = match session.ownership {
+                Ownership::Owning(Held {
+                    stream: Stream::Awaited { check, .. },
+                    ..
+                }) => Some(check),
+                _ => None,
+            };
+            let uarp = session.uarp.hold.filter(|_| self.uarp_waits());
+            [session.startup.check, stream, uarp]
+        });
         let update = match &self.update {
             Some(Update::Running(updater)) => updater.next_wake(),
             _ => None,
         };
-        let uarp = self.uarp_hold.filter(|_| self.uarp_waits());
-        [self.burst_check, stream, self.redial_at(), update, uarp]
+        session
             .into_iter()
+            .flatten()
+            .chain([self.redial_at(), update])
             .flatten()
             .min()
     }
@@ -509,25 +549,18 @@ impl Engine {
     /// Run what's due by `now`.
     pub fn tick(&mut self, now: Instant) -> Vec<Effect> {
         let due = |at: Option<Instant>| at.is_some_and(|at| at <= now);
-        let burst = match due(self.burst_check) {
-            true => self.check_state_burst(now),
+        let startup = match due(self.session().and_then(|s| s.startup.check)) {
+            true => self.check_startup(now),
             false => Vec::new(),
         };
-        let stream = match self.stream {
-            Stream::Awaited { check, .. } if check <= now => self.check_stream(now),
-            _ => Vec::new(),
-        };
+        let stream = self.check_stream(now);
         let redial = match due(self.redial_at()) {
             true => self.redial(now),
             false => Vec::new(),
         };
-        let watchdog = match &mut self.update {
-            Some(Update::Running(updater)) => updater.tick(now),
-            _ => Vec::new(),
-        };
-        let update = self.updated(watchdog);
+        let update = self.with_updater(|updater| updater.tick(now));
         let uarp = self.settle_uarp(now);
-        burst
+        startup
             .into_iter()
             .chain(stream)
             .chain(redial)
@@ -547,25 +580,15 @@ impl Engine {
     }
 
     fn redial(&mut self, now: Instant) -> Vec<Effect> {
-        let (
-            Link::Down {
-                since,
-                dial: Some(dial),
-            },
-            Some(pods),
-        ) = (self.link, self.pods)
+        let Link::Down {
+            last: Some(last),
+            dial: Some(dial),
+        } = self.link
         else {
             return Vec::new();
         };
-        tracing::info!(%pods, "pods dropped unexpectedly: connecting");
-        self.link = Link::Down {
-            since,
-            dial: Some(Dial {
-                at: now,
-                redials: dial.redials.saturating_sub(1),
-            }),
-        };
-        vec![Effect::ConnectPods(pods)]
+        tracing::info!(pods = %last.pods, "pods dropped unexpectedly: connecting");
+        self.dial(last.pods, now, dial.redials.saturating_sub(1))
     }
 
     /// Set the noise control mode; the pods echo it back.
@@ -591,21 +614,17 @@ impl Engine {
     }
 
     pub fn handle(&mut self, packet: Packet, now: Instant) -> Vec<Effect> {
-        if let (Startup::Acked { retries }, false) =
-            (self.startup, matches!(packet, Packet::HandshakeAck))
+        if let Some(session) = self.session_mut()
+            && let Phase::Acked = session.startup.phase
+            && !matches!(packet, Packet::HandshakeAck)
         {
-            self.startup = Startup::Answering { retries };
+            session.startup.phase = Phase::Answering;
         }
         let previous_ears = self.state.ear_detection;
         let previous_primary = self.state.primary_bud;
         let was_stowed = self.state.is_stowed();
         let was_in_case = self.state.in_case();
-        let reported = self.state.firmware.reported.clone();
         self.state.apply(&packet);
-        // Updated pods start from the default cycle again.
-        if reported.is_some() && self.state.firmware.reported != reported {
-            self.state.cycle = None;
-        }
         let learned = self.learn_local_mac(&packet).map(Effect::LearnedLocalMac);
         let reaction = match packet {
             // The firmware's word on who owns the link is final.
@@ -613,25 +632,22 @@ impl Engine {
                 id: ControlId::OwnsConnection,
                 value: [owns, ..],
             }) => {
-                tracing::info!(owns = owns != 0, was = %self.ownership, "firmware ownership");
-                let reaction = match owns {
-                    0 => {
-                        self.pods_owner = PodsOwner::NotUs;
-                        self.release()
-                    }
-                    _ => {
-                        self.pods_owner = PodsOwner::Us;
-                        self.confirm(now)
-                    }
+                tracing::info!(owns = owns != 0, was = %self.ownership(), "firmware ownership");
+                let (owner, reaction) = match owns {
+                    0 => (PodsOwner::NotUs, self.release()),
+                    _ => (PodsOwner::Us, self.confirm(now)),
                 };
-                return learned.into_iter().chain(reaction).collect();
+                if let Some(session) = self.session_mut() {
+                    session.pods_owner = owner;
+                }
+                reaction
             }
             Packet::AudioSource(source) => self.track_audio_source(source),
             Packet::ProximityKeys(keys) => keys
                 .iter()
                 .filter_map(|key| {
                     Some(Effect::LearnedKey {
-                        pods: self.pods?,
+                        pods: self.pods()?,
                         kind: key.kind,
                         key: key.data.as_slice().try_into().ok()?,
                     })
@@ -640,8 +656,11 @@ impl Engine {
             // The rest of the setup goes out only now (see
             // [`session_setup_frames`]); a retried handshake's ack resends it.
             Packet::HandshakeAck => {
-                if let Startup::Sent { .. } = self.startup {
-                    self.startup = Startup::Acked { retries: 0 };
+                if let Some(session) = self.session_mut()
+                    && let Phase::Sent = session.startup.phase
+                {
+                    session.startup.phase = Phase::Acked;
+                    session.startup.retries = 0;
                 }
                 session_setup_frames()
                     .into_iter()
@@ -661,11 +680,9 @@ impl Engine {
                     true => self.release(),
                     false => Vec::new(),
                 };
-                let in_ear = |ears: EarDetection| {
-                    matches!(ears.primary, EarStatus::InEar)
-                        || matches!(ears.secondary, EarStatus::InEar)
-                };
-                let worn = match !previous_ears.is_some_and(in_ear) && in_ear(ears) {
+                let worn = match !previous_ears.is_some_and(EarDetection::any_in_ear)
+                    && ears.any_in_ear()
+                {
                     true => self.ear_take(),
                     false => Vec::new(),
                 };
@@ -698,12 +715,7 @@ impl Engine {
                 tracing::info!(?from, streaming, "peer reports its playback");
                 Vec::new()
             }
-            Packet::PrimaryBud(primary)
-                if !matches!(
-                    (previous_primary, primary.bud),
-                    (Some(Bud::Left), Bud::Left) | (Some(Bud::Right), Bud::Right)
-                ) =>
-            {
+            Packet::PrimaryBud(primary) if previous_primary != Some(primary.bud) => {
                 self.primary_changes(now)
             }
             Packet::Uarp(message) => self.uarp_received(&message, now),
@@ -723,17 +735,19 @@ impl Engine {
                 ..
             }) => {
                 tracing::info!("audio handoff declined");
-                self.ownership = Ownership::Idle;
+                self.set_ownership(Ownership::Idle);
                 vec![Effect::ReleaseAudio]
             }
             _ => Vec::new(),
         };
-        let reaction = reaction
-            .into_iter()
-            .chain(self.notify_peers())
-            .collect::<Vec<_>>();
+        let handoff = self.notify_peers();
         let uarp = self.settle_uarp(now);
-        learned.into_iter().chain(reaction).chain(uarp).collect()
+        learned
+            .into_iter()
+            .chain(reaction)
+            .chain(handoff)
+            .chain(uarp)
+            .collect()
     }
 
     /// Nobody else is connected to the pods: take the audio. There's no peer
@@ -741,11 +755,11 @@ impl Engine {
     /// buds are in the case (or their ears not known yet): pods connected in
     /// the case took the audio from other headphones; taking them out does.
     fn take_if_alone(&mut self) -> Vec<Effect> {
-        let (Some(local), Some(hosts)) = (self.local_mac.get(), &self.state.hosts) else {
-            return Vec::new();
-        };
-        let alone = hosts.contains(&local) && hosts.iter().all(|mac| *mac == local);
-        if !alone || self.ownership.is_held() || self.state.is_stowed() {
+        let alone = self
+            .local_mac
+            .get()
+            .is_some_and(|local| self.state.sole_host() == Some(local));
+        if !alone || self.ownership().is_held() || self.state.is_stowed() {
             return Vec::new();
         }
         tracing::info!("only device connected to the pods: taking audio");
@@ -753,54 +767,48 @@ impl Engine {
         vec![Effect::RouteAudio]
     }
 
-    /// [`STATE_BURST_WAIT`] after the handshake, and again after each check
+    /// [`STARTUP_WAIT`] after the handshake, and again after each check
     /// that asked for something. Without an ack, handshakes again (the
     /// session stayed silent) a few times, then gives up on the session
     /// ([`Effect::Reconnect`]); acked but without battery (only the settings
     /// half of the burst came), requests notifications again, a few times.
-    fn check_state_burst(&mut self, now: Instant) -> Vec<Effect> {
-        let effects = self.startup_step();
-        self.burst_check = match effects[..] {
-            [] | [Effect::Reconnect] => None,
-            _ => Some(now + STATE_BURST_WAIT),
-        };
-        effects
-    }
-
-    fn startup_step(&mut self) -> Vec<Effect> {
+    fn check_startup(&mut self, now: Instant) -> Vec<Effect> {
         // Live: carried-over levels don't count as this session's burst.
-        match (self.startup, !self.state.battery.is_live()) {
-            (Startup::Sent { retries }, _) if retries >= STARTUP_RETRIES => {
-                tracing::warn!("the pods never answered the handshake: reconnecting");
-                vec![Effect::Reconnect]
+        let live = self.state.battery.is_live();
+        let Some(startup) = self.session_mut().map(|session| &mut session.startup) else {
+            return Vec::new();
+        };
+        // What to ask again, why, and whether to give up on the session
+        // once asked enough.
+        let (frame, missing, gives_up) = match (startup.phase, live) {
+            (Phase::Sent, _) => (handshake(), "no handshake ack", true),
+            (Phase::Acked, _) => (
+                request_notifications(),
+                "nothing since the handshake ack",
+                true,
+            ),
+            (Phase::Answering, false) => (
+                request_notifications(),
+                "no battery since the handshake",
+                false,
+            ),
+            (Phase::Answering, true) => {
+                startup.check = None;
+                return Vec::new();
             }
-            (Startup::Sent { retries }, _) => {
-                tracing::info!("no handshake ack: handshaking again");
-                self.startup = Startup::Sent {
-                    retries: retries + 1,
-                };
-                vec![Effect::Send(handshake())]
+        };
+        if startup.retries >= STARTUP_RETRIES {
+            startup.check = None;
+            if !gives_up {
+                return Vec::new();
             }
-            (Startup::Acked { retries }, _) if retries >= STARTUP_RETRIES => {
-                tracing::warn!("the pods went silent after the handshake: reconnecting");
-                vec![Effect::Reconnect]
-            }
-            (Startup::Acked { retries }, _) => {
-                tracing::info!("nothing since the handshake ack: requesting notifications again");
-                self.startup = Startup::Acked {
-                    retries: retries + 1,
-                };
-                vec![Effect::Send(request_notifications())]
-            }
-            (Startup::Answering { retries }, true) if retries < STARTUP_RETRIES => {
-                tracing::info!("no battery since the handshake: requesting notifications again");
-                self.startup = Startup::Answering {
-                    retries: retries + 1,
-                };
-                vec![Effect::Send(request_notifications())]
-            }
-            (Startup::Answering { .. }, _) => Vec::new(),
+            tracing::warn!(missing, "the pods never answered: reconnecting");
+            return vec![Effect::Reconnect];
         }
+        tracing::info!(missing, "asking the pods again");
+        startup.retries += 1;
+        startup.check = Some(now + STARTUP_WAIT);
+        vec![Effect::Send(frame)]
     }
 
     /// What plays here now; its starts take the audio (a call's also over
@@ -868,15 +876,12 @@ impl Engine {
         let take = match (self.local_audio, theirs) {
             (LocalAudio::Silent, _) | (LocalAudio::Media, LocalAudio::Call) => false,
             (LocalAudio::Call, LocalAudio::Media) | (_, LocalAudio::Silent) => true,
-            (LocalAudio::Media, LocalAudio::Media) | (LocalAudio::Call, LocalAudio::Call) => {
-                matches!(self.pods_owner, PodsOwner::Us)
-            }
+            (LocalAudio::Media, LocalAudio::Media) | (LocalAudio::Call, LocalAudio::Call) => self
+                .session()
+                .is_some_and(|session| matches!(session.pods_owner, PodsOwner::Us)),
         };
         tracing::info!(here = ?self.local_audio, there = ?theirs, take, "a bud went into an ear");
-        match take {
-            true => self.take(),
-            false => Vec::new(),
-        }
+        if take { self.take() } else { Vec::new() }
     }
 
     /// Both buds in the case: nobody would hear them, so audio started here
@@ -893,11 +898,12 @@ impl Engine {
     /// hold, or whose take the pods haven't confirmed yet (see [`Self::take`]).
     fn may_switch(&self) -> bool {
         self.settings.auto_switch
-            && self.is_connected()
-            && matches!(
-                self.ownership,
-                Ownership::Idle | Ownership::Claiming(Handoff::Sent)
-            )
+            && self.session().is_some_and(|session| {
+                matches!(
+                    session.ownership,
+                    Ownership::Idle | Ownership::Claiming(Handoff::Sent)
+                )
+            })
     }
 
     /// Claim the audio, for media or a call starting here. A handoff the pods
@@ -905,7 +911,7 @@ impl Engine {
     /// 18:22:52) though the other host got it and paused, and the same
     /// request a minute later worked.
     fn take(&mut self) -> Vec<Effect> {
-        match self.ownership {
+        match self.ownership() {
             Ownership::Owning(_) | Ownership::Claiming(Handoff::Pending) => return Vec::new(),
             Ownership::Claiming(Handoff::Sent) => {
                 tracing::info!("the pods never confirmed the take: handing off again");
@@ -918,7 +924,7 @@ impl Engine {
             tracing::warn!("local MAC unknown: routing audio without a handoff");
             return vec![Effect::RouteAudio];
         }
-        self.ownership = Ownership::Claiming(Handoff::Pending);
+        self.set_ownership(Ownership::Claiming(Handoff::Pending));
         // With a handoff out, the audio is routed once the pods confirm it
         // ([`Engine::confirm`]): a stream started while they switch hosts
         // rebooted them (every reboot was a take that streamed first).
@@ -930,7 +936,10 @@ impl Engine {
         // Still the owner for the pods (another host streamed without
         // claiming): they won't confirm, so route now; the handoff still
         // pauses the other host.
-        if let PodsOwner::Us = self.pods_owner {
+        if self
+            .session()
+            .is_some_and(|session| matches!(session.pods_owner, PodsOwner::Us))
+        {
             tracing::info!("the pods count us as owner already: routing now");
             self.own();
             return handoff.into_iter().chain([Effect::RouteAudio]).collect();
@@ -942,17 +951,21 @@ impl Engine {
     /// now; re-routed on every take, since after a yield the pods suspend our
     /// A2DP stream.
     fn confirm(&mut self, now: Instant) -> Vec<Effect> {
-        let Ownership::Claiming(handoff) = self.ownership else {
+        let Ownership::Claiming(handoff) = self.ownership() else {
             self.own();
             return Vec::new();
         };
-        self.own();
-        if !self.streaming_here() {
-            self.stream = Stream::Awaited {
+        let stream = match self.streaming_here() {
+            true => Stream::Unwatched,
+            false => Stream::Awaited {
                 restarts: 0,
                 check: now + STREAM_WAIT,
-            };
-        }
+            },
+        };
+        self.set_ownership(Ownership::Owning(Held {
+            playback: Playback::AsIs,
+            stream,
+        }));
         match handoff {
             Handoff::Sent => vec![Effect::RouteAudio],
             Handoff::Pending => Vec::new(),
@@ -963,72 +976,89 @@ impl Engine {
     /// pods still don't report us streaming, and checks again, a few times.
     /// Healthy takes are left alone: a restart cuts a running stream.
     fn check_stream(&mut self, now: Instant) -> Vec<Effect> {
-        let Stream::Awaited { restarts, .. } = self.stream else {
+        let streaming = self.streaming_here();
+        let source = self.state.audio_source;
+        let Some(Session {
+            ownership: Ownership::Owning(Held { stream, .. }),
+            ..
+        }) = self.session_mut()
+        else {
             return Vec::new();
         };
-        let owning = matches!(self.ownership, Ownership::Owning(_));
-        if !owning || self.streaming_here() {
-            self.stream = Stream::Unwatched;
+        let Stream::Awaited { restarts, check } = *stream else {
+            return Vec::new();
+        };
+        if now < check {
+            return Vec::new();
+        }
+        if streaming {
+            *stream = Stream::Unwatched;
             return Vec::new();
         }
         if restarts >= STREAM_RESTARTS {
             tracing::warn!("still not streaming after {restarts} restarts: giving up");
-            self.stream = Stream::Unwatched;
+            *stream = Stream::Unwatched;
             return Vec::new();
         }
-        tracing::info!(source = ?self.state.audio_source, "not streaming since the take: restarting the stream");
-        self.stream = Stream::Awaited {
+        tracing::info!(
+            ?source,
+            "not streaming since the take: restarting the stream"
+        );
+        *stream = Stream::Awaited {
             restarts: restarts + 1,
             check: now + STREAM_WAIT,
         };
         vec![Effect::RestartStream]
     }
 
-    /// Enter `Owning`, keeping the playback state if already there.
+    /// Enter `Owning`, keeping what goes with it if already there.
     fn own(&mut self) {
-        if !matches!(self.ownership, Ownership::Owning(_)) {
-            self.ownership = Ownership::Owning(Playback::AsIs);
+        if !matches!(self.ownership(), Ownership::Owning(_)) {
+            self.set_ownership(Ownership::Owning(Held::default()));
         }
     }
 
     /// iOS-like automatic pause: a bud leaving an ear while we play media
     /// pauses; both back in resumes, if we paused. Both out forgets the pause.
     fn ear_media(&mut self, previous: Option<EarDetection>, now: EarDetection) -> Option<Effect> {
-        let in_ear = |status| matches!(status, EarStatus::InEar);
-        let both_in = |ears: EarDetection| in_ear(ears.primary) && in_ear(ears.secondary);
-        let any_in = in_ear(now.primary) || in_ear(now.secondary);
-        let Ownership::Owning(playback) = self.ownership else {
+        let Ownership::Owning(held) = self.ownership() else {
             return None;
         };
-        let (playback, effect) = match (playback, previous.is_some_and(both_in), both_in(now)) {
+        let was_both_in = previous.is_some_and(EarDetection::both_in_ear);
+        let (playback, effect) = match (held.playback, was_both_in, now.both_in_ear()) {
             // Playing media here means we own it: `AudioSource` naming us did that.
-            (_, true, false) if self.playing_media_here() => match any_in {
-                true => (Playback::EarPaused, Some(Effect::Pause)),
-                false => (Playback::AsIs, Some(Effect::Pause)),
-            },
+            (_, true, false)
+                if self
+                    .our_activity()
+                    .is_some_and(|a| a.contains(Activity::MEDIA)) =>
+            {
+                match now.any_in_ear() {
+                    true => (Playback::EarPaused, Some(Effect::Pause)),
+                    false => (Playback::AsIs, Some(Effect::Pause)),
+                }
+            }
             (Playback::EarPaused, false, true) => (Playback::AsIs, Some(Effect::Resume)),
-            (Playback::EarPaused, _, _) if !any_in => (Playback::AsIs, None),
+            (Playback::EarPaused, _, _) if !now.any_in_ear() => (Playback::AsIs, None),
             (playback, _, _) => (playback, None),
         };
-        self.ownership = Ownership::Owning(playback);
+        self.set_ownership(Ownership::Owning(Held { playback, ..held }));
         effect
+    }
+
+    /// What the firmware reports playing here, when it names this host the
+    /// source.
+    fn our_activity(&self) -> Option<Activity> {
+        let local = self.local_mac.get()?;
+        self.state
+            .audio_source
+            .filter(|source| source.mac == local)
+            .map(|source| source.kind)
     }
 
     /// The firmware reports this host as the source of media or a call: our
     /// stream started (a call's goes over SCO, which needs no restart).
     fn streaming_here(&self) -> bool {
-        let (Some(local), Some(source)) = (self.local_mac.get(), self.state.audio_source) else {
-            return false;
-        };
-        source.is_active(local)
-    }
-
-    /// The firmware reports this host as the source of playing media.
-    fn playing_media_here(&self) -> bool {
-        let (Some(local), Some(source)) = (self.local_mac.get(), self.state.audio_source) else {
-            return false;
-        };
-        source.mac == local && source.kind.contains(Activity::MEDIA)
+        self.our_activity().is_some_and(Activity::is_playing)
     }
 
     /// Mirror the firmware's reported audio source in the displayed ownership.
@@ -1044,11 +1074,11 @@ impl Engine {
             self.own();
             return Vec::new();
         }
-        match (source.kind.is_playing(), self.ownership) {
+        match (source.kind.is_playing(), self.ownership()) {
             (false, _) | (_, Ownership::Idle | Ownership::Claiming(_)) => Vec::new(),
             (true, Ownership::Owning(_)) => {
                 tracing::info!(peer = %source.mac, "another device took the audio");
-                self.ownership = Ownership::Idle;
+                self.set_ownership(Ownership::Idle);
                 vec![Effect::ReleaseAudio]
             }
         }
@@ -1059,7 +1089,7 @@ impl Engine {
     /// restart). Playing on, the OS restarts its suspended stream after a few
     /// seconds and the pods switch back to us, bare.
     fn yield_audio(&mut self) -> Vec<Effect> {
-        match self.ownership.is_held() {
+        match self.ownership().is_held() {
             true => self.release(),
             false => {
                 tracing::info!("yield request while not holding the audio: pausing");
@@ -1070,11 +1100,11 @@ impl Engine {
 
     /// Give up ownership once; repeats are no-ops.
     fn release(&mut self) -> Vec<Effect> {
-        if !self.ownership.is_held() {
+        if !self.ownership().is_held() {
             return Vec::new();
         }
         tracing::info!("releasing audio ownership");
-        self.ownership = Ownership::Idle;
+        self.set_ownership(Ownership::Idle);
         vec![Effect::Send(set_ownership(false)), Effect::ReleaseAudio]
     }
 
@@ -1106,10 +1136,7 @@ impl Engine {
             }
             _ => {}
         }
-        let [mac] = self.state.hosts.as_deref()? else {
-            return None;
-        };
-        let mac = *mac;
+        let mac = self.state.sole_host()?;
         (!matches!(self.local_mac, LocalMac::Known(known) if known == mac)).then(|| {
             tracing::info!(%mac, "learned local MAC");
             self.local_mac = LocalMac::Known(mac);
@@ -1121,7 +1148,7 @@ impl Engine {
     /// peer. Never a bare ownership claim without a peer to take from.
     fn notify_peers(&mut self) -> Vec<Effect> {
         let (Ownership::Claiming(Handoff::Pending), Some(local)) =
-            (self.ownership, self.local_mac.get())
+            (self.ownership(), self.local_mac.get())
         else {
             return Vec::new();
         };
@@ -1130,7 +1157,7 @@ impl Engine {
             return Vec::new();
         }
         tracing::info!(?peers, "handing the audio off from the other hosts");
-        self.ownership = Ownership::Claiming(Handoff::Sent);
+        self.set_ownership(Ownership::Claiming(Handoff::Sent));
         std::iter::once(set_ownership(true))
             .chain(
                 peers
@@ -1144,6 +1171,20 @@ impl Engine {
     /// This host's firmware update, if there was one with these pods.
     pub fn update_status(&self) -> Option<UpdateStatus> {
         self.update.as_ref().map(Update::status)
+    }
+
+    fn updater(&mut self) -> Option<&mut Updater> {
+        match &mut self.update {
+            Some(Update::Running(updater)) => Some(updater),
+            _ => None,
+        }
+    }
+
+    /// Run `f` on the running update, if any, and turn its outputs into
+    /// effects.
+    fn with_updater(&mut self, f: impl FnOnce(&mut Updater) -> Vec<Output>) -> Vec<Effect> {
+        let outputs = self.updater().map(f).unwrap_or_default();
+        self.updated(outputs)
     }
 
     /// Start updating the pods to the catalog's `release`: checks, then
@@ -1162,21 +1203,35 @@ impl Engine {
         })?;
         tracing::info!(%release, "firmware update: fetching the package");
         self.update = Some(Update::Downloading(release));
-        self.told = None;
+        if let Some(session) = self.session_mut() {
+            session.told = None;
+        }
         Ok(self.tell_update(UpdateStatus::Downloading))
     }
 
     fn may_update(&self, release: Option<ExactVersion>) -> Result<ExactVersion, Refusal> {
+        if !self.is_connected() {
+            return Err(Refusal::NotConnected);
+        }
+        let release = release.ok_or(Refusal::NoRelease)?;
+        if self.update_status().is_some_and(UpdateStatus::is_active) {
+            return Err(Refusal::Running);
+        }
+        self.may_start(release).map(|()| release)
+    }
+
+    /// What may change while the package downloads.
+    fn may_start(&self, release: ExactVersion) -> Result<(), Refusal> {
         let peer_running = self
             .state
             .peer_update
             .is_some_and(|peer| peer.status.is_active());
-        match (self.is_connected(), release, self.update_status()) {
-            (false, ..) => Err(Refusal::NotConnected),
-            (true, None, _) => Err(Refusal::NoRelease),
-            (true, Some(_), Some(status)) if status.is_active() => Err(Refusal::Running),
-            (true, Some(_), _) if peer_running => Err(Refusal::PeerRunning),
-            (true, Some(release), _) => update::check(&self.state, release).map(|()| release),
+        if !self.is_connected() {
+            Err(Refusal::NotConnected)
+        } else if peer_running {
+            Err(Refusal::PeerRunning)
+        } else {
+            update::check(&self.state, release)
         }
     }
 
@@ -1187,19 +1242,18 @@ impl Engine {
             return Vec::new();
         };
         let started = package
-            .ok_or(Failure::Download)
-            .and_then(|package| match package.version() == release {
-                true => Ok(package),
-                false => {
+            .filter(|package| {
+                let matches = package.version() == release;
+                if !matches {
                     tracing::warn!(release = %release, package = %package.version(), "firmware update: not the release's package");
-                    Err(Failure::Download)
                 }
+                matches
             })
+            .ok_or(Failure::Download)
             .and_then(|package| {
-                // Not ours any more: only the checks that may have changed.
-                self.update = None;
-                let checked = self.may_update(Some(release)).map_err(Failure::Refused);
-                checked.map(|_| package)
+                self.may_start(release)
+                    .map_err(Failure::Refused)
+                    .map(|()| package)
             });
         match started {
             Ok(package) => {
@@ -1217,25 +1271,21 @@ impl Engine {
 
     /// Withdraw the update.
     pub fn cancel_update(&mut self) -> Vec<Effect> {
-        let outputs = match &mut self.update {
-            Some(Update::Downloading(_)) => {
-                self.update = Some(Update::Failed(Failure::Cancelled));
-                vec![Output::Status(UpdateStatus::Failed(Failure::Cancelled))]
-            }
-            Some(Update::Running(updater)) => updater.cancel(),
-            Some(Update::Failed(_)) | None => Vec::new(),
-        };
-        self.updated(outputs)
+        if let Some(Update::Downloading(_)) = self.update {
+            self.update = Some(Update::Failed(Failure::Cancelled));
+            return self.tell_update(UpdateStatus::Failed(Failure::Cancelled));
+        }
+        self.with_updater(Updater::cancel)
     }
 
     /// UARP may be sent: a settled session (acked, the state half of the
     /// burst in, the primary known) and no connect or primary change fresh.
     fn uarp_ready(&self, now: Instant) -> bool {
-        self.is_connected()
-            && matches!(self.startup, Startup::Answering { .. })
-            && self.state.battery.is_live()
+        self.session().is_some_and(|session| {
+            matches!(session.startup.phase, Phase::Answering)
+                && session.uarp.hold.is_none_or(|hold| now >= hold)
+        }) && self.state.battery.is_live()
             && self.state.primary_bud.is_some()
-            && self.uarp_hold.is_none_or(|hold| now >= hold)
     }
 
     /// Something to send once UARP may be, in this session.
@@ -1244,44 +1294,49 @@ impl Engine {
             Some(Update::Running(updater)) => updater.status().is_active() && !updater.is_up(),
             _ => false,
         };
-        self.is_connected() && (update || matches!(self.version_query, VersionQuery::Due))
+        self.session()
+            .is_some_and(|session| update || matches!(session.uarp.query, VersionQuery::Due))
     }
 
     /// Once UARP may be sent: offer (or resume) the update, else ask for
     /// the running version, once a session.
     fn settle_uarp(&mut self, now: Instant) -> Vec<Effect> {
+        let Some(session) = self.session_mut() else {
+            return Vec::new();
+        };
         // Over: it mustn't stay a wake-up.
-        self.uarp_hold = self.uarp_hold.filter(|&hold| now < hold);
+        session.uarp.hold = session.uarp.hold.filter(|&hold| now < hold);
         if !self.uarp_ready(now) || !self.uarp_waits() {
             return Vec::new();
         }
-        match &mut self.update {
-            Some(Update::Running(updater)) if updater.status().is_active() => {
-                let outputs = updater.up(now);
-                self.updated(outputs)
-            }
-            _ => {
-                tracing::info!("asking the pods for their exact firmware");
-                self.version_query = VersionQuery::Sent;
-                uarp::running_version_query()
-                    .iter()
-                    .map(|message| Effect::Send(uarp::frame(message)))
-                    .collect()
-            }
+        if self
+            .updater()
+            .is_some_and(|updater| updater.status().is_active())
+        {
+            return self.with_updater(|updater| updater.up(now));
         }
+        tracing::info!("asking the pods for their exact firmware");
+        if let Some(session) = self.session_mut() {
+            session.uarp.query = VersionQuery::Sent;
+        }
+        uarp::running_version_query()
+            .iter()
+            .map(|message| Effect::Send(uarp::frame(message)))
+            .collect()
     }
 
     /// A new primary bud: hold UARP; an update waits until it settles.
     fn primary_changes(&mut self, now: Instant) -> Vec<Effect> {
-        self.uarp_hold = Some(now + UARP_SETTLE);
-        let outputs = match &mut self.update {
-            Some(Update::Running(updater)) if updater.is_up() => {
-                tracing::info!("the primary bud changes: the update waits");
-                updater.down(now)
+        if let Some(session) = self.session_mut() {
+            session.uarp.hold = Some(now + UARP_SETTLE);
+        }
+        self.with_updater(|updater| {
+            if !updater.is_up() {
+                return Vec::new();
             }
-            _ => Vec::new(),
-        };
-        self.updated(outputs)
+            tracing::info!("the primary bud changes: the update waits");
+            updater.down(now)
+        })
     }
 
     /// A UARP message from the pods: the running version, a downstream
@@ -1289,26 +1344,42 @@ impl Engine {
     /// Their own offers (e.g. a dynamic `MTIC` asset) go unanswered.
     fn uarp_received(&mut self, message: &[u8], now: Instant) -> Vec<Effect> {
         if let Some(exact) = uarp::running_version(message) {
-            return self.exact_firmware(exact);
+            if let Some(session) = self.session_mut() {
+                session.uarp.query = VersionQuery::Answered(exact);
+            }
+            return self
+                .running_firmware(exact)
+                .into_iter()
+                .chain(self.tell(News::Firmware(exact)))
+                .collect();
         }
         match Received::parse(message) {
             Some(Received::DownstreamAdded { id }) if self.uarp_ready(now) => {
                 tracing::info!(id, "UARP: downstream endpoint added");
-                self.uarp_id = self.uarp_id.wrapping_add(1);
-                let ack = Message::DownstreamAddedAck { id }.encode(self.uarp_id);
+                let Some(session) = self.session_mut() else {
+                    return Vec::new();
+                };
+                session.uarp.id = session.uarp.id.wrapping_add(1);
+                let ack = Message::DownstreamAddedAck { id }.encode(session.uarp.id);
                 vec![Effect::Send(uarp::frame(&ack))]
             }
             received => {
-                let outputs = match &mut self.update {
-                    Some(Update::Running(updater)) => updater.received(message, now),
-                    _ => {
-                        tracing::debug!(?received, "UARP: not for us");
-                        Vec::new()
-                    }
-                };
-                self.updated(outputs)
+                if self.updater().is_none() {
+                    tracing::debug!(?received, "UARP: not for us");
+                }
+                self.with_updater(|updater| updater.received(message, now))
             }
         }
+    }
+
+    /// The exact running version, from our query or a peer's news; ends a
+    /// staged update once it's the new one.
+    fn running_firmware(&mut self, exact: ExactVersion) -> Vec<Effect> {
+        if self.state.firmware.exact != Some(exact) {
+            tracing::info!(%exact, "running firmware");
+            self.state.firmware.exact = Some(exact);
+        }
+        self.with_updater(|updater| updater.running(exact))
     }
 
     /// The updater's outputs as effects: its messages, then for a new
@@ -1326,17 +1397,24 @@ impl Engine {
     /// Tell the other hosts, on a change of state or every [`TOLD_STEP`] %.
     fn tell_update(&mut self, status: UpdateStatus) -> Vec<Effect> {
         let step = |status: UpdateStatus| (status.name(), status.percent() / TOLD_STEP);
-        if self.told.is_some_and(|told| step(told) == step(status)) {
+        let Some(session) = self.session_mut() else {
+            return Vec::new();
+        };
+        if session.told.is_some_and(|told| step(told) == step(status)) {
             return Vec::new();
         }
-        self.told = Some(status);
+        session.told = Some(status);
         self.tell(News::Update(status))
     }
 
     /// What a host joining should know: the exact firmware we queried, our
     /// update, and the cycle if known.
     fn share(&self) -> Vec<Effect> {
-        self.queried
+        let queried = self.session().and_then(|session| match session.uarp.query {
+            VersionQuery::Answered(exact) => Some(exact),
+            VersionQuery::Due | VersionQuery::Sent => None,
+        });
+        queried
             .map(News::Firmware)
             .into_iter()
             .chain(self.update_status().map(News::Update))
@@ -1363,6 +1441,7 @@ impl Engine {
 mod tests {
     use super::*;
     use crate::aacp::device_information::DeviceInformation;
+    use crate::aacp::{Bud, EarStatus};
     use crate::protocol::parse_datagram;
 
     const LOCAL: &str = "02:11:22:33:44:55";
@@ -1502,7 +1581,13 @@ mod tests {
         let mut e = engine();
         e.take();
         feed(&mut e, &owns_connection(true));
-        assert_eq!(e.ownership(), Ownership::Owning(Playback::AsIs));
+        assert!(matches!(
+            e.ownership(),
+            Ownership::Owning(Held {
+                playback: Playback::AsIs,
+                ..
+            })
+        ));
         let ear = Packet::EarDetection(EarDetection {
             primary: EarStatus::InEar,
             secondary: EarStatus::NotInEar,
@@ -1629,7 +1714,13 @@ mod tests {
             e.handle(source(mac(LOCAL), Activity::MEDIA), now())
                 .is_empty()
         );
-        assert_eq!(e.ownership(), Ownership::Owning(Playback::AsIs));
+        assert!(matches!(
+            e.ownership(),
+            Ownership::Owning(Held {
+                playback: Playback::AsIs,
+                ..
+            })
+        ));
         // Another device streaming: the pods switched to it, we lost the audio.
         assert_eq!(
             e.handle(source(mac(PEER), Activity::CALL), now()),
@@ -1687,7 +1778,13 @@ mod tests {
         e.handle(ears(InEar, InEar), now());
         playing(&mut e, Activity::MEDIA);
         assert_eq!(e.handle(ears(InEar, NotInEar), now()), vec![Effect::Pause]);
-        assert_eq!(e.ownership(), Ownership::Owning(Playback::EarPaused));
+        assert!(matches!(
+            e.ownership(),
+            Ownership::Owning(Held {
+                playback: Playback::EarPaused,
+                ..
+            })
+        ));
         e.handle(
             Packet::AudioSource(AudioSource {
                 mac: mac(PEER),
@@ -1702,13 +1799,13 @@ mod tests {
     fn handshakes_again_without_an_ack_then_reconnects() {
         let mut e = engine();
         (0..STARTUP_RETRIES).for_each(|_| {
-            assert_eq!(e.check_state_burst(now()), [Effect::Send(handshake())]);
+            assert_eq!(e.check_startup(now()), [Effect::Send(handshake())]);
         });
-        assert_eq!(e.check_state_burst(now()), [Effect::Reconnect]);
+        assert_eq!(e.check_startup(now()), [Effect::Reconnect]);
         let mut e = engine();
         e.handle(Packet::HandshakeAck, now());
         assert_eq!(
-            e.check_state_burst(now()),
+            e.check_startup(now()),
             [Effect::Send(request_notifications())]
         );
     }
@@ -1868,7 +1965,7 @@ mod tests {
         assert!(state.hosts.is_none(), "routing starts afresh");
         e.handle(Packet::HandshakeAck, now());
         assert_eq!(
-            e.check_state_burst(now()),
+            e.check_startup(now()),
             [Effect::Send(request_notifications())],
             "carried levels aren't this session's burst"
         );
@@ -2010,11 +2107,11 @@ mod tests {
         e.handle(Packet::HandshakeAck, now());
         (0..STARTUP_RETRIES).for_each(|_| {
             assert_eq!(
-                e.check_state_burst(now()),
+                e.check_startup(now()),
                 [Effect::Send(request_notifications())]
             );
         });
-        assert_eq!(e.check_state_burst(now()), [Effect::Reconnect]);
+        assert_eq!(e.check_startup(now()), [Effect::Reconnect]);
         // Answering but holding the state half back: keeps waiting.
         let mut e = engine();
         e.handle(Packet::HandshakeAck, now());
@@ -2026,9 +2123,9 @@ mod tests {
             now(),
         );
         (0..STARTUP_RETRIES).for_each(|_| {
-            e.check_state_burst(now());
+            e.check_startup(now());
         });
-        assert!(e.check_state_burst(now()).is_empty());
+        assert!(e.check_startup(now()).is_empty());
     }
 
     #[test]
@@ -2045,11 +2142,11 @@ mod tests {
         );
         (0..STARTUP_RETRIES).for_each(|_| {
             assert_eq!(
-                e.check_state_burst(now()),
+                e.check_startup(now()),
                 [Effect::Send(request_notifications())]
             );
         });
-        assert!(e.check_state_burst(now()).is_empty(), "gives up");
+        assert!(e.check_startup(now()).is_empty(), "gives up");
         let mut e = engine();
         e.handle(Packet::HandshakeAck, now());
         e.handle(
@@ -2060,7 +2157,7 @@ mod tests {
             }]),
             now(),
         );
-        assert!(e.check_state_burst(now()).is_empty());
+        assert!(e.check_startup(now()).is_empty());
     }
 
     #[test]
@@ -2160,7 +2257,7 @@ mod tests {
         feed(&mut e, &owns_connection(true));
         let away = e.handle(ears(InCase, InCase), now());
         assert!(away.iter().any(|e| matches!(e, Effect::ReleaseAudio)));
-        assert!(matches!(e.ownership, Ownership::Idle));
+        assert!(matches!(e.ownership(), Ownership::Idle));
     }
 
     #[test]
@@ -2178,7 +2275,7 @@ mod tests {
         let take = e.media_started();
         assert_eq!(sends(&take), 4, "the handoff still pauses the peer");
         assert!(take.iter().any(|e| matches!(e, Effect::RouteAudio)));
-        assert!(matches!(e.ownership, Ownership::Owning(_)));
+        assert!(matches!(e.ownership(), Ownership::Owning(_)));
     }
 
     #[test]
@@ -2295,7 +2392,13 @@ mod tests {
             feed(&mut e, &only_local_connected()),
             vec![Effect::RouteAudio]
         );
-        assert_eq!(e.ownership(), Ownership::Owning(Playback::AsIs));
+        assert!(matches!(
+            e.ownership(),
+            Ownership::Owning(Held {
+                playback: Playback::AsIs,
+                ..
+            })
+        ));
         // Already holding it: no repeat.
         assert!(feed(&mut e, &only_local_connected()).is_empty());
     }
@@ -2346,7 +2449,13 @@ mod tests {
         worn(&mut e);
         assert!(feed(&mut e, CONNECTED_DEVICES).is_empty());
         assert_eq!(feed(&mut e, &peer_disconnected()), vec![Effect::RouteAudio]);
-        assert_eq!(e.ownership(), Ownership::Owning(Playback::AsIs));
+        assert!(matches!(
+            e.ownership(),
+            Ownership::Owning(Held {
+                playback: Playback::AsIs,
+                ..
+            })
+        ));
     }
 
     #[test]
@@ -2623,8 +2732,8 @@ mod tests {
             assert_eq!(kinds(&e.handle(Packet::HandshakeAck, now())), []);
             assert_eq!(kinds(&feed(&mut e, CONNECTED_DEVICES)), []);
             assert_eq!(kinds(&settle(&mut e, now())), [], "a connect is fresh");
-            assert_eq!(e.next_wake(), Some(now() + STATE_BURST_WAIT));
-            e.tick(now() + STATE_BURST_WAIT);
+            assert_eq!(e.next_wake(), Some(now() + STARTUP_WAIT));
+            e.tick(now() + STARTUP_WAIT);
             assert_eq!(e.next_wake(), Some(later()));
             assert_eq!(kinds(&e.tick(later())), [0x00, 0x01, 0x03]);
             assert_eq!(e.next_wake(), None, "asked once a session");
