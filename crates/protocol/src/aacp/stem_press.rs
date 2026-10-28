@@ -3,6 +3,7 @@ use nom::{IResult, Parser as _};
 use num_enum::TryFromPrimitive;
 
 use super::byte;
+use super::device_status::Bud;
 
 pub const OPCODE: u16 = 0x19;
 
@@ -16,18 +17,10 @@ pub enum StemPressType {
     Long = 0x08,
 }
 
-#[derive(Debug, Clone, Copy, Hash, TryFromPrimitive)]
-#[cfg_attr(test, derive(PartialEq, Eq))]
-#[repr(u8)]
-pub enum StemBud {
-    Left = 0x01,
-    Right = 0x02,
-}
-
 #[derive(Debug, Clone, Copy)]
 pub struct StemPress {
     pub kind: StemPressType,
-    pub bud: StemBud,
+    pub bud: Bud,
 }
 
 /// `[kind] [bud]`

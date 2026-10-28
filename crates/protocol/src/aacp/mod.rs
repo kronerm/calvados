@@ -28,7 +28,7 @@ pub use ear_detection::{EarDetection, EarStatus};
 pub use eq_data::EqData;
 pub use proximity_keys::{KeyType, ProximityKey};
 pub use smart_routing::{Routing, RoutingResponse};
-pub use stem_press::{StemBud, StemPress, StemPressType};
+pub use stem_press::{StemPress, StemPressType};
 
 /// nom parser for a `TryFromPrimitive` byte enum; fails on unknown bytes.
 pub(crate) fn byte<T: TryFrom<u8>>(input: &[u8]) -> IResult<&[u8], T> {
