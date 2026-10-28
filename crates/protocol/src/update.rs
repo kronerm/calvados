@@ -15,7 +15,7 @@ use crate::aacp::control_command::Cycle;
 use crate::firmware::ExactVersion;
 use crate::state::DeviceState;
 use crate::superbinary::Package;
-use crate::uarp::{MAX_DATA, Message, Processing, Received, UNKNOWN_ASSET};
+use crate::uarp::{MAX_DATA, Message, Processing, Received, Rejection, UNKNOWN_ASSET};
 
 /// Our offer's asset id, as `uarp_offer.py` used.
 const ASSET: u16 = 1;
@@ -110,19 +110,8 @@ pub enum Failure {
     Download,
     /// Things changed while downloading.
     Refused(Refusal),
-    /// Processing notification `0x?2`: e.g. state left by an earlier offer;
-    /// closing and reopening the case clears it.
-    Denied {
-        reason: u8,
-    },
-    /// `0x?3`: superseded, or merged into another host's identical offer.
-    Abandoned {
-        reason: u8,
-    },
-    /// `0x?4`: a bad header or data.
-    Corrupt {
-        reason: u8,
-    },
+    /// The pods' processing notification, with its reason.
+    Rejected(Rejection, u8),
     /// Nothing asked for within [`WATCHDOG`] of the offer.
     NotStarted,
     /// No request for [`WATCHDOG`] mid-transfer.
@@ -137,11 +126,15 @@ impl fmt::Display for Failure {
         match self {
             Self::Download => f.write_str("the download failed"),
             Self::Refused(refusal) => write!(f, "{refusal}"),
-            Self::Denied { reason } => {
+            Self::Rejected(Rejection::Denied, reason) => {
                 write!(f, "declined (reason {reason}); reopen the case and retry")
             }
-            Self::Abandoned { reason } => write!(f, "abandoned (reason {reason})"),
-            Self::Corrupt { reason } => write!(f, "found corrupt (reason {reason})"),
+            Self::Rejected(Rejection::Abandoned, reason) => {
+                write!(f, "abandoned (reason {reason})")
+            }
+            Self::Rejected(Rejection::Corrupt, reason) => {
+                write!(f, "found corrupt (reason {reason})")
+            }
             Self::NotStarted => f.write_str("never started; reopen the case and retry"),
             Self::Stalled => f.write_str("the transfer stalled"),
             Self::Lost => f.write_str("the connection was lost"),
@@ -387,14 +380,8 @@ impl Updater {
                 tracing::info!(asset, ?outcome, "firmware update: processing notification");
                 self.phase = match (asset, outcome, active) {
                     (ASSET, Processing::Staged, true) => Phase::Staged,
-                    (ASSET, Processing::Denied { reason }, true) => {
-                        Phase::Failed(Failure::Denied { reason })
-                    }
-                    (ASSET, Processing::Abandoned { reason }, true) => {
-                        Phase::Failed(Failure::Abandoned { reason })
-                    }
-                    (ASSET, Processing::Corrupt { reason }, true) => {
-                        Phase::Failed(Failure::Corrupt { reason })
+                    (ASSET, Processing::Rejected(rejection, reason), true) => {
+                        Phase::Failed(Failure::Rejected(rejection, reason))
                     }
                     _ => self.phase,
                 };
@@ -631,9 +618,8 @@ fn failure_code(failure: Failure) -> (u8, u8) {
                 .and_then(|at| u8::try_from(at).ok())
                 .unwrap_or(u8::MAX),
         ),
-        Failure::Denied { reason } => (3, reason),
-        Failure::Abandoned { reason } => (4, reason),
-        Failure::Corrupt { reason } => (5, reason),
+        // 3, 4, 5.
+        Failure::Rejected(rejection, reason) => (u8::from(rejection) + 1, reason),
         Failure::NotStarted => (6, 0),
         Failure::Stalled => (7, 0),
         Failure::Lost => (8, 0),
@@ -645,9 +631,7 @@ fn failure_of(code: u8, argument: u8) -> Option<Failure> {
     Some(match code {
         1 => Failure::Download,
         2 => Failure::Refused(*REFUSALS.get(usize::from(argument))?),
-        3 => Failure::Denied { reason: argument },
-        4 => Failure::Abandoned { reason: argument },
-        5 => Failure::Corrupt { reason: argument },
+        3..=5 => Failure::Rejected(Rejection::try_from(code - 1).ok()?, argument),
         6 => Failure::NotStarted,
         7 => Failure::Stalled,
         8 => Failure::Lost,
@@ -835,9 +819,9 @@ mod tests {
     #[test]
     fn the_pods_verdicts() {
         for (flags, failure) in [
-            (0x0202, Failure::Denied { reason: 2 }),
-            (0x0803, Failure::Abandoned { reason: 8 }),
-            (0x0004, Failure::Corrupt { reason: 0 }),
+            (0x0202, Failure::Rejected(Rejection::Denied, 2)),
+            (0x0803, Failure::Rejected(Rejection::Abandoned, 8)),
+            (0x0004, Failure::Rejected(Rejection::Corrupt, 0)),
         ] {
             let mut updater = started();
             let outputs = updater.received(&processing(flags), now());
@@ -1007,7 +991,7 @@ mod tests {
             UpdateStatus::Interrupted { percent: 41 },
             UpdateStatus::Staged,
             UpdateStatus::Done(version),
-            UpdateStatus::Failed(Failure::Denied { reason: 2 }),
+            UpdateStatus::Failed(Failure::Rejected(Rejection::Denied, 2)),
             UpdateStatus::Failed(Failure::Refused(Refusal::NotInCase)),
             UpdateStatus::Failed(Failure::Cancelled),
         ];
@@ -1034,7 +1018,10 @@ mod tests {
                 format!("02042800{zeros}"),
             ),
             (
-                News::Update(UpdateStatus::Failed(Failure::Denied { reason: 2 })),
+                News::Update(UpdateStatus::Failed(Failure::Rejected(
+                    Rejection::Denied,
+                    2,
+                ))),
                 format!("02080302{zeros}"),
             ),
             (

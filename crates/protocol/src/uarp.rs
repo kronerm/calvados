@@ -210,29 +210,32 @@ pub enum Received {
 pub enum Processing {
     /// The asset is fully staged.
     Staged,
-    Denied {
-        reason: u8,
-    },
-    /// E.g. superseded by a newer offer, or merged into another host's.
-    Abandoned {
-        reason: u8,
-    },
-    /// A bad header or a data error.
-    Corrupt {
-        reason: u8,
-    },
+    /// Turned down, with a reason.
+    Rejected(Rejection, u8),
     Other,
+}
+
+/// A processing notification's outcome turning an asset down.
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, num_enum::TryFromPrimitive, num_enum::IntoPrimitive,
+)]
+#[repr(u8)]
+pub enum Rejection {
+    /// E.g. state left by an earlier offer; reopening the case clears it.
+    Denied = 2,
+    /// Superseded, or merged into another host's identical offer.
+    Abandoned = 3,
+    /// A bad header or data.
+    Corrupt = 4,
 }
 
 impl Processing {
     pub fn of(flags: u16) -> Self {
         let [reason, outcome] = flags.to_be_bytes();
-        match outcome {
-            1 => Self::Staged,
-            2 => Self::Denied { reason },
-            3 => Self::Abandoned { reason },
-            4 => Self::Corrupt { reason },
-            _ => Self::Other,
+        match (outcome, Rejection::try_from(outcome)) {
+            (1, _) => Self::Staged,
+            (_, Ok(rejection)) => Self::Rejected(rejection, reason),
+            (_, Err(_)) => Self::Other,
         }
     }
 }
@@ -450,9 +453,18 @@ mod tests {
     #[test]
     fn processing_flags() {
         assert_eq!(Processing::of(0x0001), Processing::Staged);
-        assert_eq!(Processing::of(0x0202), Processing::Denied { reason: 2 });
-        assert_eq!(Processing::of(0x0803), Processing::Abandoned { reason: 8 });
-        assert_eq!(Processing::of(0x0004), Processing::Corrupt { reason: 0 });
+        assert_eq!(
+            Processing::of(0x0202),
+            Processing::Rejected(Rejection::Denied, 2)
+        );
+        assert_eq!(
+            Processing::of(0x0803),
+            Processing::Rejected(Rejection::Abandoned, 8)
+        );
+        assert_eq!(
+            Processing::of(0x0004),
+            Processing::Rejected(Rejection::Corrupt, 0)
+        );
         assert_eq!(Processing::of(0x0106), Processing::Other);
     }
 }
