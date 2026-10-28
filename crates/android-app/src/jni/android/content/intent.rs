@@ -8,7 +8,7 @@ use crate::jni::java::util::list::List;
 use crate::jni::string;
 
 /// `android.content.Intent`.
-pub struct Intent<R>(pub R);
+pub struct Intent<R>(pub(crate) R);
 
 impl<'env_scope> Intent<JObject<'env_scope>> {
     /// Construct an empty `Intent` (the `Intent()` constructor).

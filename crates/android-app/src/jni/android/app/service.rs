@@ -4,7 +4,7 @@ use crate::jni::android::app::notification::Notification;
 use crate::jni::android::content::context::Context;
 
 /// `android.app.Service`.
-pub struct Service<R>(pub R);
+pub struct Service<R>(pub(crate) R);
 
 impl<'object_scope, 'env_scope, R: Reference + AsRef<JObject<'object_scope>>> Service<R> {
     /// A service is a `Context`.

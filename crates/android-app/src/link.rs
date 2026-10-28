@@ -14,7 +14,8 @@ use crate::jni::android::bluetooth::socket::BluetoothSocket;
 use crate::jni::android::os::parcel_uuid::ParcelUuid;
 use crate::jni::java::lang::boolean::Boolean;
 use crate::jni::java::lang::integer::Integer;
-use crate::jni::{Class as _, GetDeclaredConstructors as _, with_env};
+use crate::jni::java::lang::reflect::constructor::Constructor;
+use crate::jni::with_env;
 use crate::proto::connection::{AIRPODS_PSM, AIRPODS_UUID};
 
 /// Android's hidden `BluetoothSocket.TYPE_L2CAP`.
@@ -147,7 +148,8 @@ pub(crate) fn create_l2cap_socket<'local>(
         &[&l2cap, &fd, &yes, &yes, device, &psm, &uuid],
         &[&l2cap, &yes, &yes, device, &psm, &uuid],
     ];
-    let constructors = BluetoothSocket::<JObject>::class(env)?.get_declared_constructors(env)?;
+    let class = BluetoothSocket::class(env)?;
+    let constructors = Constructor::declared_by(env, &class)?;
 
     for args in signatures {
         for constructor in &constructors {

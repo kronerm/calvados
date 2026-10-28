@@ -3,7 +3,7 @@ use jni::{Env, jni_sig, jni_str, objects::JObject, refs::Reference};
 use crate::jni::string;
 
 /// `java.io.File`.
-pub struct File<R>(pub R);
+pub struct File<R>(pub(crate) R);
 
 impl<'object_scope, R: Reference + AsRef<JObject<'object_scope>>> File<R> {
     /// `getAbsolutePath()`.

@@ -14,7 +14,7 @@ use crate::jni::string;
 /// `android.content.Context` — the entry point for system services,
 /// preferences and the app class loader. Obtained from
 /// [`ActivityThread::get_application`](crate::jni::android::app::activity_thread::ActivityThread::get_application).
-pub struct Context<R>(pub R);
+pub struct Context<R>(pub(crate) R);
 
 impl<'object_scope, 'env_scope, R: Reference + AsRef<JObject<'object_scope>>> Context<R> {
     /// The underlying `Context` object, for calls that take a `Context` arg.

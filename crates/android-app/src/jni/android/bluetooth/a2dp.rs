@@ -12,7 +12,7 @@ pub enum Profile {
 }
 
 /// `android.bluetooth.BluetoothA2dp` (a `BluetoothProfile` proxy).
-pub struct BluetoothA2dp<R>(pub R);
+pub struct BluetoothA2dp<R>(pub(crate) R);
 
 impl<'object_scope, 'env_scope, R: Reference + AsRef<JObject<'object_scope>>> BluetoothA2dp<R> {
     /// `getConnectedDevices()` — devices with A2DP connected right now.

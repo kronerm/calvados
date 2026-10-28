@@ -4,10 +4,7 @@ use jni::{
     refs::{Global, Reference},
 };
 
-use crate::jni::{
-    Class,
-    java::io::{input_stream::InputStream, output_stream::OutputStream},
-};
+use crate::jni::java::io::{input_stream::InputStream, output_stream::OutputStream};
 
 pub struct BluetoothSocket<R>(pub(crate) R);
 impl<'object_scope, 'env_scope, R: Reference + AsRef<JObject<'object_scope>>> BluetoothSocket<R> {
@@ -57,19 +54,14 @@ impl<'object_scope, 'env_scope, R: Reference + AsRef<JObject<'object_scope>>> Bl
 }
 
 impl BluetoothSocket<JObject<'_>> {
+    pub fn class<'local>(env: &mut Env<'local>) -> anyhow::Result<JClass<'local>> {
+        Ok(env.load_class(jni_str!("android/bluetooth/BluetoothSocket"))?)
+    }
+
     pub fn into_global(
         self,
         env: &mut Env,
     ) -> anyhow::Result<BluetoothSocket<Global<JObject<'static>>>> {
         Ok(BluetoothSocket(env.new_global_ref(self.0)?))
-    }
-}
-
-impl<'object_scope, 'env_scope, R> Class<'env_scope> for BluetoothSocket<R>
-where
-    R: Reference + AsRef<JObject<'object_scope>>,
-{
-    fn class(env: &mut Env<'env_scope>) -> anyhow::Result<JClass<'env_scope>> {
-        Ok(env.load_class(jni_str!("android/bluetooth/BluetoothSocket"))?)
     }
 }

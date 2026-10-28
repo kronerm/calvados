@@ -2,13 +2,14 @@ use jni::{
     Env, JValue, jni_sig, jni_str,
     objects::{JObject, JString},
     refs::Reference,
+    strings::JNIStr,
 };
 use num_enum::IntoPrimitive;
 
 use crate::jni::android::app::pending_intent::PendingIntent;
 use crate::jni::android::widget::remote_views::RemoteViews;
 
-pub struct Notification<R>(pub R);
+pub struct Notification<R>(pub(crate) R);
 impl<'env_scope> Notification<JObject<'env_scope>> {
     pub fn builder(
         env: &mut Env<'env_scope>,
@@ -34,30 +35,25 @@ impl<'env_scope> Notification<JObject<'env_scope>> {
 pub struct Builder<R>(R);
 impl<'object_scope, 'env_scope, R: Reference + AsRef<JObject<'object_scope>>> Builder<R> {
     pub fn set_content_title(self, env: &mut Env<'env_scope>, title: &str) -> anyhow::Result<Self> {
-        let title = JString::new(env, title)?;
-        env.call_method(
-            &self.0,
-            jni_str!("setContentTitle"),
-            jni_sig!("(Ljava/lang/CharSequence;)Landroid/app/Notification$Builder;"),
-            &[JValue::Object(&title)],
-        )?;
-        Ok(self)
+        self.set_text(env, jni_str!("setContentTitle"), title)
     }
     pub fn set_content_text(self, env: &mut Env<'env_scope>, text: &str) -> anyhow::Result<Self> {
-        let text = JString::new(env, text)?;
-        env.call_method(
-            &self.0,
-            jni_str!("setContentText"),
-            jni_sig!("(Ljava/lang/CharSequence;)Landroid/app/Notification$Builder;"),
-            &[JValue::Object(&text)],
-        )?;
-        Ok(self)
+        self.set_text(env, jni_str!("setContentText"), text)
     }
     pub fn set_sub_text(self, env: &mut Env<'env_scope>, text: &str) -> anyhow::Result<Self> {
+        self.set_text(env, jni_str!("setSubText"), text)
+    }
+    /// A setter taking a `CharSequence`.
+    fn set_text(
+        self,
+        env: &mut Env<'env_scope>,
+        method: &JNIStr,
+        text: &str,
+    ) -> anyhow::Result<Self> {
         let text = JString::new(env, text)?;
         env.call_method(
             &self.0,
-            jni_str!("setSubText"),
+            method,
             jni_sig!("(Ljava/lang/CharSequence;)Landroid/app/Notification$Builder;"),
             &[JValue::Object(&text)],
         )?;

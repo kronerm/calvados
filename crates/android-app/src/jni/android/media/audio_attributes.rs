@@ -11,7 +11,7 @@ pub enum Usage {
 }
 
 /// `android.media.AudioAttributes`.
-pub struct AudioAttributes<R>(pub R);
+pub struct AudioAttributes<R>(pub(crate) R);
 
 impl<'object_scope, 'env_scope, R: Reference + AsRef<JObject<'object_scope>>> AudioAttributes<R> {
     /// `getUsage()`; `None` for the other usages.
