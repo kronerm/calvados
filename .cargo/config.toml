@@ -1,15 +1,15 @@
 # The Android crates are built by tools that set their own NDK linker from
-# ANDROID_NDK_ROOT: the app by `cargo apk2`, the hook by `cargo xposed`.
+# ANDROID_NDK_ROOT: the app by `cargo apk2`, the hook by `android-xposed`,
+# which also makes the app's APK the Xposed module.
 
 [alias]
-app-build = "apk2 build -p android-app"
-app-run = "apk2 run -p android-app"
-xposed = "run -p android-xposed --release"
+app-build = "run -q -p android-xposed -- build"
+app-run = "run -q -p android-xposed -- run"
 
 [env]
 # The app's Java shell for the bytecode d8 reads: d8 9.2 rejects newer class
 # files (Java 27's major version 71). cargo-apk2 takes no javac options; javac
-# reads this. The xposed build passes the same flag itself.
+# reads this. The Xposed entry's build passes the same flag itself.
 JDK_JAVAC_OPTIONS = "--release 17"
 # ring's C (HTTPS for the firmware catalog) for plain `cargo clippy --target
 # …-android`, from the default NDK; cargo-apk2 sets its own, which wins.

@@ -12,7 +12,7 @@ the reasoning behind individual changes lives in commit messages.
 | `linux` (binary `calvados`) | BlueZ daemon (`bluer`, tokio, D-Bus via `zbus`) | Transport + effects only; all decisions come from `Engine`. |
 | `android-app` (`libcalvados.so`) | Android foreground service (cdylib) + thin Java shell | Transport + effects + notification; decisions from `Engine`. |
 | `android-hook` (`libcalvados_hook.so`) | LSPosed native hook in the system Bluetooth process | `#![cfg(target_os = "android")]`; empty on the host. |
-| `android-xposed` | Host build tool packaging the hook as an Xposed module APK (libxposed API 101+, targeting 102: Vector 2.1+; the entry and `module.prop` in `src/main.rs`, the compile-only API in `assets/libxposed-api.jar`) | Shells out to SDK tools. |
+| `android-xposed` | Host build tool: the app via cargo-apk2, then the same APK made the Xposed module (the hook, the entry class as `classes2.dex`, `META-INF/xposed`; libxposed API 101+, targeting 102: Vector 2.1+; the compile-only API in `assets/libxposed-api.jar`), aligned and signed again with cargo-apk2's key | Shells out to cargo-apk2 and SDK tools. |
 
 ## Building
 
@@ -21,8 +21,7 @@ the crate with `-p`. Host is the default target.
 
 ```sh
 cargo build -p linux --release              # the daemon (or `makepkg -si`)
-cargo xposed                                # -> target/release/calvados-xposed.apk
-cargo app-build                             # = cargo apk2 build -p android-app
+cargo app-build                             # app + module -> target/debug/apk/calvados.apk
 cargo app-run                               # build, install, run on a device
 cargo app-build --release                   # needs the signing env below
 ```
@@ -37,8 +36,8 @@ Prerequisites: `rust-toolchain.toml` pins stable and the Android targets;
 the Android SDK and NDK (`ANDROID_HOME`, `ANDROID_NDK_ROOT`, the latter
 defaulting to `/opt/android-ndk`, which both Android builds use for the
 linker); `aapt2`, `javac`, `d8`, `zipalign`, `apksigner` and `keytool` on
-`PATH` for the xposed APK. Any JDK works: `.cargo/config.toml` sets
-`JDK_JAVAC_OPTIONS=--release 17` for cargo-apk2's `javac` (the xposed build
+`PATH` (and `adb` for `app-run`). Any JDK works: `.cargo/config.toml` sets
+`JDK_JAVAC_OPTIONS=--release 17` for cargo-apk2's `javac` (the entry's build
 passes the flag itself), since `d8` rejects class files from newer JDKs
 (Java 27: "Unsupported class file major version 71"). It also names the
 NDK's clang and `llvm-ar` (at `/opt/android-ndk`) for ring's C, which plain
@@ -47,10 +46,10 @@ NDK's clang and `llvm-ar` (at `/opt/android-ndk`) for ring's C, which plain
 Release signing: the release key is private, never in the repo: the
 maintainer keeps it outside the checkout (and a backup in a password
 manager), CI has it as the secrets `ANDROID_KEYSTORE` (base64) and
-`ANDROID_KEYSTORE_PASSWORD`. Both APKs are signed with it: cargo-apk2 reads
-`CARGO_APK_RELEASE_KEYSTORE` / `CARGO_APK_RELEASE_KEYSTORE_PASSWORD`, and
-`cargo xposed` uses the same variables (without them, a debug key it
-generates in `target/`). Store and key share the password (cargo-apk2 passes
+`ANDROID_KEYSTORE_PASSWORD`. cargo-apk2 reads `CARGO_APK_RELEASE_KEYSTORE` /
+`CARGO_APK_RELEASE_KEYSTORE_PASSWORD`, and the module step signs again
+with the same (dev builds: cargo-apk2's `debug.keystore` in the Android
+user home). Store and key share the password (cargo-apk2 passes
 one to `apksigner`): `keytool -genkeypair -storetype PKCS12 -keystore …
 -alias calvados -keyalg EC -groupname secp256r1 -sigalg SHA256withECDSA
 -validity 10000 -storepass … -keypass … -dname "CN=Calvados"` (EC: APK

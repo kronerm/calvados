@@ -34,16 +34,17 @@ config (below). Calvados itself needs no root.
 
 [Vector]: https://github.com/JingMatrix/Vector
 
-Releases on GitHub have the signed Android app and Xposed module and an
+Releases on GitHub have the signed Android app (also the Xposed module) and an
 Arch Linux package; "testing" is the latest build from main, newer than
 the last release. Or build them yourself (below).
 
 ## Android
 
-1. Install the app and the Xposed module (from a release, or built
-   below).
-2. Enable the Calvados module in Vector, then turn Bluetooth off and on.
-   Again after updating the module.
+1. Install the app (from a release, or built below). It is also the Xposed
+   module; uninstall the separate one older releases had
+   (`dev.kroner.calvados.xposed`).
+2. Enable Calvados in Vector, then turn Bluetooth off and on. Again after
+   updating.
 3. Open Calvados once and grant the permissions. It has no window, only a
    notification.
 
@@ -62,14 +63,11 @@ Mobile data & Wi-Fi).
 **Building the APKs** needs Rust, the Android SDK and NDK (`ANDROID_HOME`,
 and `ANDROID_NDK_ROOT` unless it's at `/opt/android-ndk`), a JDK,
 [cargo-apk2](https://crates.io/crates/cargo-apk2) (`cargo install
-cargo-apk2`) and, for the module, the SDK's `aapt2`, `d8`, `zipalign` and
-`apksigner` on `PATH`:
+cargo-apk2`) and the SDK's `d8`, `zipalign` and `apksigner` on `PATH`:
 
 ```sh
-cargo app-build      # the app -> target/debug/apk/calvados.apk
-cargo xposed         # the module -> target/release/calvados-xposed.apk
-adb install target/debug/apk/calvados.apk
-adb install target/release/calvados-xposed.apk
+cargo app-build      # -> target/debug/apk/calvados.apk
+cargo app-run        # or: build, install and start it
 ```
 
 ## Linux

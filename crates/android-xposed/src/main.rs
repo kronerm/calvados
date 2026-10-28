@@ -1,15 +1,18 @@
-//! Builds the hook library and packages it as the LSPosed module APK
-//! (`target/release/calvados-xposed.apk`). Needs the Android SDK tools on PATH.
+//! Builds the Android app with cargo-apk2 and makes the same APK the
+//! Xposed module: the hook library, the entry class (a second dex) and
+//! `META-INF/xposed` go into it, then it's aligned and signed again with the
+//! key cargo-apk2 used. `build [--release]`, or `run [--release]` to also
+//! install and start it. Needs the Android SDK tools on PATH.
 
 use std::env;
 use std::fs::{self, File};
-use std::io::{Read as _, Write as _};
+use std::io::Write as _;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
 use indoc::indoc;
 use zip::write::SimpleFileOptions;
-use zip::{CompressionMethod, ZipWriter};
+use zip::{CompressionMethod, ZipArchive, ZipWriter};
 
 const JAVA_INIT_LIST: &[u8] = indoc! {b"
     dev.kroner.calvados.XposedEntry
@@ -29,25 +32,58 @@ const MODULE_PROP: &[u8] = indoc! {b"
 const HOOK_TARGET: &str = "aarch64-linux-android";
 /// API level the hook links against.
 const HOOK_API: u32 = 29;
+const ACTIVITY: &str = "dev.kroner.calvados/.LauncherActivity";
+
+enum Profile {
+    Dev,
+    Release,
+}
+
+impl Profile {
+    fn dir(&self) -> &'static str {
+        match self {
+            Self::Dev => "debug",
+            Self::Release => "release",
+        }
+    }
+}
 
 fn main() {
+    let args: Vec<String> = env::args().skip(1).collect();
+    let (install, profile) = match args.iter().map(String::as_str).collect::<Vec<_>>()[..] {
+        ["build"] => (false, Profile::Dev),
+        ["build", "--release"] => (false, Profile::Release),
+        ["run"] => (true, Profile::Dev),
+        ["run", "--release"] => (true, Profile::Release),
+        _ => {
+            eprintln!("usage: build|run [--release]");
+            std::process::exit(2);
+        }
+    };
     let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
     let workspace = manifest_dir.ancestors().nth(2).expect("workspace root");
     let assets = manifest_dir.join("assets");
-    let android_jar = find_android_jar();
-    let build_dir = env::temp_dir().join("calvados-xposed-build");
+    let build_dir = workspace.join("target/xposed");
     fs::create_dir_all(&build_dir).expect("create build dir");
 
+    build_app(workspace, &profile);
     let hook_lib = build_hook_library(workspace);
-    let manifest = compile_manifest(&assets, &android_jar, &build_dir);
-    let classes_dex = compile_dex(&assets, &android_jar, &build_dir);
+    let dex = compile_dex(&assets, &find_android_jar(), &build_dir);
 
-    let apk = workspace.join("target/release/calvados-xposed.apk");
-    println!("Creating APK: {}", apk.display());
-    create_apk(&apk, &manifest, &classes_dex, &hook_lib).expect("create APK");
-    align_apk(&apk);
-    sign_apk(&apk, &workspace.join("target"));
+    let apk = workspace.join(format!("target/{}/apk/calvados.apk", profile.dir()));
+    println!("Adding the Xposed module to {}", apk.display());
+    let unaligned = build_dir.join("calvados.apk");
+    add_module(&apk, &unaligned, &dex, &hook_lib).expect("add the module");
+    run(
+        "zipalign",
+        &["-f", "-P", "16", "4", path(&unaligned), path(&apk)],
+    );
+    sign_apk(&apk, &profile);
     println!("Done: {}", apk.display());
+    if install {
+        run("adb", &["install", "-r", path(&apk)]);
+        run("adb", &["shell", "am", "start", "-n", ACTIVITY]);
+    }
 }
 
 /// Run a build tool, aborting the build on failure.
@@ -61,6 +97,18 @@ fn run(program: &str, args: &[&str]) {
 
 fn path(p: &Path) -> &str {
     p.to_str().expect("UTF-8 path")
+}
+
+fn build_app(workspace: &Path, profile: &Profile) {
+    let mut cargo = Command::new("cargo");
+    cargo
+        .args(["apk2", "build", "-p", "android-app", "--manifest-path"])
+        .arg(workspace.join("Cargo.toml"));
+    if matches!(profile, Profile::Release) {
+        cargo.arg("--release");
+    }
+    let status = cargo.status().expect("failed to run cargo apk2");
+    assert!(status.success(), "app build failed ({status})");
 }
 
 fn build_hook_library(workspace: &Path) -> Vec<u8> {
@@ -98,35 +146,10 @@ fn ndk_linker() -> PathBuf {
     linker
 }
 
-/// Binary manifest, extracted from a throwaway `aapt2 link` APK.
-fn compile_manifest(assets: &Path, android_jar: &Path, build_dir: &Path) -> Vec<u8> {
-    println!("Compiling AndroidManifest.xml...");
-    let temp_apk = build_dir.join("manifest.apk");
-    run(
-        "aapt2",
-        &[
-            "link",
-            "-I",
-            path(android_jar),
-            "--manifest",
-            path(&assets.join("AndroidManifest.xml")),
-            "-o",
-            path(&temp_apk),
-        ],
-    );
-    let mut archive = zip::ZipArchive::new(File::open(&temp_apk).expect("open manifest APK"))
-        .expect("read manifest APK");
-    let mut manifest = Vec::new();
-    archive
-        .by_name("AndroidManifest.xml")
-        .expect("manifest in APK")
-        .read_to_end(&mut manifest)
-        .expect("read manifest");
-    manifest
-}
-
+/// The entry class, compiled against the API jar (which stays out of the
+/// dex: Vector refuses modules carrying its classes).
 fn compile_dex(assets: &Path, android_jar: &Path, build_dir: &Path) -> Vec<u8> {
-    println!("Compiling Java to DEX...");
+    println!("Compiling the Xposed entry to DEX...");
     let classpath = format!(
         "{}:{}",
         assets.join("libxposed-api.jar").display(),
@@ -148,7 +171,7 @@ fn compile_dex(assets: &Path, android_jar: &Path, build_dir: &Path) -> Vec<u8> {
     let class = build_dir.join("dev/kroner/calvados/XposedEntry.class");
     run(
         "d8",
-        &["--min-api", "24", "--output", path(build_dir), path(&class)],
+        &["--min-api", "31", "--output", path(build_dir), path(&class)],
     );
     fs::read(build_dir.join("classes.dex")).expect("read classes.dex")
 }
@@ -177,20 +200,33 @@ fn find_android_jar() -> PathBuf {
         .expect("no android.jar in the SDK platforms")
 }
 
-fn create_apk(
-    apk: &Path,
-    manifest: &[u8],
-    dex: &[u8],
-    hook_lib: &[u8],
-) -> zip::result::ZipResult<()> {
-    fs::create_dir_all(apk.parent().expect("APK parent"))?;
-    let mut zip = ZipWriter::new(File::create(apk)?);
+/// cargo-apk2's v1 signature files, invalid once the APK changes.
+fn is_signature(name: &str) -> bool {
+    name.strip_prefix("META-INF/").is_some_and(|file| {
+        !file.contains('/')
+            && (file == "MANIFEST.MF"
+                || [".SF", ".RSA", ".DSA", ".EC"]
+                    .iter()
+                    .any(|ext| file.ends_with(ext)))
+    })
+}
+
+/// `apk`'s entries as they are, but its signature, plus the module's.
+fn add_module(apk: &Path, out: &Path, dex: &[u8], hook_lib: &[u8]) -> zip::result::ZipResult<()> {
+    let mut app = ZipArchive::new(File::open(apk)?)?;
+    let mut zip = ZipWriter::new(File::create(out)?);
+    for index in 0..app.len() {
+        let entry = app.by_index_raw(index)?;
+        if !is_signature(entry.name()) {
+            zip.raw_copy_file(entry)?;
+        }
+    }
     let stored = SimpleFileOptions::default().compression_method(CompressionMethod::Stored);
     let deflated = SimpleFileOptions::default().compression_method(CompressionMethod::Deflated);
-    let entries: [(&str, &[u8], SimpleFileOptions); 7] = [
-        ("AndroidManifest.xml", manifest, stored),
-        ("classes.dex", dex, deflated),
-        ("lib/arm64-v8a/libcalvados_hook.so", hook_lib, deflated),
+    let entries: [(&str, &[u8], SimpleFileOptions); 6] = [
+        ("classes2.dex", dex, deflated),
+        // Stored, like the app's: loaded from the APK, not extracted.
+        ("lib/arm64-v8a/libcalvados_hook.so", hook_lib, stored),
         ("META-INF/xposed/java_init.list", JAVA_INIT_LIST, stored),
         ("META-INF/xposed/native_init.list", NATIVE_INIT_LIST, stored),
         ("META-INF/xposed/scope.list", SCOPE_LIST, stored),
@@ -204,71 +240,43 @@ fn create_apk(
     Ok(())
 }
 
-fn align_apk(apk: &Path) {
-    println!("Aligning APK...");
-    let aligned = apk.with_extension("apk.aligned");
-    // `-P 16`: 16 KB page alignment for uncompressed .so (build-tools ≥ 35).
-    run(
-        "zipalign",
-        &["-f", "-P", "16", "4", path(apk), path(&aligned)],
-    );
-    fs::rename(&aligned, apk).expect("replace APK with aligned one");
-}
-
-/// With the app's release key when cargo-apk2's variables name one (so both
-/// APKs share a signature), else a debug key generated in `target`.
-fn sign_apk(apk: &Path, target: &Path) {
-    let release = env::var("CARGO_APK_RELEASE_KEYSTORE")
-        .ok()
-        .zip(env::var("CARGO_APK_RELEASE_KEYSTORE_PASSWORD").ok());
-    let (keystore, password) = match release.clone() {
-        Some((keystore, password)) => (PathBuf::from(keystore), password),
-        None => (target.join("debug.keystore"), "android".to_owned()),
+/// The key cargo-apk2 signed with: `CARGO_APK_{DEV,RELEASE}_KEYSTORE` (and
+/// `_PASSWORD`), else for dev builds its debug key.
+fn sign_apk(apk: &Path, profile: &Profile) {
+    let name = match profile {
+        Profile::Dev => "DEV",
+        Profile::Release => "RELEASE",
     };
-    let keystore = keystore.as_path();
-    assert!(
-        keystore.exists() || release.is_none(),
-        "release keystore {} not found",
-        keystore.display()
-    );
-    if !keystore.exists() {
-        println!("Generating debug keystore...");
-        run(
-            "keytool",
-            &[
-                "-genkey",
-                "-v",
-                "-keystore",
-                path(keystore),
-                "-alias",
-                "debug",
-                "-keyalg",
-                "RSA",
-                "-keysize",
-                "2048",
-                "-validity",
-                "10000",
-                "-storepass",
-                "android",
-                "-keypass",
-                "android",
-                "-dname",
-                "CN=Debug,O=Calvados,C=US",
-            ],
-        );
-    }
-    println!("Signing APK...");
+    let keystore = env::var(format!("CARGO_APK_{name}_KEYSTORE")).map(PathBuf::from);
+    let password = env::var(format!("CARGO_APK_{name}_KEYSTORE_PASSWORD"));
+    let (keystore, password) = match (keystore, profile) {
+        (Ok(keystore), _) => (keystore, password.unwrap_or_else(|_| "android".into())),
+        (Err(_), Profile::Dev) => (debug_keystore(), "android".into()),
+        (Err(_), Profile::Release) => panic!("CARGO_APK_RELEASE_KEYSTORE isn't set"),
+    };
+    println!("Signing with {}", keystore.display());
+    let pass = format!("pass:{password}");
     run(
         "apksigner",
         &[
             "sign",
             "--ks",
-            path(keystore),
+            path(&keystore),
             "--ks-pass",
-            &format!("pass:{password}"),
+            &pass,
             "--key-pass",
-            &format!("pass:{password}"),
+            &pass,
             path(apk),
         ],
     );
+}
+
+/// cargo-apk2's (ndk-build2's): `debug.keystore` in the Android user home.
+fn debug_keystore() -> PathBuf {
+    env::var_os("ANDROID_SDK_HOME")
+        .map(|home| PathBuf::from(home).join(".android"))
+        .or_else(|| env::var_os("ANDROID_USER_HOME").map(PathBuf::from))
+        .or_else(|| env::var_os("HOME").map(|home| PathBuf::from(home).join(".android")))
+        .expect("no Android user home")
+        .join("debug.keystore")
 }

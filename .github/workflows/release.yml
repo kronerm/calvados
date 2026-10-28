@@ -82,11 +82,10 @@ jobs:
             -storepass throwaway -keypass throwaway -dname CN=build
           sed -i "s/android:versionCode=\"[0-9]*\"/android:versionCode=\"$CODE\"/; s/android:versionName=\"[^\"]*\"/android:versionName=\"$VERSION\"/" \
             crates/android-app/AndroidManifest.xml
-          cargo apk2 build -p android-app --release
-          cargo xposed
+          # The app, which is also the Xposed module.
+          cargo app-build --release
           mkdir out
           cp target/release/apk/calvados.apk "out/calvados-$VERSION.apk"
-          cp target/release/calvados-xposed.apk "out/calvados-xposed-$VERSION.apk"
       - name: Sign
         env:
           KEYSTORE: ${{ secrets.ANDROID_KEYSTORE }}
