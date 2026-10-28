@@ -19,7 +19,7 @@ pub struct DeviceConnectionStatus {
     pub role: DeviceRole,
 }
 
-#[derive(Debug, Clone, Copy, Hash, TryFromPrimitive)]
+#[derive(Debug, Clone, Copy, TryFromPrimitive)]
 #[repr(u8)]
 pub enum DeviceRole {
     /// A phone or computer.

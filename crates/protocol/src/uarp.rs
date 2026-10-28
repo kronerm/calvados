@@ -15,7 +15,7 @@ use crate::firmware::ExactVersion;
 pub const OPCODE: u16 = 0x4F;
 
 /// The longest message one frame carries [rkof 0x6d6d0].
-pub const MAX_MESSAGE: usize = 1007;
+pub(crate) const MAX_MESSAGE: usize = 1007;
 
 /// The protocol version proposed; 7B21 answers 4, 9A348 takes up to 6.
 const PROTOCOL_VERSION: u16 = 4;
@@ -27,7 +27,7 @@ const HEADER_LEN: usize = 6;
 const DATA_RESPONSE_FIELDS: usize = 12;
 
 /// The most data one response carries.
-pub const MAX_DATA: u16 = (MAX_MESSAGE - HEADER_LEN - DATA_RESPONSE_FIELDS) as u16;
+pub(crate) const MAX_DATA: u16 = (MAX_MESSAGE - HEADER_LEN - DATA_RESPONSE_FIELDS) as u16;
 
 /// The types sent. Apply (0x0A) is deliberately missing.
 #[derive(Debug, Clone, Copy)]
@@ -59,7 +59,7 @@ enum ReceivedType {
 const RUNNING_FIRMWARE: u32 = 5;
 
 /// Asset Data Response status: an unknown asset, or an offset past it.
-pub const UNKNOWN_ASSET: u16 = 0x11;
+pub(crate) const UNKNOWN_ASSET: u16 = 0x11;
 
 /// A message to the pods.
 #[derive(Debug, Clone, Copy)]

@@ -7,7 +7,7 @@ use super::byte;
 pub const OPCODE: u16 = 0x09;
 
 /// Control command identifiers (opcode 0x09). Toggles are `01`=on, `02`=off.
-#[derive(Debug, Clone, Copy, Hash, TryFromPrimitive)]
+#[derive(Debug, Clone, Copy, TryFromPrimitive)]
 #[cfg_attr(test, derive(PartialEq, Eq))]
 #[repr(u8)]
 pub enum ControlId {
@@ -75,7 +75,7 @@ pub enum ControlId {
 }
 
 /// Value of [`ControlId::ListeningMode`].
-#[derive(Debug, Clone, Copy, Hash, TryFromPrimitive)]
+#[derive(Debug, Clone, Copy, TryFromPrimitive)]
 #[cfg_attr(test, derive(PartialEq, Eq))]
 #[repr(u8)]
 pub enum NoiseControlMode {

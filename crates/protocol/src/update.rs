@@ -19,7 +19,7 @@ const ASSET: u16 = 1;
 
 /// No request for this long (or no transfer starting this long after the
 /// offer): rescind. The pods keep no timeout of their own.
-pub const WATCHDOG: Duration = Duration::from_secs(60);
+pub(crate) const WATCHDOG: Duration = Duration::from_secs(60);
 
 /// How long a dropped transport may stay down before giving up.
 const INTERRUPTED_WAIT: Duration = Duration::from_secs(5 * 60);

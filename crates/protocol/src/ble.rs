@@ -49,10 +49,10 @@ bitflags::bitflags! {
 
 /// Where the pods are, as their advertisement says.
 #[derive(Debug, Clone, Copy)]
-pub struct Proximity {
-    pub lid_open: bool,
+pub(crate) struct Proximity {
+    lid_open: bool,
     /// The advertising bud is in the case.
-    pub in_case: bool,
+    in_case: bool,
 }
 
 impl Proximity {

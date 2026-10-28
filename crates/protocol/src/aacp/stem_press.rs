@@ -7,7 +7,7 @@ use super::device_status::Bud;
 
 pub const OPCODE: u16 = 0x19;
 
-#[derive(Debug, Clone, Copy, Hash, TryFromPrimitive)]
+#[derive(Debug, Clone, Copy, TryFromPrimitive)]
 #[cfg_attr(test, derive(PartialEq, Eq))]
 #[repr(u8)]
 pub enum StemPressType {

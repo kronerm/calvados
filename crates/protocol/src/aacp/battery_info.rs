@@ -4,7 +4,7 @@ use num_enum::TryFromPrimitive;
 
 pub const OPCODE: u16 = 0x04;
 
-#[derive(Debug, Clone, Copy, Hash, TryFromPrimitive)]
+#[derive(Debug, Clone, Copy, TryFromPrimitive)]
 #[cfg_attr(test, derive(PartialEq, Eq))]
 #[repr(u8)]
 pub enum BatteryComponent {
@@ -13,7 +13,7 @@ pub enum BatteryComponent {
     Case = 0x08,
 }
 
-#[derive(Debug, Clone, Copy, Hash, TryFromPrimitive)]
+#[derive(Debug, Clone, Copy, TryFromPrimitive)]
 #[cfg_attr(test, derive(PartialEq, Eq))]
 #[repr(u8)]
 pub enum ChargingStatus {

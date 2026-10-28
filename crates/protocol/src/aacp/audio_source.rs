@@ -9,7 +9,7 @@ bitflags::bitflags! {
     /// What's playing, over all hosts: the pods keep one mask, set and
     /// cleared as each host's audio starts and stops (firmware:
     /// docs/firmware.md). Other bits are activities not identified yet.
-    #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+    #[derive(Debug, Clone, Copy, PartialEq, Eq)]
     pub struct Activity: u8 {
         const CALL = 0x01;
         const MEDIA = 0x02;
