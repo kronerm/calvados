@@ -324,8 +324,9 @@ power-on (`LinkChange`). Its length caps at 255, i.e. 15 events.
 ## Linux crate layout (`crates/linux/src`)
 
 - `main.rs` — setup, the shared `Daemon` context, and one loop owning the
-  `Engine`: attaching (kept across iterations, so no L2CAP connect is cut),
-  the session's datagrams, the engine's `next_wake`, MPRIS, and `Input`s
+  `Engine`: the AACP connection (`Aacp`: attaching, kept across
+  iterations so no L2CAP connect is cut, or up; `down` attaches again after
+  a pause), the session's datagrams, the engine's `next_wake`, MPRIS, and `Input`s
   from D-Bus and presence. No shared mutable state besides the published
   `Status`.
 - `bluez.rs` — Apple DID record, finding the pods, L2CAP, A2DP.

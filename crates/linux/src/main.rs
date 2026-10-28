@@ -13,11 +13,11 @@ mod presence;
 mod state;
 
 use std::io::IsTerminal as _;
+use std::pin::Pin;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use anyhow::Context as _;
-use futures_util::future::OptionFuture;
 use protocol::MacAddress;
 use protocol::aacp::{Cycle, NoiseControlMode, Packet};
 use protocol::connection::AIRPODS_PSM;
@@ -169,13 +169,69 @@ struct Session {
     unsettled: bool,
 }
 
+/// The AACP connection: being attached, or up.
+enum Aacp<'a> {
+    /// Kept across iterations: cancelling it could cut an L2CAP connect.
+    Attaching(Pin<Box<dyn Future<Output = anyhow::Result<Session>> + 'a>>),
+    Up(Session),
+}
+
+/// What the connection brought.
+enum Arrived {
+    Attached(MacAddress),
+    Packets(Vec<Packet>),
+}
+
+impl<'a> Aacp<'a> {
+    fn attach(daemon: &'a Daemon, after: Duration) -> Self {
+        Self::Attaching(Box::pin(attach(daemon, after)))
+    }
+
+    fn session(&self) -> Option<&Session> {
+        match self {
+            Self::Up(session) => Some(session),
+            Self::Attaching(_) => None,
+        }
+    }
+
+    fn session_mut(&mut self) -> Option<&mut Session> {
+        match self {
+            Self::Up(session) => Some(session),
+            Self::Attaching(_) => None,
+        }
+    }
+
+    /// The session once attached, then its datagrams' packets; an error
+    /// is to be followed by [`Self::down`].
+    async fn next(&mut self) -> anyhow::Result<Arrived> {
+        match self {
+            Self::Attaching(attaching) => {
+                let session = attaching.await?;
+                let pods = MacAddress::new(session.device.address().0);
+                *self = Self::Up(session);
+                Ok(Arrived::Attached(pods))
+            }
+            Self::Up(session) => receive(session).await.map(Arrived::Packets),
+        }
+    }
+
+    /// Attaching failed or the session ended: attach again after a pause.
+    fn down(&mut self, daemon: &'a Daemon, engine: &mut Engine, reason: &anyhow::Error) {
+        match self {
+            Self::Attaching(_) => tracing::info!("attaching failed: {reason:#}"),
+            Self::Up(_) => {
+                tracing::info!("AACP connection ended: {reason:#}");
+                engine.disconnected(Instant::now());
+            }
+        }
+        *self = Self::attach(daemon, RECONNECT_DELAY);
+    }
+}
+
 /// The daemon: attach whenever BlueZ reports the pods connected (never
 /// paging them), and drive the engine with everything that happens.
 async fn run(daemon: &Daemon, mut engine: Engine, inputs: &mut mpsc::UnboundedReceiver<Input>) {
-    let mut session: Option<Session> = None;
-    // Kept across iterations: cancelling it could cut an L2CAP connect.
-    let mut attaching = None;
-    let mut attach_after = Duration::ZERO;
+    let mut aacp = Aacp::attach(daemon, Duration::ZERO);
     let mut playback = daemon.media.as_ref().map(mpris::Media::playback);
     let mut catalog = firmware::Catalog::new();
     loop {
@@ -187,28 +243,11 @@ async fn run(daemon: &Daemon, mut engine: Engine, inputs: &mut mpsc::UnboundedRe
             &engine,
             model.and_then(|model| catalog.latest(model)),
         ));
-        if session.is_none() && attaching.is_none() {
-            attaching = Some(Box::pin(attach(daemon, attach_after)));
-        }
         let wake = engine.next_wake().map(tokio::time::Instant::from_std);
         let effects = tokio::select! {
-            Some(attached) = OptionFuture::from(attaching.as_mut()) => {
-                attaching = None;
-                match attached {
-                    Ok(new) => {
-                        let pods = MacAddress::new(new.device.address().0);
-                        session = Some(new);
-                        engine.connected(pods, Instant::now())
-                    }
-                    Err(e) => {
-                        tracing::info!("attaching failed: {e:#}");
-                        attach_after = RECONNECT_DELAY;
-                        Vec::new()
-                    }
-                }
-            }
-            received = receive(session.as_mut()) => match received {
-                Ok(packets) => {
+            arrived = aacp.next() => match arrived {
+                Ok(Arrived::Attached(pods)) => engine.connected(pods, Instant::now()),
+                Ok(Arrived::Packets(packets)) => {
                     let now = Instant::now();
                     packets
                         .into_iter()
@@ -217,8 +256,7 @@ async fn run(daemon: &Daemon, mut engine: Engine, inputs: &mut mpsc::UnboundedRe
                         .collect()
                 }
                 Err(e) => {
-                    end(&mut engine, &mut session, &e);
-                    attach_after = RECONNECT_DELAY;
+                    aacp.down(daemon, &mut engine, &e);
                     Vec::new()
                 }
             },
@@ -274,13 +312,12 @@ async fn run(daemon: &Daemon, mut engine: Engine, inputs: &mut mpsc::UnboundedRe
             }),
         };
         for effect in effects {
-            if let Err(e) = perform(daemon, session.as_ref(), effect).await {
-                end(&mut engine, &mut session, &e);
-                attach_after = RECONNECT_DELAY;
+            if let Err(e) = perform(daemon, aacp.session(), effect).await {
+                aacp.down(daemon, &mut engine, &e);
                 break;
             }
         }
-        if let Some(session) = session.as_mut().filter(|session| session.unsettled)
+        if let Some(session) = aacp.session_mut().filter(|session| session.unsettled)
             && engine.state().audio_source.is_some()
         {
             session.unsettled = false;
@@ -292,12 +329,6 @@ async fn run(daemon: &Daemon, mut engine: Engine, inputs: &mut mpsc::UnboundedRe
     }
 }
 
-fn end(engine: &mut Engine, session: &mut Option<Session>, reason: &anyhow::Error) {
-    tracing::info!("AACP connection ended: {reason:#}");
-    *session = None;
-    engine.disconnected(Instant::now());
-}
-
 /// Never, without a deadline.
 async fn sleep_until(deadline: Option<tokio::time::Instant>) {
     match deadline {
@@ -306,11 +337,8 @@ async fn sleep_until(deadline: Option<tokio::time::Instant>) {
     }
 }
 
-/// The next datagram's packets; never, without a session.
-async fn receive(session: Option<&mut Session>) -> anyhow::Result<Vec<Packet>> {
-    let Some(session) = session else {
-        return std::future::pending().await;
-    };
+/// The next datagram's packets.
+async fn receive(session: &mut Session) -> anyhow::Result<Vec<Packet>> {
     match session.stream.recv(&mut session.buf).await? {
         0 => anyhow::bail!("AirPods closed the connection"),
         len => Ok(parse_datagram(&session.buf[..len])),
