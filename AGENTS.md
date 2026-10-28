@@ -12,7 +12,7 @@ the reasoning behind individual changes lives in commit messages.
 | `linux` (binary `calvados`) | BlueZ daemon (`bluer`, tokio, D-Bus via `zbus`) | Transport + effects only; all decisions come from `Engine`. |
 | `android-app` (`libcalvados.so`) | Android foreground service (cdylib) + thin Java shell | Transport + effects + notification; decisions from `Engine`. |
 | `android-hook` (`libcalvados_hook.so`) | LSPosed native hook in the system Bluetooth process | `#![cfg(target_os = "android")]`; empty on the host. |
-| `android-xposed` | Host build tool packaging the hook as an LSPosed APK | Shells out to SDK tools. |
+| `android-xposed` | Host build tool packaging the hook as an Xposed module APK (libxposed API 101+, targeting 102: Vector 2.1+; the entry and `module.prop` in `src/main.rs`, the compile-only API in `assets/libxposed-api.jar`) | Shells out to SDK tools. |
 
 ## Building
 

@@ -23,26 +23,26 @@ are a tap away.
 | | Minimum | Tested with |
 |---|---|---|
 | AirPods | AirPods Pro 2 (other AACP AirPods may work) | AirPods Pro 2 (USB-C) |
-| Android | 12, with [LSPosed] | 16 (Pixel 9) |
+| Android | 12, with an Xposed framework on libxposed API 101 ([Vector] 2.1+) | 16 (Pixel 9) |
 | BlueZ | 5.60 | 5.87 |
 | PipeWire | 0.3 | 1.6.8 |
 | Noctalia (optional) | plugin API 24 | 5.0.1 |
 
 AirPods keep a second device connected only if it identifies as an Apple
-device: on Android the LSPosed module does that, on Linux a line in BlueZ's
+device: on Android the Xposed module does that, on Linux a line in BlueZ's
 config (below). Calvados itself needs no root.
 
-[LSPosed]: https://github.com/LSPosed/LSPosed
+[Vector]: https://github.com/JingMatrix/Vector
 
-Releases on GitHub have the signed Android app and LSPosed module and an
+Releases on GitHub have the signed Android app and Xposed module and an
 Arch Linux package; "testing" is the latest build from main, newer than
 the last release. Or build them yourself (below).
 
 ## Android
 
-1. Install the app and the LSPosed module (from a release, or built
+1. Install the app and the Xposed module (from a release, or built
    below).
-2. Enable the Calvados module in LSPosed, then turn Bluetooth off and on.
+2. Enable the Calvados module in Vector, then turn Bluetooth off and on.
    Again after updating the module.
 3. Open Calvados once and grant the permissions. It has no window, only a
    notification.

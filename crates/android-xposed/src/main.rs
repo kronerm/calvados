@@ -22,8 +22,8 @@ const SCOPE_LIST: &[u8] = indoc! {b"
     com.google.android.bluetooth
 "};
 const MODULE_PROP: &[u8] = indoc! {b"
-    minApiVersion=100
-    targetApiVersion=100
+    minApiVersion=101
+    targetApiVersion=102
     staticScope=true
 "};
 const HOOK_TARGET: &str = "aarch64-linux-android";
