@@ -67,8 +67,5 @@ impl Catalog {
 
 /// `$XDG_CACHE_HOME/calvados` (else under `~/.cache`).
 fn cache_dir() -> Option<PathBuf> {
-    std::env::var_os("XDG_CACHE_HOME")
-        .map(PathBuf::from)
-        .or_else(|| std::env::var_os("HOME").map(|home| PathBuf::from(home).join(".cache")))
-        .map(|dir| dir.join("calvados"))
+    crate::state::xdg_dir("XDG_CACHE_HOME", ".cache")
 }

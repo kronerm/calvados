@@ -7,9 +7,14 @@ use std::path::PathBuf;
 use protocol::settings::Setting;
 
 pub fn dir() -> Option<PathBuf> {
-    std::env::var_os("XDG_STATE_HOME")
+    xdg_dir("XDG_STATE_HOME", ".local/state")
+}
+
+/// `$variable/calvados`, else `~/fallback/calvados`.
+pub fn xdg_dir(variable: &str, fallback: &str) -> Option<PathBuf> {
+    std::env::var_os(variable)
         .map(PathBuf::from)
-        .or_else(|| std::env::var_os("HOME").map(|home| PathBuf::from(home).join(".local/state")))
+        .or_else(|| std::env::var_os("HOME").map(|home| PathBuf::from(home).join(fallback)))
         .map(|dir| dir.join("calvados"))
 }
 
