@@ -185,11 +185,7 @@ mod tests {
     #[test]
     fn buds_are_placed_by_side_with_the_primary_marked() {
         let mut state = DeviceState::default();
-        let info = |component, level, status| BatteryInfo {
-            component,
-            level,
-            status: Some(status),
-        };
+        let info = BatteryInfo::new;
         state.apply(&Packet::Battery(vec![
             info(BatteryComponent::Left, 80, ChargingStatus::Discharging),
             info(BatteryComponent::Right, 9, ChargingStatus::Charging),

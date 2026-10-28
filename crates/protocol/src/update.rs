@@ -813,11 +813,11 @@ mod tests {
             primary: left,
             secondary: EarStatus::InCase,
         }));
-        state.apply(&Packet::Battery(vec![BatteryInfo {
-            component: BatteryComponent::Case,
-            level: 50,
-            status: Some(case),
-        }]));
+        state.apply(&Packet::Battery(vec![BatteryInfo::new(
+            BatteryComponent::Case,
+            50,
+            case,
+        )]));
         state.firmware.reported = Some(reported.into());
         state
     }

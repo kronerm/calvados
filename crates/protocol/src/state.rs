@@ -368,25 +368,22 @@ mod tests {
     use super::*;
     use crate::aacp::PrimaryBud;
 
-    fn battery(component: BatteryComponent, level: u8, status: ChargingStatus) -> BatteryInfo {
-        BatteryInfo {
-            component,
-            level,
-            status: Some(status),
-        }
-    }
-
     #[test]
     fn disconnected_component_keeps_last_known_level() {
         let mut state = DeviceState::default();
-        let case =
-            |level, status| Packet::Battery(vec![battery(BatteryComponent::Case, level, status)]);
+        let case = |level, status| {
+            Packet::Battery(vec![BatteryInfo::new(
+                BatteryComponent::Case,
+                level,
+                status,
+            )])
+        };
         state.apply(&case(0, ChargingStatus::Disconnected));
         assert!(state.battery.is_empty());
         state.apply(&Packet::Battery(vec![
-            battery(BatteryComponent::Left, 80, ChargingStatus::Charging),
-            battery(BatteryComponent::Right, 75, ChargingStatus::Discharging),
-            battery(BatteryComponent::Case, 60, ChargingStatus::NotCharging),
+            BatteryInfo::new(BatteryComponent::Left, 80, ChargingStatus::Charging),
+            BatteryInfo::new(BatteryComponent::Right, 75, ChargingStatus::Discharging),
+            BatteryInfo::new(BatteryComponent::Case, 60, ChargingStatus::NotCharging),
         ]));
         assert_eq!(state.battery.to_string(), "L 80%+ R 75% Case 60%");
         state.apply(&case(0, ChargingStatus::Disconnected));
@@ -403,9 +400,9 @@ mod tests {
             active: false,
         }));
         state.apply(&Packet::Battery(vec![
-            battery(BatteryComponent::Right, 66, ChargingStatus::Discharging),
-            battery(BatteryComponent::Left, 66, ChargingStatus::Charging),
-            battery(BatteryComponent::Case, 59, ChargingStatus::Discharging),
+            BatteryInfo::new(BatteryComponent::Right, 66, ChargingStatus::Discharging),
+            BatteryInfo::new(BatteryComponent::Left, 66, ChargingStatus::Charging),
+            BatteryInfo::new(BatteryComponent::Case, 59, ChargingStatus::Discharging),
         ]));
         let ears = |secondary| {
             Packet::EarDetection(EarDetection {
@@ -466,8 +463,8 @@ mod tests {
             active: false,
         }));
         state.apply(&Packet::Battery(vec![
-            battery(BatteryComponent::Right, 60, ChargingStatus::Discharging),
-            battery(BatteryComponent::Left, 60, ChargingStatus::Discharging),
+            BatteryInfo::new(BatteryComponent::Right, 60, ChargingStatus::Discharging),
+            BatteryInfo::new(BatteryComponent::Left, 60, ChargingStatus::Discharging),
         ]));
         let ears = |secondary| {
             Packet::EarDetection(EarDetection {
@@ -479,7 +476,7 @@ mod tests {
         state.apply(&ears(EarStatus::Disconnected));
         assert!(state.is_stowed());
         // Taken out: its live report comes before its ear (Oct 4 17:14).
-        state.apply(&Packet::Battery(vec![battery(
+        state.apply(&Packet::Battery(vec![BatteryInfo::new(
             BatteryComponent::Left,
             60,
             ChargingStatus::Discharging,

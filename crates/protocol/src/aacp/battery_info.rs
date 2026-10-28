@@ -32,6 +32,17 @@ pub struct BatteryInfo {
     pub status: Option<ChargingStatus>,
 }
 
+#[cfg(test)]
+impl BatteryInfo {
+    pub(crate) fn new(component: BatteryComponent, level: u8, status: ChargingStatus) -> Self {
+        Self {
+            component,
+            level,
+            status: Some(status),
+        }
+    }
+}
+
 /// `[component] 01 [level] [status] 01`; `None` for an unknown component.
 fn entry(input: &[u8]) -> IResult<&[u8], Option<BatteryInfo>> {
     (u8, tag(&[0x01][..]), u8, u8, tag(&[0x01][..]))
