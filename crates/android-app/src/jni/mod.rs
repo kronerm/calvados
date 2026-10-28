@@ -2,8 +2,8 @@ pub mod android;
 pub mod java;
 
 use jni::{
-    Env, JavaVM, jni_sig, jni_str,
-    objects::{JClass, JObject, JObjectArray},
+    Env, JValueOwned, JavaVM, jni_sig, jni_str,
+    objects::{JClass, JObject, JObjectArray, JString},
 };
 
 use crate::jni::android::app::activity_thread::ActivityThread;
@@ -42,6 +42,15 @@ impl GetDeclaredConstructors for JClass<'_> {
             .map(|index| constructors_array.get_element(env, index).map(Constructor))
             .collect::<Result<Vec<_>, _>>()?)
     }
+}
+
+/// A Java call's `String` result; `None` for null.
+pub(crate) fn string(env: &mut Env, value: JValueOwned) -> anyhow::Result<Option<String>> {
+    let value = env.cast_local::<JString>(value.l()?)?;
+    if value.is_null() {
+        return Ok(None);
+    }
+    Ok(Some(value.try_to_string(env)?))
 }
 
 pub(crate) fn with_env<T>(f: impl FnOnce(&mut Env) -> anyhow::Result<T>) -> anyhow::Result<T> {

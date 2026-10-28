@@ -5,6 +5,7 @@ use jni::{
 };
 
 use crate::jni::java::util::list::List;
+use crate::jni::string;
 
 /// `android.content.Intent`.
 pub struct Intent<R>(pub R);
@@ -51,22 +52,15 @@ impl<'object_scope, 'env_scope, R: Reference + AsRef<JObject<'object_scope>>> In
         Ok(self)
     }
 
-    /// `getAction()`; empty when unset.
-    pub fn get_action(&self, env: &mut Env<'env_scope>) -> anyhow::Result<String> {
-        let action = env
-            .call_method(
-                &self.0,
-                jni_str!("getAction"),
-                jni_sig!("()Ljava/lang/String;"),
-                &[],
-            )?
-            .l()?;
-        if action.is_null() {
-            return Ok(String::new());
-        }
-        // SAFETY: the method returns a `String`.
-        let action = unsafe { JString::from_raw(env, action.into_raw()) };
-        Ok(action.try_to_string(env)?)
+    /// `getAction()`; `None` when unset.
+    pub fn get_action(&self, env: &mut Env<'env_scope>) -> anyhow::Result<Option<String>> {
+        let action = env.call_method(
+            &self.0,
+            jni_str!("getAction"),
+            jni_sig!("()Ljava/lang/String;"),
+            &[],
+        )?;
+        string(env, action)
     }
 
     /// `getStringExtra(name)`; `None` when absent.
@@ -76,20 +70,13 @@ impl<'object_scope, 'env_scope, R: Reference + AsRef<JObject<'object_scope>>> In
         name: &str,
     ) -> anyhow::Result<Option<String>> {
         let name = JString::new(env, name)?;
-        let extra = env
-            .call_method(
-                &self.0,
-                jni_str!("getStringExtra"),
-                jni_sig!("(Ljava/lang/String;)Ljava/lang/String;"),
-                &[JValue::Object(&name)],
-            )?
-            .l()?;
-        if extra.is_null() {
-            return Ok(None);
-        }
-        // SAFETY: the method returns a `String`.
-        let extra = unsafe { JString::from_raw(env, extra.into_raw()) };
-        Ok(Some(extra.try_to_string(env)?))
+        let extra = env.call_method(
+            &self.0,
+            jni_str!("getStringExtra"),
+            jni_sig!("(Ljava/lang/String;)Ljava/lang/String;"),
+            &[JValue::Object(&name)],
+        )?;
+        string(env, extra)
     }
 
     /// `getIntExtra(name, default)`.

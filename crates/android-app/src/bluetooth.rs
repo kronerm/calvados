@@ -91,9 +91,11 @@ pub(crate) fn stored_keys() -> anyhow::Result<Option<(MacAddress, PodsKeys)>> {
         let stored = with_env(|env| {
             app_context(env)?
                 .get_shared_preferences(env, PREFS_NAME)?
-                .get_string(env, &key_preference(pods, kind), "")
+                .get_string(env, &key_preference(pods, kind))
         })?;
-        Ok(hex::decode(stored).ok().and_then(|key| key.try_into().ok()))
+        Ok(stored
+            .and_then(|stored| hex::decode(stored).ok())
+            .and_then(|key| key.try_into().ok()))
     };
     let Some(irk) = read(KeyType::Irk)? else {
         return Ok(None);
@@ -174,7 +176,8 @@ pub(crate) fn paired_airpods() -> anyhow::Result<Option<String>> {
             .iterator(env)?;
         while devices.has_next(env)? {
             let device = BluetoothDevice(devices.next(env)?);
-            if device.get_name(env)?.to_lowercase().contains("airpod") {
+            let name = device.get_name(env)?.unwrap_or_default();
+            if name.to_lowercase().contains("airpod") {
                 return device.get_address(env).map(Some);
             }
         }
@@ -188,8 +191,8 @@ pub(crate) fn local_mac() -> anyhow::Result<Option<MacAddress>> {
     with_env(|env| {
         let saved = app_context(env)?
             .get_shared_preferences(env, PREFS_NAME)?
-            .get_string(env, KEY_LOCAL_MAC, "")?;
-        Ok(saved.parse().ok())
+            .get_string(env, KEY_LOCAL_MAC)?;
+        Ok(saved.and_then(|saved| saved.parse().ok()))
     })
 }
 
@@ -293,6 +296,6 @@ fn airpods_among<'local>(
 ) -> anyhow::Result<bool> {
     (0..devices.size(env)?).try_fold(false, |found, i| {
         let name = BluetoothDevice(devices.get(env, i)?).get_name(env)?;
-        Ok(found || name.to_lowercase().starts_with("airpod"))
+        Ok(found || name.is_some_and(|name| name.to_lowercase().starts_with("airpod")))
     })
 }

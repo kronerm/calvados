@@ -9,6 +9,7 @@ use crate::jni::android::content::res::Resources;
 use crate::jni::android::content::shared_preferences::SharedPreferences;
 use crate::jni::android::media::audio_manager::AudioManager;
 use crate::jni::java::io::file::File;
+use crate::jni::string;
 
 /// `android.content.Context` — the entry point for system services,
 /// preferences and the app class loader. Obtained from
@@ -23,17 +24,13 @@ impl<'object_scope, 'env_scope, R: Reference + AsRef<JObject<'object_scope>>> Co
 
     /// `getPackageName()`.
     pub fn get_package_name(&self, env: &mut Env<'env_scope>) -> anyhow::Result<String> {
-        let name = env
-            .call_method(
-                &self.0,
-                jni_str!("getPackageName"),
-                jni_sig!("()Ljava/lang/String;"),
-                &[],
-            )?
-            .l()?;
-        // SAFETY: the method returns a `String`.
-        let name = unsafe { JString::from_raw(env, name.into_raw()) };
-        Ok(name.try_to_string(env)?)
+        let name = env.call_method(
+            &self.0,
+            jni_str!("getPackageName"),
+            jni_sig!("()Ljava/lang/String;"),
+            &[],
+        )?;
+        string(env, name)?.ok_or_else(|| anyhow::anyhow!("getPackageName() returned null"))
     }
 
     /// `getResources()`.

@@ -87,7 +87,7 @@ pub(crate) fn parse<'local>(
     if intent.0.is_null() {
         return Ok(None);
     }
-    let action = intent.get_action(env)?;
+    let action = intent.get_action(env)?.unwrap_or_default();
     let action = match action.as_str() {
         ACTION_NEARBY => {
             let advertisers = crate::bluetooth::nearby_advertisers(env, &intent)?;
@@ -98,7 +98,11 @@ pub(crate) fn parse<'local>(
                 return Ok(None);
             };
             // `getName` needs BLUETOOTH_CONNECT; treat a failure as not ours.
-            let name = BluetoothDevice(device).get_name(env).unwrap_or_default();
+            let name = BluetoothDevice(device)
+                .get_name(env)
+                .ok()
+                .flatten()
+                .unwrap_or_default();
             if !name.to_lowercase().starts_with("airpod") {
                 env.exception_clear();
                 return Ok(None);

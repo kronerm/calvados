@@ -4,32 +4,26 @@ use jni::{
     refs::Reference,
 };
 
+use crate::jni::string;
+
 /// `android.content.SharedPreferences`.
 pub struct SharedPreferences<R>(pub(crate) R);
 
 impl<'object_scope, 'env_scope, R: Reference + AsRef<JObject<'object_scope>>> SharedPreferences<R> {
-    /// `getString(key, default)`. Returns the default when the key is absent.
+    /// `getString(key, null)`; `None` when the key is absent.
     pub fn get_string(
         &self,
         env: &mut Env<'env_scope>,
         key: &str,
-        default: &str,
-    ) -> anyhow::Result<String> {
+    ) -> anyhow::Result<Option<String>> {
         let key = JString::new(env, key)?;
-        let default = JString::new(env, default)?;
-        let value = env
-            .call_method(
-                &self.0,
-                jni_str!("getString"),
-                jni_sig!("(Ljava/lang/String;Ljava/lang/String;)Ljava/lang/String;"),
-                &[JValue::Object(&key), JValue::Object(&default)],
-            )?
-            .l()?;
-        if value.is_null() {
-            return Ok(String::new());
-        }
-        let value = unsafe { JString::from_raw(env, value.as_raw()) };
-        Ok(value.to_string())
+        let value = env.call_method(
+            &self.0,
+            jni_str!("getString"),
+            jni_sig!("(Ljava/lang/String;Ljava/lang/String;)Ljava/lang/String;"),
+            &[JValue::Object(&key), JValue::Object(&JObject::null())],
+        )?;
+        string(env, value)
     }
 
     /// `getBoolean(key, default)`.
