@@ -177,7 +177,8 @@ main as the rolling pre-release `testing`: a release is
   (`protocol::news`: 0x10 to a host, `[mac] [len 2 LE]` + news, arriving
   as 0x11 `Routing::News`). Apple's frames start `01 e5`; whether Apple
   hosts ignore ours, and whether the pods relay it unchanged, is untested.
-- `connection.rs` — L2CAP PSM and service UUID.
+- `connection.rs` — L2CAP PSM and service UUID, and `is_airpods_name`
+  (a paired device named `AirPods…`, any case), both platforms' test.
 - UARP in the engine. **A 0x4F frame reaching a bud that isn't primary
   aborts it** [rkof 0xbea70], so nothing UARP goes out unless the session
   is settled (`uarp_ready`: handshake acked and answering, a live battery,
@@ -252,8 +253,10 @@ power-on (`LinkChange`). Its length caps at 255, i.e. 15 events.
   14 kept (~0.5 MB a day; debug and the `aacp_raw` trace of every frame
   received and sent), to look back at a reboot.
 - `exports.rs` — the JNI entry points of `PersistentService.java`.
-- `service.rs` — the event loop: one channel of `Event`s (intents, link
-  events, stop) driving the `Engine`; effects out. Also the firmware
+- `service.rs` — the event loop: one channel of typed `Event`s (the ACL
+  up or down, Bluetooth on, a notification `Request`, nearby advertisers,
+  link events, stop) driving the `Engine`; effects out. MACs are
+  `MacAddress` from the JNI boundary on. Also the firmware
   update's I/O, with `firmware-fetch` as on Linux: the catalog checked
   once a day per product (`Catalog::due`) and the package fetched on
   `UPDATE_FIRMWARE`, each on a thread that posts `Event::Catalog` /
@@ -286,7 +289,10 @@ power-on (`LinkChange`). Its length caps at 255, i.e. 15 events.
   in-case mask, waking the phone every ~5.5 s nearly all day; it's gone
   (a `PendingIntent` scan outlives the app, so it needed stopping by its
   request code once).
-- `intents.rs` — action names, intents to the service, parsing incoming ones.
+- `intents.rs` — action names, intents to the service, and `parse`, which
+  turns an incoming one into an `Event`. The notification's buttons are a
+  `Request` each (`action`, `pending_intent`, and parsed back), so the
+  action strings live only here.
 - `notification.rs` — channel, `startForeground`, and the notification: a
   `DecoratedCustomViewStyle` with two `RemoteViews` layouts from `res/`
   (collapsed: title, status and levels like the Linux bar; expanded: the
@@ -312,7 +318,8 @@ power-on (`LinkChange`). Its length caps at 255, i.e. 15 events.
   theme, unreadable in a dark shade. `ic_stat_airpods` is
   the status bar icon.
 - `media.rs` — pause/resume as media button presses.
-- `jni/` — typed wrappers mirroring Java packages, plus `with_env`.
+- `jni/` — typed wrappers mirroring Java packages, plus `with_env` and
+  `string` (a call's `String` result, checked, null as `None`).
 
 ## Linux crate layout (`crates/linux/src`)
 
