@@ -1,7 +1,13 @@
 //! Wire level: splitting transport bytes into frames, and building commands.
 
 use crate::aacp::frame::{DATA_MAGIC, HANDSHAKE_ACK_MAGIC, HANDSHAKE_MAGIC, data_frame};
-use crate::aacp::{ControlId, Cycle, HexDump, NoiseControlMode, Packet, smart_routing};
+use crate::aacp::{
+    ControlId, Cycle, HexDump, NoiseControlMode, Packet, audio_source, battery_info,
+    connected_devices, connection_history, control_command, conversation_awareness,
+    device_information, device_status, ear_detection, eq_data, proximity_keys, smart_routing,
+    stem_press,
+};
+use crate::uarp;
 
 pub use smart_routing::{hijack_sequence, news};
 
@@ -47,10 +53,7 @@ pub fn request_notifications() -> Vec<u8> {
 }
 
 pub fn control(id: ControlId, value: [u8; 4]) -> Vec<u8> {
-    data_frame(
-        crate::aacp::control_command::OPCODE,
-        &[&[id as u8][..], &value].concat(),
-    )
+    data_frame(control_command::OPCODE, &[&[id as u8][..], &value].concat())
 }
 
 /// Claim or release the audio link.
@@ -100,46 +103,41 @@ fn frame_length(frame: &[u8]) -> Length {
             Length::Known(base + usize::from(n) * per_item)
         })
     };
-    let u16_at = |at: usize| {
-        frame
-            .get(at..at + 2)
-            .map(|b| usize::from(u16::from_le_bytes([b[0], b[1]])))
-    };
-    // `[len 2]` + body
+    // `[len 2]` at `at`, then the body: `base + len`.
     let prefixed = |at: usize, base: usize| {
-        u16_at(at).map_or(Length::Incomplete, |len| Length::Known(base + len))
+        frame.get(at..at + 2).map_or(Length::Incomplete, |len| {
+            Length::Known(base + usize::from(u16::from_le_bytes([len[0], len[1]])))
+        })
     };
     match opcode {
-        0x04 => counted(HEADER, HEADER + 1, 5), // battery: count × 5
-        0x06 | 0x19 => Length::Known(HEADER + 2), // ear detection, stem press
+        battery_info::OPCODE => counted(HEADER, HEADER + 1, 5), // count × 5
+        ear_detection::OPCODE | stem_press::OPCODE => Length::Known(HEADER + 2),
         0x25 | 0x47 => Length::Known(HEADER),
-        0x08 | 0x37 | 0x4B | 0x55 | 0x60 => Length::Known(HEADER + 4),
-        0x09 => Length::Known(HEADER + 5), // control command
+        device_status::PRIMARY_BUD_OPCODE
+        | 0x37
+        | conversation_awareness::OPCODE
+        | device_status::NOISE_LEVEL_OPCODE
+        | 0x60 => Length::Known(HEADER + 4),
+        control_command::OPCODE => Length::Known(HEADER + 5),
         0x15 | 0x40 => Length::Known(HEADER + 6),
-        0x0E | 0x13 => Length::Known(HEADER + 7), // audio source, …
-        0x0C => Length::Known(HEADER + 8),        // device connection
-        0x4E => Length::Known(HEADER + 8),        // all zeros, once per session
-        // `[len 2]` + body; 0x52 is `03 00 02 01 xx` before ear changes
-        0x4C | 0x52 | 0x57 => prefixed(HEADER, HEADER + 2),
-        // UARP: one whole message
-        crate::uarp::OPCODE => prefixed(HEADER, HEADER + 2),
-        // device information: `02 [len 2]`, counting from its own byte 3
-        0x1D => prefixed(HEADER + 1, HEADER + 3),
+        audio_source::OPCODE | 0x13 => Length::Known(HEADER + 7),
+        // 0x4E: all zeros, once per session
+        device_status::CONNECTION_OPCODE | 0x4E => Length::Known(HEADER + 8),
+        // 0x52 is `03 00 02 01 xx` before ear changes; UARP one whole message
+        0x4C | 0x52 | 0x57 | uarp::OPCODE => prefixed(HEADER, HEADER + 2),
+        // `02 [len 2]`, counting from its own byte 3
+        device_information::OPCODE => prefixed(HEADER + 1, HEADER + 3),
         // `01 [x] [len] 00` + body
         0x21 => counted(HEADER + 2, HEADER + 4, 1),
-        0x31 => proximity_keys_length(frame),
-        // smart routing out and relayed in: `[mac 6] [len 2]` + body
-        0x10 | 0x11 => u16_at(12).map_or(Length::Incomplete, |len| Length::Known(14 + len)),
-        // connection history: `01 [len 2] [now 8]` + events
-        0x2B => {
-            u16_at(HEADER + 1).map_or(Length::Incomplete, |len| Length::Known(HEADER + 11 + len))
-        }
+        proximity_keys::OPCODE => proximity_keys_length(frame),
+        // out and relayed in: `[mac 6] [len 2]` + body
+        smart_routing::OPCODE | smart_routing::RESPONSE_OPCODE => prefixed(HEADER + 6, HEADER + 8),
+        // `01 [len 2] [now 8]` + events
+        connection_history::OPCODE => prefixed(HEADER + 1, HEADER + 11),
         // `[class 4] [len 2]` + body
-        0x17 => {
-            u16_at(HEADER + 4).map_or(Length::Incomplete, |len| Length::Known(HEADER + 6 + len))
-        }
-        0x2E => counted(HEADER + 2, HEADER + 3, 8), // connected devices: count × 8
-        0x53 => Length::Known(140),                 // EQ
+        0x17 => prefixed(HEADER + 4, HEADER + 6),
+        connected_devices::OPCODE => counted(HEADER + 2, HEADER + 3, 8), // count × 8
+        eq_data::OPCODE => Length::Known(140),
         _ => Length::Unknown,
     }
 }
