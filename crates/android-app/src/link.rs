@@ -117,8 +117,9 @@ pub(crate) fn close(socket: &Socket) {
 pub(crate) fn open_socket(mac: &str) -> anyhow::Result<Socket> {
     tracing::info!(mac, "connecting AACP");
     with_env(|env| {
-        let device = BluetoothAdapter::default_adapter(env)?.get_remote_device(env, mac)?;
-        let socket = create_l2cap_socket(env, &device)?.into_global(env)?;
+        let adapter = BluetoothAdapter::default_adapter(env)?;
+        let device = adapter.get_remote_device(env, mac)?;
+        let socket = create_l2cap_socket(env, &adapter, &device)?.into_global(env)?;
         socket.connect(env)?;
         Ok(socket)
     })
@@ -128,6 +129,7 @@ pub(crate) fn open_socket(mac: &str) -> anyhow::Result<Socket> {
 /// across Android releases, so try every known argument order via reflection.
 pub(crate) fn create_l2cap_socket<'local>(
     env: &mut Env<'local>,
+    adapter: &BluetoothAdapter<JObject<'_>>,
     device: &BluetoothDevice<JObject<'_>>,
 ) -> anyhow::Result<BluetoothSocket<JObject<'local>>> {
     let uuid = ParcelUuid::from_string(env, AIRPODS_UUID)?.0;
@@ -135,9 +137,11 @@ pub(crate) fn create_l2cap_socket<'local>(
     let fd = Integer::value_of(env, NO_FD)?.0;
     let yes = Boolean::value_of(env, true)?.0;
     let psm = Integer::value_of(env, i32::from(AIRPODS_PSM))?.0;
-    let device = &device.0;
+    let (adapter, device) = (&adapter.0, &device.0);
 
-    let signatures: [&[&JObject]; 4] = [
+    let signatures: [&[&JObject]; 5] = [
+        // Android 17: the adapter first.
+        &[adapter, device, &l2cap, &yes, &yes, &psm, &uuid],
         &[device, &l2cap, &yes, &yes, &psm, &uuid],
         &[device, &l2cap, &fd, &yes, &yes, &psm, &uuid],
         &[&l2cap, &fd, &yes, &yes, device, &psm, &uuid],

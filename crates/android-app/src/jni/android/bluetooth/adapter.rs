@@ -5,7 +5,7 @@ use crate::jni::android::bluetooth::device::BluetoothDevice;
 use crate::jni::android::bluetooth::le::scanner::BluetoothLeScanner;
 use crate::jni::android::content::context::Context;
 
-pub struct BluetoothAdapter<R>(R);
+pub struct BluetoothAdapter<R>(pub(crate) R);
 impl<'env_scope> BluetoothAdapter<JObject<'env_scope>> {
     pub fn default_adapter(env: &mut Env<'env_scope>) -> anyhow::Result<Self> {
         let class = env.load_class(jni_str!("android/bluetooth/BluetoothAdapter"))?;
