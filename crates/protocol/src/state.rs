@@ -300,12 +300,6 @@ impl DeviceState {
         self.peers.iter().copied().filter(move |mac| *mac != local)
     }
 
-    /// `L:In R:Out`, once the sides are known.
-    pub fn ears_summary(&self) -> Option<String> {
-        self.ears()
-            .map(|(left, right)| format!("L:{left} R:{right}"))
-    }
-
     /// Ear status of the physical (left, right) buds, once the primary is known.
     pub fn ears(&self) -> Option<(EarStatus, EarStatus)> {
         let ear = self.ear_detection?;
@@ -523,6 +517,5 @@ mod tests {
             active: true,
         }));
         assert_eq!(state.ears(), Some((EarStatus::InCase, EarStatus::InEar)));
-        assert_eq!(state.ears_summary().as_deref(), Some("L:Case R:In"));
     }
 }

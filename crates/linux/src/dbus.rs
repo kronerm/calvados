@@ -69,8 +69,6 @@ fn wire_update(status: Option<UpdateStatus>) -> WireUpdate {
 pub struct Status {
     connected: bool,
     ownership: String,
-    peers: Vec<String>,
-    summary: String,
     name: String,
     noise_mode: String,
     cycle: Vec<String>,
@@ -92,7 +90,6 @@ impl Status {
             true => Self::connected(engine, latest),
             false => Self {
                 ownership: "not-owning".into(),
-                summary: "disconnected".into(),
                 ..Self::default()
             },
         };
@@ -107,29 +104,9 @@ impl Status {
 
     fn connected(engine: &Engine, latest: Option<&Release>) -> Self {
         let state = engine.state();
-        let ownership = engine.ownership().to_string();
-        let peers = engine
-            .local_mac()
-            .map(|local| {
-                state
-                    .peers_except(local)
-                    .map(|p| p.to_hex_string())
-                    .collect::<Vec<_>>()
-            })
-            .unwrap_or_default();
-        let summary = std::iter::once("connected".to_string())
-            .chain(state.name.clone().filter(|n| !n.is_empty()))
-            .chain((!state.battery.is_empty()).then(|| state.battery.to_string()))
-            .chain(state.ears_summary().map(|ears| format!("ears {ears}")))
-            .chain([format!("audio: {ownership}")])
-            .chain((!peers.is_empty()).then(|| format!("peers: {}", peers.join(","))))
-            .collect::<Vec<_>>()
-            .join(" | ");
         Self {
             connected: true,
-            ownership,
-            peers,
-            summary,
+            ownership: engine.ownership().to_string(),
             name: state.name.clone().unwrap_or_default(),
             noise_mode: mode_name(state.noise_mode).to_owned(),
             cycle: cycle_names(state.cycle)
@@ -197,11 +174,6 @@ impl CalvadosService {
 #[zbus::interface(name = "dev.kroner.Calvados1")]
 impl CalvadosService {
     #[zbus(property)]
-    fn status(&self) -> String {
-        self.snapshot().summary
-    }
-
-    #[zbus(property)]
     fn connected(&self) -> bool {
         self.snapshot().connected
     }
@@ -210,11 +182,6 @@ impl CalvadosService {
     #[zbus(property)]
     fn ownership_phase(&self) -> String {
         self.snapshot().ownership
-    }
-
-    #[zbus(property)]
-    fn peers(&self) -> Vec<String> {
-        self.snapshot().peers
     }
 
     /// The pods' name; empty until reported.
@@ -397,17 +364,11 @@ async fn signal_changes(iface: InterfaceRef<CalvadosService>, mut status: watch:
         let service = iface.get().await;
         let emitter = iface.signal_emitter();
         let mut signalled = Ok(());
-        if now.summary != last.summary {
-            signalled = signalled.and(service.status_changed(emitter).await);
-        }
         if now.connected != last.connected {
             signalled = signalled.and(service.connected_changed(emitter).await);
         }
         if now.ownership != last.ownership {
             signalled = signalled.and(service.ownership_phase_changed(emitter).await);
-        }
-        if now.peers != last.peers {
-            signalled = signalled.and(service.peers_changed(emitter).await);
         }
         if now.name != last.name {
             signalled = signalled.and(service.name_changed(emitter).await);
