@@ -10,7 +10,8 @@ publish.workspace = true
 
 [dependencies]
 anyhow = "1"
-protocol = { path = "../protocol", features = ["catalog"] }
+plist = { version = "1.10", default-features = false }
+protocol = { path = "../protocol" }
 tracing = "0.1"
 ureq = { version = "3", default-features = false, features = ["rustls"] }
 # The firmware asset; pure Rust inflate.

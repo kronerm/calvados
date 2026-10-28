@@ -588,6 +588,7 @@ name = "firmware-fetch"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "plist",
  "protocol",
  "tracing",
  "ureq",
@@ -1358,7 +1359,6 @@ dependencies = [
  "humantime",
  "nom 8.0.0",
  "num_enum",
- "plist",
  "sha2 0.10.9",
  "tracing",
 ]

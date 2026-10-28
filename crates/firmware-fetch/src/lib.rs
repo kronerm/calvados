@@ -9,8 +9,10 @@ use std::path::Path;
 use std::time::{Duration, Instant};
 
 use anyhow::Context as _;
-use protocol::firmware::{Release, catalog_models, catalog_url, parse_catalog};
+use protocol::firmware::Release;
 use protocol::superbinary::Package;
+
+mod catalog;
 
 const CHECK_INTERVAL: Duration = Duration::from_secs(24 * 60 * 60);
 const TIMEOUT: Duration = Duration::from_secs(30);
@@ -37,7 +39,7 @@ impl Catalog {
     /// The models to ask for (with [`Client::release`]) when `model`'s
     /// product wasn't checked within a day; counted as checked from `now`.
     pub fn due(&mut self, model: &str, now: Instant) -> Option<Vec<String>> {
-        let models = catalog_models(model);
+        let models = catalog::models(model);
         match self.checked.get_mut(&models) {
             Some(checked) if now.duration_since(checked.at) < CHECK_INTERVAL => return None,
             Some(checked) => checked.at = now,
@@ -60,7 +62,7 @@ impl Catalog {
     }
 
     pub fn latest(&self, model: &str) -> Option<&Release> {
-        self.checked.get(&catalog_models(model))?.release.as_ref()
+        self.checked.get(&catalog::models(model))?.release.as_ref()
     }
 }
 
@@ -101,11 +103,11 @@ impl Client {
     fn release_of(&self, model: &str) -> Result<Option<Release>, ureq::Error> {
         let body = self
             .0
-            .get(catalog_url(model))
+            .get(catalog::url(model))
             .call()?
             .body_mut()
             .read_to_vec()?;
-        Ok(parse_catalog(&body))
+        Ok(catalog::parse(&body))
     }
 
     /// `release`'s package: `<cache>/<build>.uarp` if it still checks out,

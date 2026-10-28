@@ -117,12 +117,11 @@ main as the rolling pre-release `testing`: a release is
 - `firmware.rs` — the running version (`Version::of_running`: the first
   field of 0x1D's `71.2256000021000000.6663` is major then a one-digit
   minor, so 7.1, and the last a build counter; `ExactVersion`, 7.1.21,
-  from UARP), and Apple's catalog: `catalog_url`, `catalog_models` (a product's models,
-  served first: AirPods Pro 2 USB-C asks A3048, the case A2968, then
-  A3047, which gets a 403; an unknown model only itself) and, behind the
-  `catalog` feature (the `plist` crate; `firmware-fetch` enables it),
-  `parse_catalog` (the newest of `Assets`: `FirmwareVersionMajor`/`Minor`/
-  `Release`, `Build`). The running string carries no release number (9A348
+  from UARP), and the catalog's `Release` (parsed by `firmware-fetch`'s
+  `catalog`: `url`, `models` (a product's models, served first: AirPods
+  Pro 2 USB-C asks A3048, the case A2968, then A3047, which gets a 403; an
+  unknown model only itself) and `parse` (the `plist` crate; the newest of
+  `Assets`: `FirmwareVersionMajor`/`Minor`/`Release`, `Build`)). The running string carries no release number (9A348
   is `90.…`; 7B19–7B21 all read 7.1), so `Release::is_newer_than`
   compares exactly when UARP told, else major.minor only.
   `DeviceState::firmware` (`Firmware`: model, 0x1D string, exact version)
@@ -357,7 +356,7 @@ power-on (`LinkChange`). Its length caps at 255, i.e. 15 events.
   The monitor starts after the D-Bus name is claimed (single instance).
 - `firmware.rs` — the catalog check:
   `https://mesu.apple.com/assets/com_apple_MobileAsset_UARP_<MODEL>/com_apple_MobileAsset_UARP_<MODEL>.xml`
-  for the pods' model (0x1D), trying `catalog_models` in order until one
+  for the pods' model (0x1D), trying `catalog::models` in order until one
   answers; once a day per product, in memory. ureq (rustls, ring, bundled roots) on a
   blocking task; the result returns to the loop as `Input::Catalog`, which
   keeps it (a failed check keeps the last answer; logged at debug/info).
