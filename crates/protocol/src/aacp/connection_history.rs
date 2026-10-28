@@ -72,29 +72,16 @@ impl ConnectionHistory {
     /// fresh connect that's us (observed: 0 s, the laptop 7 s before).
     pub fn just_connected_host(&self, within: Duration) -> Option<MacAddress> {
         let last = self.events.last()?;
-        let connected = matches!(
-            last.change,
-            LinkChange::HostConnected | LinkChange::PagedHost { status: 0 }
-        );
+        let connected = matches!(last.change.host_connected(), Some(true));
         (connected && self.now.saturating_sub(last.time) <= within).then_some(last.mac)
     }
-}
 
-impl ConnectionHistory {
     /// Hosts whose latest event is a connect: still connected, as far as the
     /// history goes.
     pub fn connected_hosts(&self) -> Vec<MacAddress> {
         self.events
             .iter()
-            .filter_map(|event| match event.change {
-                LinkChange::HostConnected | LinkChange::PagedHost { status: 0 } => {
-                    Some((event.mac, true))
-                }
-                LinkChange::HostLeft { .. } | LinkChange::PagedHost { .. } => {
-                    Some((event.mac, false))
-                }
-                _ => None,
-            })
+            .filter_map(|event| Some((event.mac, event.change.host_connected()?)))
             .fold(
                 Vec::new(),
                 |mut hosts: Vec<MacAddress>, (mac, connected)| {
@@ -117,6 +104,16 @@ impl LinkChange {
             0x06 => Self::BudLeft { reason: value },
             0x09 => Self::PagedHost { status: value },
             kind => Self::Unknown { kind, value },
+        }
+    }
+
+    /// A host connecting (`true`), or leaving or not answering a page
+    /// (`false`); `None` when not about a host.
+    fn host_connected(self) -> Option<bool> {
+        match self {
+            Self::HostConnected | Self::PagedHost { status: 0 } => Some(true),
+            Self::HostLeft { .. } | Self::PagedHost { .. } => Some(false),
+            Self::BudConnected | Self::BudLeft { .. } | Self::Unknown { .. } => None,
         }
     }
 }
