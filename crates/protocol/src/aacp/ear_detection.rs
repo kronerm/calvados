@@ -22,18 +22,6 @@ impl From<u8> for EarStatus {
     }
 }
 
-impl std::fmt::Display for EarStatus {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.write_str(match self {
-            Self::InEar => "In",
-            Self::NotInEar => "Out",
-            Self::InCase => "Case",
-            // Not linked: typically in a closed case (or out of range / flat).
-            Self::Disconnected => "Off",
-        })
-    }
-}
-
 /// Ear status by role, not by physical bud (see `PrimaryBud`).
 #[derive(Debug, Clone, Copy)]
 #[cfg_attr(test, derive(PartialEq, Eq))]

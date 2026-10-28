@@ -94,11 +94,13 @@ async fn main() -> anyhow::Result<()> {
 
 async fn daemon() -> anyhow::Result<()> {
     tracing_subscriber::registry()
-        .with(
-            EnvFilter::try_from_default_env().unwrap_or_else(|_| {
-                format!("{}=info,protocol=info", env!("CARGO_CRATE_NAME")).into()
-            }),
-        )
+        .with(EnvFilter::try_from_default_env().unwrap_or_else(|_| {
+            format!(
+                "{}=info,protocol=info,firmware_fetch=info",
+                env!("CARGO_CRATE_NAME")
+            )
+            .into()
+        }))
         // No colour codes in the journal.
         .with(tracing_subscriber::fmt::layer().with_ansi(std::io::stdout().is_terminal()))
         .init();

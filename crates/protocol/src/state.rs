@@ -1,7 +1,5 @@
 //! Device state accumulated from received packets, for display.
 
-use std::fmt;
-
 use crate::MacAddress;
 use crate::aacp::{
     AudioSource, BatteryComponent, BatteryInfo, Bud, ChargingStatus, ControlCommand, ControlId,
@@ -345,28 +343,31 @@ impl Battery {
     }
 }
 
-/// `L 80%+ R 75% Case (50%)`: `+` charging, parentheses for a last-known level.
-impl fmt::Display for Battery {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        let parts = [("L", self.left), ("R", self.right), ("Case", self.case)]
-            .into_iter()
-            .filter_map(|(label, info)| {
-                let info = info?;
-                Some(match info.status {
-                    Some(ChargingStatus::Charging) => format!("{label} {}%+", info.level),
-                    Some(ChargingStatus::Disconnected) => format!("{label} ({}%)", info.level),
-                    _ => format!("{label} {}%", info.level),
-                })
-            })
-            .collect::<Vec<_>>();
-        f.write_str(&parts.join(" "))
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::aacp::PrimaryBud;
+
+    /// `L 80%+ R 75% Case (50%)`: `+` charging, parentheses for a
+    /// last-known level.
+    fn summary(battery: &Battery) -> String {
+        [
+            ("L", battery.left),
+            ("R", battery.right),
+            ("Case", battery.case),
+        ]
+        .into_iter()
+        .filter_map(|(label, info)| {
+            let info = info?;
+            Some(match info.status {
+                Some(ChargingStatus::Charging) => format!("{label} {}%+", info.level),
+                Some(ChargingStatus::Disconnected) => format!("{label} ({}%)", info.level),
+                _ => format!("{label} {}%", info.level),
+            })
+        })
+        .collect::<Vec<_>>()
+        .join(" ")
+    }
 
     #[test]
     fn disconnected_component_keeps_last_known_level() {
@@ -385,9 +386,9 @@ mod tests {
             BatteryInfo::new(BatteryComponent::Right, 75, ChargingStatus::Discharging),
             BatteryInfo::new(BatteryComponent::Case, 60, ChargingStatus::NotCharging),
         ]));
-        assert_eq!(state.battery.to_string(), "L 80%+ R 75% Case 60%");
+        assert_eq!(summary(&state.battery), "L 80%+ R 75% Case 60%");
         state.apply(&case(0, ChargingStatus::Disconnected));
-        assert_eq!(state.battery.to_string(), "L 80%+ R 75% Case (60%)");
+        assert_eq!(summary(&state.battery), "L 80%+ R 75% Case (60%)");
     }
 
     #[test]
@@ -411,9 +412,9 @@ mod tests {
             })
         };
         state.apply(&ears(EarStatus::InCase));
-        assert_eq!(state.battery.to_string(), "L 66%+ R 66% Case 59%");
+        assert_eq!(summary(&state.battery), "L 66%+ R 66% Case 59%");
         state.apply(&ears(EarStatus::NotInEar));
-        assert_eq!(state.battery.to_string(), "L 66% R 66% Case (59%)");
+        assert_eq!(summary(&state.battery), "L 66% R 66% Case (59%)");
     }
 
     #[test]
