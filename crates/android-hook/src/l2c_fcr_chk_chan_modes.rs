@@ -11,15 +11,17 @@ pub static ORIGINAL_FN: OnceLock<Signature> = OnceLock::new();
 #[unsafe(no_mangle)]
 #[tracing::instrument]
 pub unsafe extern "C" fn l2c_fcr_chk_chan_modes(p_ccb: *mut c_void) -> u8 {
-    tracing::trace!("l2c_fcr_chk_chan_modes called");
-
     // TODO: do this only for AirPods and similar devices, not for all devices.
     // It might be possible to retrieve the MAC address via `p_ccb`.
 
-    if let Some(original_fn) = ORIGINAL_FN.get() {
-        let result = unsafe { original_fn(p_ccb) };
-        tracing::trace!(original_fn_return = result, "original function returned");
+    // Logged to see which Android releases still need it.
+    match ORIGINAL_FN
+        .get()
+        .map(|original_fn| unsafe { original_fn(p_ccb) })
+    {
+        Some(0) => tracing::info!("channel modes rejected by the stack, accepted anyway"),
+        Some(_) => tracing::info!("channel modes accepted by the stack"),
+        None => tracing::warn!("no original function"),
     }
-
     1
 }
