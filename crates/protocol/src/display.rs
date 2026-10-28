@@ -81,28 +81,15 @@ pub fn ownership_label(ownership: Ownership) -> &'static str {
     }
 }
 
-/// The mode's name (`anc`, `transparency`, `adaptive`, `off`), as D-Bus
-/// `NoiseMode` and the Android notification's actions have it; empty while
-/// unknown.
+/// The mode's [`NoiseControlMode::name`]; empty while unknown.
 pub fn mode_name(mode: Option<NoiseControlMode>) -> &'static str {
-    match mode {
-        Some(NoiseControlMode::Off) => "off",
-        Some(NoiseControlMode::NoiseCancellation) => "anc",
-        Some(NoiseControlMode::Transparency) => "transparency",
-        Some(NoiseControlMode::Adaptive) => "adaptive",
-        None => "",
-    }
+    mode.map_or("", NoiseControlMode::name)
 }
 
 pub fn parse_mode(name: &str) -> Option<NoiseControlMode> {
-    [
-        NoiseControlMode::Off,
-        NoiseControlMode::NoiseCancellation,
-        NoiseControlMode::Transparency,
-        NoiseControlMode::Adaptive,
-    ]
-    .into_iter()
-    .find(|mode| mode_name(Some(*mode)) == name)
+    NoiseControlMode::ALL
+        .into_iter()
+        .find(|mode| mode.name() == name)
 }
 
 /// A noise mode tile's mark for the press-and-hold cycle: a dot, filled
@@ -133,19 +120,14 @@ pub fn toggle_cycle(cycle: Option<Cycle>, mode: NoiseControlMode) -> Option<Cycl
     cycle.unwrap_or(Cycle::OFFERED).toggled(mode)
 }
 
-/// The cycle's modes by [`mode_name`] (`off` too, if the pods have it), as
+/// The cycle's modes by [`NoiseControlMode::name`] (`off` too, if the pods have it), as
 /// D-Bus `Cycle`, the CLI and the stores have them; none while unknown.
 pub fn cycle_names(cycle: Option<Cycle>) -> Vec<&'static str> {
-    [
-        NoiseControlMode::Off,
-        NoiseControlMode::NoiseCancellation,
-        NoiseControlMode::Transparency,
-        NoiseControlMode::Adaptive,
-    ]
-    .into_iter()
-    .filter(|mode| cycle.is_some_and(|cycle| cycle.contains(*mode)))
-    .map(|mode| mode_name(Some(mode)))
-    .collect()
+    NoiseControlMode::ALL
+        .into_iter()
+        .filter(|mode| cycle.is_some_and(|cycle| cycle.contains(*mode)))
+        .map(NoiseControlMode::name)
+        .collect()
 }
 
 /// The cycle of these names; `None` for an unknown name or fewer than two.

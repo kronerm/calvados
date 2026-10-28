@@ -86,6 +86,24 @@ pub enum NoiseControlMode {
 }
 
 impl NoiseControlMode {
+    pub const ALL: [Self; 4] = [
+        Self::Off,
+        Self::NoiseCancellation,
+        Self::Transparency,
+        Self::Adaptive,
+    ];
+
+    /// `off`, `anc`, `transparency`, `adaptive`: as D-Bus `NoiseMode` and
+    /// the Android notification's actions have it.
+    pub fn name(self) -> &'static str {
+        match self {
+            Self::Off => "off",
+            Self::NoiseCancellation => "anc",
+            Self::Transparency => "transparency",
+            Self::Adaptive => "adaptive",
+        }
+    }
+
     /// The mode cycle the hosts offer: ANC → Transparency → Adaptive → ANC.
     /// Off is never offered; from Off or unknown, ANC.
     pub fn next(mode: Option<Self>) -> Self {
