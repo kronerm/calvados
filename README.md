@@ -130,8 +130,9 @@ calvados firmware status|update|cancel
 
 When Apple has newer firmware, the panel and the notification say so and
 offer **Update**. It has worked once (7.1.21 to 9.0.348, both buds, with
-the research tools in [`tools/firmware`](tools/firmware)); the case's own
-firmware isn't updated. The AirPods only accept Apple-signed, newer
+the research tools in [`tools/firmware`](tools/firmware)). Only the buds
+are updated: the case's own firmware, in the same package, is never
+offered, and calvados can't see which version the case runs. The AirPods only accept Apple-signed, newer
 firmware, but if something goes wrong, only Apple can fix it.
 
 1. Put both buds in the case, plug it in, keep the lid open. Turn off
