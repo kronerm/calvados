@@ -21,6 +21,7 @@ mod module_info;
 
 mod bta_dm_set_local_di_record;
 mod l2c_fcr_chk_chan_modes;
+mod remote_suspend;
 
 /// Find a symbol's address offset in an ELF file by name.
 fn find_symbol_offset(elf: &object::File<'_>, symbol_name: &str) -> Option<u64> {
@@ -28,6 +29,15 @@ fn find_symbol_offset(elf: &object::File<'_>, symbol_name: &str) -> Option<u64> 
         .find(|symbol| {
             matches!(symbol.kind(), SymbolKind::Text)
                 && symbol.name().is_ok_and(|name| name.contains(symbol_name))
+        })
+        .map(|symbol| symbol.address())
+}
+
+/// The same for an exact (mangled) name.
+fn find_exact_symbol_offset(elf: &object::File<'_>, symbol_name: &str) -> Option<u64> {
+    elf.symbols()
+        .find(|symbol| {
+            matches!(symbol.kind(), SymbolKind::Text) && symbol.name() == Ok(symbol_name)
         })
         .map(|symbol| symbol.address())
 }
@@ -106,6 +116,31 @@ fn hook_library(library_name: &str) -> anyhow::Result<()> {
                 .and_then(|f| find_symbol_offset(f, name))
         })
     };
+    let find_exact = |name: &str| -> Option<u64> {
+        find_exact_symbol_offset(&elf_file, name).or_else(|| {
+            gnu_debugdata_elf
+                .as_ref()
+                .and_then(|f| find_exact_symbol_offset(f, name))
+        })
+    };
+
+    // Functions the hooks call, not hook.
+    let function = |name: &str| {
+        let address = find_exact(name).map(|offset| module.base_address + offset as usize);
+        if address.is_none() {
+            tracing::error!(symbol = name, "symbol not found");
+        }
+        address
+    };
+    if let Some(clear) = function(remote_suspend::CLEAR_REMOTE_SUSPEND) {
+        let _ = remote_suspend::CLEAR.set(unsafe {
+            std::mem::transmute::<usize, remote_suspend::ClearRemoteSuspend>(clear)
+        });
+    }
+    if let Some(start) = function(remote_suspend::START) {
+        let _ = remote_suspend::START_FN
+            .set(unsafe { std::mem::transmute::<usize, remote_suspend::Start>(start) });
+    }
 
     unsafe {
         install_hook(
@@ -124,6 +159,26 @@ fn hook_library(library_name: &str) -> anyhow::Result<()> {
             &bta_dm_set_local_di_record::ORIGINAL_FN,
             bta_dm_set_local_di_record::SYMBOL,
         );
+        // The interface's member where it exists (Android 17): the free
+        // function forwards to it.
+        match find_exact(remote_suspend::IMPL_DATA_WRITE) {
+            Some(offset) => install_hook(
+                hook_fn,
+                module.base_address,
+                Some(offset),
+                remote_suspend::calvados_impl_l2ca_data_write as *mut c_void,
+                &remote_suspend::ORIGINAL_IMPL_DATA_WRITE,
+                remote_suspend::IMPL_DATA_WRITE,
+            ),
+            None => install_hook(
+                hook_fn,
+                module.base_address,
+                find_exact(remote_suspend::DATA_WRITE),
+                remote_suspend::L2CA_DataWrite as *mut c_void,
+                &remote_suspend::ORIGINAL_DATA_WRITE,
+                remote_suspend::DATA_WRITE,
+            ),
+        }
     }
 
     Ok(())
