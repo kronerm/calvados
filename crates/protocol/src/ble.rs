@@ -34,9 +34,8 @@ bitflags::bitflags! {
     /// [`Field::Status`] bits used here.
     #[derive(Debug, Clone, Copy)]
     struct Status: u8 {
-        /// The advertising bud is in the case. Only such a bud's lid bit
-        /// holds: worn buds advertised "open" with the case closed (Oct 8),
-        /// and only it knows the case's level (worn buds send `0xFF`).
+        /// The advertising bud is in the case: only then do the lid bit
+        /// and the case's level hold.
         const IN_CASE = 0x40;
     }
 

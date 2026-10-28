@@ -17,8 +17,8 @@ const SET_FEATURE_FLAGS: u16 = 0x4D;
 const REQUEST_NOTIFICATIONS: u16 = 0x0F;
 const ENABLE_EQ: u16 = 0x29;
 const REQUEST_PROXIMITY_KEYS: u16 = 0x30;
-/// Key type mask for [`REQUEST_PROXIMITY_KEYS`]: the IRK (0x01) only.
-/// Both keys: identity (0x01) and encryption (0x04), as LibrePods asks.
+/// Key type mask for [`REQUEST_PROXIMITY_KEYS`]: identity (0x01) and
+/// encryption (0x04), as LibrePods asks.
 const PROXIMITY_KEYS: u8 = 0x05;
 /// Adaptive Transparency + Conversational Awareness while playing, etc.
 const FEATURE_FLAGS: u64 = 0xD7;
@@ -28,9 +28,7 @@ pub fn handshake() -> Vec<u8> {
     [&HANDSHAKE_MAGIC[..], &[0x01, 0x00, 0x02, 0x00], &[0; 8]].concat()
 }
 
-/// Sent after the handshake ack, in wire order. Sent before it, the pods can
-/// drop them when they ack late: without the feature flags they then report
-/// Adaptive as Off to this host.
+/// Sent once the handshake is acked, in wire order.
 pub fn session_setup_frames() -> [Vec<u8>; 4] {
     [
         data_frame(SET_FEATURE_FLAGS, &FEATURE_FLAGS.to_le_bytes()),
