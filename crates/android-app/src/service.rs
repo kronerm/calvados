@@ -6,7 +6,6 @@ use std::sync::Mutex;
 use std::thread;
 use std::time::{Duration, Instant};
 
-use anyhow::Context as _;
 use firmware_fetch::{Catalog, Client};
 use jni::JavaVM;
 
@@ -379,12 +378,7 @@ fn check_catalog(client: &Client, models: Vec<String>) {
 fn fetch_package(client: &Client, release: Release, cache: Option<PathBuf>) {
     let client = client.clone();
     thread::spawn(move || {
-        let package = cache
-            .context("no cache directory")
-            .and_then(|cache| client.package(&release, &cache))
-            .inspect(|package| tracing::info!(?package, "firmware package ready"))
-            .inspect_err(|e| tracing::warn!(%release, "firmware package: {e:#}"))
-            .ok();
+        let package = client.fetch(&release, cache.as_deref());
         post(Event::Package(package));
     });
 }

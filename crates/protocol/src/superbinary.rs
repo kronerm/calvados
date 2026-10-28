@@ -206,6 +206,11 @@ impl Package {
         }
     }
 
+    /// The whole file, as parsed.
+    pub fn bytes(&self) -> &[u8] {
+        &self.bytes
+    }
+
     /// Where `FTAB`'s data lies: the bulk of a transfer, and its progress.
     pub fn ftab(&self) -> Range<u32> {
         self.ftab.clone()

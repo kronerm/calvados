@@ -110,14 +110,24 @@ impl Client {
         Ok(catalog::parse(&body))
     }
 
+    /// `release`'s package from [`Self::package`], logged; `None` when it
+    /// couldn't be had.
+    pub fn fetch(&self, release: &Release, cache: Option<&Path>) -> Option<Package> {
+        cache
+            .context("no cache directory")
+            .and_then(|cache| self.package(release, cache))
+            .inspect(|package| tracing::info!(?package, "firmware package ready"))
+            .inspect_err(|e| tracing::warn!(%release, "firmware package: {e:#}"))
+            .ok()
+    }
+
     /// `release`'s package: `<cache>/<build>.uarp` if it still checks out,
     /// else downloaded, checked and cached there.
-    pub fn package(&self, release: &Release, cache: &Path) -> anyhow::Result<Package> {
+    fn package(&self, release: &Release, cache: &Path) -> anyhow::Result<Package> {
         let path = cache.join(format!("{}.uarp", release.build));
         let from_cache = std::fs::read(&path)
             .ok()
-            .and_then(|bytes| Package::parse(bytes).ok())
-            .filter(|package| package.version() == release.version);
+            .and_then(|bytes| checked(bytes, release).ok());
         if let Some(package) = from_cache {
             tracing::info!(path = %path.display(), "firmware package from the cache");
             return Ok(package);
@@ -138,19 +148,24 @@ impl Client {
             .with_config()
             .limit(DOWNLOAD_LIMIT)
             .read_to_vec()?;
-        let bytes = unzip(&zip)?;
-        let package = Package::parse(bytes.clone())?;
-        anyhow::ensure!(
-            package.version() == release.version,
-            "the package is {}, not {}",
-            package.version(),
-            release.version
-        );
-        if let Err(e) = store(&path, &bytes) {
+        let package = checked(unzip(&zip)?, release)?;
+        if let Err(e) = store(&path, package.bytes()) {
             tracing::warn!(path = %path.display(), "caching the firmware package: {e}");
         }
         Ok(package)
     }
+}
+
+/// `bytes` as `release`'s package, checked.
+fn checked(bytes: Vec<u8>, release: &Release) -> anyhow::Result<Package> {
+    let package = Package::parse(bytes)?;
+    anyhow::ensure!(
+        package.version() == release.version,
+        "the package is {}, not {}",
+        package.version(),
+        release.version
+    );
+    Ok(package)
 }
 
 fn unzip(zip: &[u8]) -> anyhow::Result<Vec<u8>> {

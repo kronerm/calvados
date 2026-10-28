@@ -5,7 +5,6 @@
 use std::path::PathBuf;
 use std::time::Instant;
 
-use anyhow::Context as _;
 use firmware_fetch::Client;
 use protocol::firmware::Release;
 use tokio::sync::mpsc;
@@ -54,12 +53,7 @@ impl Catalog {
     pub fn fetch_package(&self, release: Release, inputs: &mpsc::UnboundedSender<Input>) {
         let (client, inputs) = (self.client.clone(), inputs.clone());
         tokio::task::spawn_blocking(move || {
-            let package = cache_dir()
-                .context("no cache directory")
-                .and_then(|cache| client.package(&release, &cache))
-                .inspect(|package| tracing::info!(?package, "firmware package ready"))
-                .inspect_err(|e| tracing::warn!(%release, "firmware package: {e:#}"))
-                .ok();
+            let package = client.fetch(&release, cache_dir().as_deref());
             let _ = inputs.send(Input::Package(package));
         });
     }
