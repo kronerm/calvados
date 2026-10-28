@@ -330,10 +330,11 @@ power-on (`LinkChange`). Its length caps at 255, i.e. 15 events.
   `Status`.
 - `bluez.rs` — Apple DID record, finding the pods, L2CAP, A2DP.
 - `dbus.rs` — the `dev.kroner.Calvados1` object and its `Status`, published
-  through a `watch` channel; a task emits `PropertiesChanged` per changed
-  property. Writes go to the loop as `Input`s; a setting's setter (and
-  `Cycle`'s) waits until the status shows it, so zbus' own changed signal
-  is current.
+  through a `watch` channel; a task emits `PropertiesChanged` for every
+  changed property, the writable ones too (the cycle also changes from
+  peers). Writes go to the loop as `Input`s; a setting's setter (and
+  `Cycle`'s) waits until the status shows it, so zbus' own changed signal,
+  sent after the setter, is current too.
 - `mpris.rs` — pause/resume of MPRIS players on one ordered worker task.
 - `presence.rs` — reports Apple advertisers to the loop (`Input::Nearby`;
   `Engine::nearby` decides), since the pods page only the host that last

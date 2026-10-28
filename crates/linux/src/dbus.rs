@@ -140,6 +140,15 @@ impl CalvadosService {
         self.0.status.borrow().clone()
     }
 
+    fn ensure_connected(&self) -> zbus::fdo::Result<()> {
+        match self.0.status.borrow().connected {
+            true => Ok(()),
+            false => Err(zbus::fdo::Error::Failed(
+                "the AirPods aren't connected".into(),
+            )),
+        }
+    }
+
     /// Change a setting in the daemon's loop and wait until it's applied, so
     /// the changed signal that follows carries the new value.
     async fn set(&self, setting: Setting, enabled: bool) -> zbus::fdo::Result<()> {
@@ -265,15 +274,11 @@ impl CalvadosService {
     fn set_noise_mode(&self, name: String) -> zbus::fdo::Result<()> {
         let mode = parse_mode(&name)
             .ok_or_else(|| zbus::fdo::Error::InvalidArgs(format!("unknown noise mode {name:?}")))?;
-        if !self.snapshot().connected {
-            return Err(zbus::fdo::Error::Failed(
-                "the AirPods aren't connected".into(),
-            ));
-        }
+        self.ensure_connected()?;
         self.0
             .inputs
             .send(Input::Noise(mode))
-            .map_err(|_| zbus::fdo::Error::Failed("the daemon is stopping".into()))
+            .map_err(|_| stopping())
     }
 
     /// The modes press and hold cycles through: `anc`, `transparency`,
@@ -294,11 +299,7 @@ impl CalvadosService {
                     "{names:?}: two at least of anc, transparency and adaptive"
                 ))
             })?;
-        if !self.snapshot().connected {
-            return Err(zbus::fdo::Error::Failed(
-                "the AirPods aren't connected".into(),
-            ));
-        }
+        self.ensure_connected()?;
         tracing::info!(?cycle, "D-Bus: set the press-and-hold cycle");
         let names = cycle_names(Some(cycle));
         self.apply(Input::Cycle(cycle), |status| status.cycle == names)
@@ -355,48 +356,43 @@ pub async fn serve(daemon: Arc<Daemon>) -> anyhow::Result<zbus::Connection> {
     Ok(conn)
 }
 
+/// `PropertiesChanged` for each listed property whose field differs.
+macro_rules! signal_changed {
+    ($service:expr, $emitter:expr, $now:expr, $last:expr, [$($field:ident: $signal:ident),* $(,)?]) => {{
+        let mut signalled = Ok(());
+        $(
+            if $now.$field != $last.$field {
+                signalled = signalled.and($service.$signal($emitter).await);
+            }
+        )*
+        signalled
+    }};
+}
+
 /// Emit `PropertiesChanged` for each property that differs from the last
-/// published status.
+/// published status. The writable ones too: the cycle also changes from
+/// other hosts (zbus' setters signal a write once more).
 async fn signal_changes(iface: InterfaceRef<CalvadosService>, mut status: watch::Receiver<Status>) {
     let mut last = status.borrow().clone();
     while status.changed().await.is_ok() {
         let now = status.borrow_and_update().clone();
         let service = iface.get().await;
         let emitter = iface.signal_emitter();
-        let mut signalled = Ok(());
-        if now.connected != last.connected {
-            signalled = signalled.and(service.connected_changed(emitter).await);
-        }
-        if now.ownership != last.ownership {
-            signalled = signalled.and(service.ownership_phase_changed(emitter).await);
-        }
-        if now.name != last.name {
-            signalled = signalled.and(service.name_changed(emitter).await);
-        }
-        if now.buds != last.buds {
-            signalled = signalled.and(service.buds_changed(emitter).await);
-        }
-        if now.noise_mode != last.noise_mode {
-            signalled = signalled.and(service.noise_mode_changed(emitter).await);
-        }
-        if now.cycle != last.cycle {
-            signalled = signalled.and(service.cycle_changed(emitter).await);
-        }
-        if now.firmware != last.firmware {
-            signalled = signalled.and(service.firmware_changed(emitter).await);
-        }
-        if now.latest_firmware != last.latest_firmware {
-            signalled = signalled.and(service.latest_firmware_changed(emitter).await);
-        }
-        if now.firmware_update != last.firmware_update {
-            signalled = signalled.and(service.firmware_update_changed(emitter).await);
-        }
-        if now.update != last.update {
-            signalled = signalled.and(service.update_changed(emitter).await);
-        }
-        if now.peer_update != last.peer_update {
-            signalled = signalled.and(service.peer_update_changed(emitter).await);
-        }
+        let signalled = signal_changed!(service, emitter, now, last, [
+            connected: connected_changed,
+            ownership: ownership_phase_changed,
+            name: name_changed,
+            buds: buds_changed,
+            noise_mode: noise_mode_changed,
+            cycle: cycle_changed,
+            firmware: firmware_changed,
+            latest_firmware: latest_firmware_changed,
+            firmware_update: firmware_update_changed,
+            update: update_changed,
+            peer_update: peer_update_changed,
+            auto_switch: auto_switch_changed,
+            auto_connect: auto_connect_changed,
+        ]);
         if let Err(e) = signalled {
             tracing::warn!("D-Bus PropertiesChanged: {e}");
         }
