@@ -10,14 +10,11 @@ use anyhow::Context as _;
 use firmware_fetch::{Catalog, Client};
 use jni::JavaVM;
 
-use crate::intents::{
-    ACTION_AIRPODS_AVAILABLE, ACTION_AIRPODS_GONE, ACTION_AUTO_CONNECT, ACTION_AUTO_SWITCH,
-    ACTION_BLUETOOTH_ON, ACTION_CANCEL_UPDATE, ACTION_CYCLE_PREFIX, ACTION_NOISE_PREFIX,
-    ACTION_UPDATE_FIRMWARE,
-};
+use crate::intents::Request;
 use crate::link::{self, BluetoothEvent};
 use crate::notification::Content;
 use crate::proto::MacAddress;
+use crate::proto::aacp::NoiseControlMode;
 use crate::proto::display;
 use crate::proto::engine::{Effect, Engine, LocalAudio};
 use crate::proto::firmware::Release;
@@ -35,8 +32,14 @@ const RECONNECT_DELAY: Duration = Duration::from_secs(3);
 /// Everything the service loop reacts to.
 #[derive(Debug)]
 pub(crate) enum Event {
-    /// An intent action: notification button or ACL change.
-    Intent(String),
+    /// The pods' ACL link came up, or was found up: attach.
+    AclUp,
+    /// The pods' ACL link went down: stop attaching.
+    AclDown,
+    /// Bluetooth turned on: scans by `PendingIntent` don't survive it off.
+    BluetoothOn,
+    /// A notification button.
+    Request(Request),
     Bluetooth(BluetoothEvent),
     /// Active playbacks changed: whether media or a VoIP call is among them.
     Playback {
@@ -135,10 +138,10 @@ fn service_main(jvm: JavaVM, events: crossbeam_channel::Receiver<Event>) {
     // The AACP channel opens only over an ACL the OS / the AirPods brought up
     // (opening the socket over a live ACL doesn't dial); paging happens only
     // through an A2DP connect (`Effect::ConnectPods`). `available` mirrors
-    // the ACL_CONNECTED/DISCONNECTED broadcasts (AIRPODS_AVAILABLE/GONE); we
-    // attach only while it's set. Starts false — an AVAILABLE broadcast
-    // attaches us. `reconnect_at` just rate-limits re-attach attempts so a
-    // flapping channel can't busy-loop.
+    // the ACL_CONNECTED/DISCONNECTED broadcasts (`AclUp`/`AclDown`); we
+    // attach only while it's set. Starts false — an `AclUp` attaches us.
+    // `reconnect_at` just rate-limits re-attach attempts so a flapping
+    // channel can't busy-loop.
     let mut available = false;
     let mut reconnect_at = Instant::now();
     // Shown notification content, and when it was last posted.
@@ -213,24 +216,25 @@ fn service_main(jvm: JavaVM, events: crossbeam_channel::Receiver<Event>) {
                 }
                 break;
             }
-            Some(Event::Intent(action)) => match action.as_str() {
-                // ACL presence: AVAILABLE (the pods connected, not us) lets us
-                // attach; GONE (case / out of range / other device) stops us.
-                ACTION_AIRPODS_AVAILABLE => {
-                    available = true;
-                    if matches!(conn, Conn::Disconnected) {
-                        reconnect_at = now;
-                    }
+            // ACL presence: up (the pods connected, not us) lets us attach;
+            // down (case / out of range / other device) stops us.
+            Some(Event::AclUp) => {
+                available = true;
+                if matches!(conn, Conn::Disconnected) {
+                    reconnect_at = now;
                 }
-                ACTION_AIRPODS_GONE => available = false,
-                ACTION_BLUETOOTH_ON => {
-                    if let Err(e) = bluetooth::set_presence_scan(true) {
-                        tracing::warn!("no AirPods presence scan: {e:#}");
-                    }
+            }
+            Some(Event::AclDown) => available = false,
+            Some(Event::BluetoothOn) => {
+                if let Err(e) = bluetooth::set_presence_scan(true) {
+                    tracing::warn!("no AirPods presence scan: {e:#}");
                 }
-                ACTION_AUTO_SWITCH => toggle(&mut engine, Setting::AutoSwitch),
-                ACTION_AUTO_CONNECT => toggle(&mut engine, Setting::AutoConnect),
-                ACTION_UPDATE_FIRMWARE => {
+            }
+            Some(Event::Request(request)) => match request {
+                Request::Noise(mode) => effects.extend(engine.set_noise_mode(mode)),
+                Request::Cycle(mode) => effects.extend(toggle_cycle(&mut engine, mode)),
+                Request::Toggle(setting) => toggle(&mut engine, setting),
+                Request::StartUpdate => {
                     let release = engine
                         .state()
                         .firmware
@@ -249,11 +253,7 @@ fn service_main(jvm: JavaVM, events: crossbeam_channel::Receiver<Event>) {
                         Err(refusal) => tracing::info!(%refusal, "firmware update refused"),
                     }
                 }
-                ACTION_CANCEL_UPDATE => effects.extend(engine.cancel_update()),
-                other => match tile_action(&mut engine, other) {
-                    Some(tapped) => effects.extend(tapped),
-                    None => tracing::warn!(action = other, "unknown action"),
-                },
+                Request::CancelUpdate => effects.extend(engine.cancel_update()),
             },
             Some(Event::Bluetooth(event)) => match event {
                 BluetoothEvent::Connected => match conn {
@@ -447,21 +447,14 @@ fn log_media(action: &str, result: anyhow::Result<()>) {
     }
 }
 
-/// A noise tile's: `NOISE:<mode>` sets the mode, `CYCLE:<mode>` adds it to
-/// the press-and-hold cycle or removes it (never below two); `None` for
-/// another action.
-fn tile_action(engine: &mut Engine, action: &str) -> Option<Vec<Effect>> {
-    let mode = |prefix| action.strip_prefix(prefix).and_then(display::parse_mode);
-    match (mode(ACTION_NOISE_PREFIX), mode(ACTION_CYCLE_PREFIX)) {
-        (Some(mode), _) => Some(engine.set_noise_mode(mode)),
-        (_, Some(mode)) => Some(match display::toggle_cycle(engine.state().cycle, mode) {
-            Some(cycle) => engine.set_cycle(cycle),
-            None => {
-                tracing::info!(?mode, "press and hold keeps two modes at least");
-                Vec::new()
-            }
-        }),
-        _ => None,
+/// Add `mode` to the press-and-hold cycle or remove it (never below two).
+fn toggle_cycle(engine: &mut Engine, mode: NoiseControlMode) -> Vec<Effect> {
+    match display::toggle_cycle(engine.state().cycle, mode) {
+        Some(cycle) => engine.set_cycle(cycle),
+        None => {
+            tracing::info!(?mode, "press and hold keeps two modes at least");
+            Vec::new()
+        }
     }
 }
 

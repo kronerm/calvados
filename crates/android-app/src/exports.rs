@@ -79,7 +79,7 @@ extern "system" fn Java_dev_kroner_calvados_PersistentService_nativeOnProfilePro
         match bluetooth::on_profile_proxy(env, profile, proxy) {
             Ok(true) => {
                 tracing::info!("AirPods already connected");
-                post(Event::Intent(intents::ACTION_AIRPODS_AVAILABLE.to_owned()));
+                post(Event::AclUp);
             }
             Ok(false) => {}
             Err(e) => tracing::warn!("profile proxy: {e:#}"),

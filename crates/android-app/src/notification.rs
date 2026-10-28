@@ -3,10 +3,7 @@
 use jni::JavaVM;
 use jni::objects::JObject;
 
-use crate::intents::{
-    self, ACTION_AUTO_CONNECT, ACTION_AUTO_SWITCH, ACTION_CANCEL_UPDATE, ACTION_CYCLE_PREFIX,
-    ACTION_NOISE_PREFIX, ACTION_UPDATE_FIRMWARE,
-};
+use crate::intents::{self, Request};
 use crate::jni::android::app::activity_thread::ActivityThread;
 use crate::jni::android::app::notification::{
     Action, DecoratedCustomViewStyle, Importance, Notification, NotificationChannel,
@@ -21,6 +18,7 @@ use crate::proto::aacp::{Cycle, NoiseControlMode};
 use crate::proto::display::{self, Buds, Component, CycleMark, Place};
 use crate::proto::engine::Engine;
 use crate::proto::firmware::Release;
+use crate::proto::settings::Setting;
 use crate::proto::state::PeerUpdate;
 use crate::proto::update::UpdateStatus;
 use crate::service::Conn;
@@ -114,10 +112,10 @@ impl UpdateAction {
         }
     }
 
-    fn intent(self) -> &'static str {
+    fn request(self) -> Request {
         match self {
-            Self::Start => ACTION_UPDATE_FIRMWARE,
-            Self::Cancel => ACTION_CANCEL_UPDATE,
+            Self::Start => Request::StartUpdate,
+            Self::Cancel => Request::CancelUpdate,
         }
     }
 }
@@ -248,7 +246,7 @@ impl Content {
         };
         let builder = match self.update_action {
             Some(action) => {
-                let intent = intents::service_intent(env, context, action.intent())?;
+                let intent = intents::service_intent(env, context, &action.request().action())?;
                 let flags = Flags::IMMUTABLE | Flags::UPDATE_CURRENT;
                 let pending =
                     PendingIntent::get_foreground_service(env, context, 20, &intent, flags)?;
@@ -341,14 +339,7 @@ impl Content {
             let id = ui.id(env, tile)?;
             views.set_int(env, id, "setBackgroundResource", background)?;
             views.set_float(env, id, "setAlpha", if connected { 1.0 } else { 0.5 })?;
-            let name = display::mode_name(Some(mode));
-            ui.on_click(
-                env,
-                context,
-                tile,
-                request_code,
-                &format!("{ACTION_NOISE_PREFIX}{name}"),
-            )?;
+            ui.on_click(env, context, tile, request_code, Request::Noise(mode))?;
             // The dot's own click, over the tile's; one of the last two is
             // refused by the service.
             let dot = format!("{tile}_cycle");
@@ -356,19 +347,18 @@ impl Content {
             ui.image(env, &dot, glyph)?;
             let id = ui.id(env, &dot)?;
             views.set_int(env, id, "setImageAlpha", alpha)?;
-            let action = format!("{ACTION_CYCLE_PREFIX}{name}");
-            ui.on_click(env, context, &dot, 30 + request_code, &action)?;
+            ui.on_click(env, context, &dot, 30 + request_code, Request::Cycle(mode))?;
         }
-        for (request_code, (row, enabled, action)) in (10..).zip([
-            ("setting_switch", self.auto_switch, ACTION_AUTO_SWITCH),
-            ("setting_connect", self.auto_connect, ACTION_AUTO_CONNECT),
+        for (request_code, (row, enabled, setting)) in (10..).zip([
+            ("setting_switch", self.auto_switch, Setting::AutoSwitch),
+            ("setting_connect", self.auto_connect, Setting::AutoConnect),
         ]) {
             let toggle = match enabled {
                 true => "ic_toggle_right",
                 false => "ic_toggle_left",
             };
             ui.image(env, &format!("{row}_toggle"), toggle)?;
-            ui.on_click(env, context, row, request_code, action)?;
+            ui.on_click(env, context, row, request_code, Request::Toggle(setting))?;
         }
         Ok(views)
     }
@@ -494,10 +484,10 @@ impl<'local> Ui<'_, 'local> {
         context: &Context<impl jni::refs::Reference + AsRef<JObject<'local>>>,
         id: &str,
         request_code: i32,
-        action: &str,
+        request: Request,
     ) -> anyhow::Result<()> {
         let id = self.id(env, id)?;
-        let intent = intents::service_intent(env, context, action)?;
+        let intent = intents::service_intent(env, context, &request.action())?;
         let flags = Flags::IMMUTABLE | Flags::UPDATE_CURRENT;
         let pending =
             PendingIntent::get_foreground_service(env, context, request_code, &intent, flags)?;
