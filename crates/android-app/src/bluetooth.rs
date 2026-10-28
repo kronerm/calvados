@@ -66,7 +66,7 @@ pub(crate) fn save_key(pods: MacAddress, kind: KeyType, key: [u8; 16]) -> anyhow
 
 /// The paired pods and their stored keys, if the IRK is known.
 pub(crate) fn stored_keys() -> anyhow::Result<Option<(MacAddress, PodsKeys)>> {
-    let Some(pods) = paired_airpods()?.and_then(|pods| pods.parse().ok()) else {
+    let Some(pods) = paired_airpods()? else {
         return Ok(None);
     };
     let read = |kind| -> anyhow::Result<Option<[u8; 16]>> {
@@ -129,7 +129,7 @@ pub(crate) fn set_presence_scan(enabled: bool) -> anyhow::Result<()> {
 pub(crate) fn nearby_advertisers<'local>(
     env: &mut Env<'local>,
     intent: &Intent<JObject<'local>>,
-) -> anyhow::Result<Vec<(String, Vec<u8>)>> {
+) -> anyhow::Result<Vec<(MacAddress, Vec<u8>)>> {
     let Some(results) = intent.get_parcelable_array_list_extra(env, EXTRA_LIST_SCAN_RESULT)? else {
         return Ok(Vec::new());
     };
@@ -140,13 +140,20 @@ pub(crate) fn nearby_advertisers<'local>(
             let data = result
                 .get_scan_record(env)?
                 .get_manufacturer_specific_data(env, i32::from(APPLE_COMPANY_ID))?;
-            Ok((address, data.unwrap_or_default()))
+            let data = data.unwrap_or_default();
+            tracing::debug!(
+                address,
+                data = hex::encode(&data),
+                "Apple device advertising nearby"
+            );
+            Ok(address.parse().ok().map(|address| (address, data)))
         })
+        .filter_map(Result::transpose)
         .collect()
 }
 
 /// MAC of the first bonded device named like AirPods ([`is_airpods_name`]).
-pub(crate) fn paired_airpods() -> anyhow::Result<Option<String>> {
+pub(crate) fn paired_airpods() -> anyhow::Result<Option<MacAddress>> {
     with_env(|env| {
         let devices = BluetoothAdapter::default_adapter(env)?
             .get_bonded_devices(env)?
@@ -157,7 +164,7 @@ pub(crate) fn paired_airpods() -> anyhow::Result<Option<String>> {
                 .get_name(env)?
                 .is_some_and(|name| is_airpods_name(&name))
             {
-                return device.get_address(env).map(Some);
+                return Ok(Some(device.get_address(env)?.parse()?));
             }
         }
         Ok(None)
@@ -225,7 +232,7 @@ pub(crate) static PROXY_JOBS: Mutex<Vec<ProxyJob>> = Mutex::new(Vec::new());
 #[derive(Debug)]
 pub(crate) enum ProxyJob {
     /// Connect A2DP to this MAC.
-    Connect(String),
+    Connect(MacAddress),
     /// Report whether paired AirPods are connected right now.
     ReportConnected,
 }
@@ -236,8 +243,8 @@ pub(crate) fn set_service(service: Option<Global<JObject<'static>>>) {
 
 /// Ask Android to connect A2DP to `mac`, so the OS actually routes audio after
 /// an AACP takeover.
-pub(crate) fn connect_a2dp(mac: &str) -> anyhow::Result<()> {
-    request_a2dp_proxy(ProxyJob::Connect(mac.to_owned()))
+pub(crate) fn connect_a2dp(mac: MacAddress) -> anyhow::Result<()> {
+    request_a2dp_proxy(ProxyJob::Connect(mac))
 }
 
 /// Find out whether the pods are already connected (e.g. when the service
@@ -280,9 +287,9 @@ pub(crate) fn on_profile_proxy(
         .map(|job| -> anyhow::Result<bool> {
             match job {
                 ProxyJob::Connect(mac) => {
-                    let device = adapter.get_remote_device(env, &mac)?;
+                    let device = adapter.get_remote_device(env, &address(mac))?;
                     let connected = a2dp.connect(env, &device)?;
-                    tracing::info!(mac, connected, "A2DP connect");
+                    tracing::info!(%mac, connected, "A2DP connect");
                     Ok(false)
                 }
                 ProxyJob::ReportConnected => {

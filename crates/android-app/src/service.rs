@@ -46,7 +46,7 @@ pub(crate) enum Event {
     /// A phone call is off-hook (answered or placed), or ended.
     PhoneCall(bool),
     /// Apple devices advertising nearby: address and manufacturer data.
-    Nearby(Vec<(String, Vec<u8>)>),
+    Nearby(Vec<(MacAddress, Vec<u8>)>),
     /// A firmware catalog check for these models (a product's): its
     /// current release, `None` when it failed.
     Catalog(Vec<String>, Option<Release>),
@@ -112,15 +112,15 @@ pub(crate) fn post(event: Event) {
 }
 
 /// AACP channel lifecycle; ownership lives in the [`Engine`].
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Copy)]
 pub(crate) enum Conn {
     Disconnected,
     /// Awaiting `BluetoothEvent::Connected`.
     Connecting {
-        mac: String,
+        mac: MacAddress,
     },
     Connected {
-        mac: String,
+        mac: MacAddress,
     },
 }
 
@@ -199,20 +199,9 @@ fn service_main(jvm: JavaVM, events: crossbeam_channel::Receiver<Event>) {
                     .inspect_err(|e| tracing::warn!("reading the AirPods' keys: {e:#}"))
                     .ok()
                     .flatten();
-                effects.extend(
-                    advertisers
-                        .iter()
-                        .inspect(|(address, data)| {
-                            let data = hex::encode(data);
-                            tracing::debug!(address, data, "Apple device advertising nearby");
-                        })
-                        .filter_map(|(address, data)| {
-                            Some((address.parse::<MacAddress>().ok()?, data))
-                        })
-                        .flat_map(|(address, data)| {
-                            engine.nearby(address.to_array(), data, keys, now)
-                        }),
-                );
+                effects.extend(advertisers.iter().flat_map(|(address, data)| {
+                    engine.nearby(address.to_array(), data, keys, now)
+                }));
             }
             Some(Event::Stop) => {
                 tracing::info!("Service shutting down");
@@ -267,19 +256,14 @@ fn service_main(jvm: JavaVM, events: crossbeam_channel::Receiver<Event>) {
                 },
             },
             Some(Event::Bluetooth(event)) => match event {
-                BluetoothEvent::Connected => match conn.clone() {
+                BluetoothEvent::Connected => match conn {
                     Conn::Disconnected => {
                         tracing::warn!("BT: ignoring connected event while disconnected");
                     }
                     Conn::Connecting { mac } | Conn::Connected { mac } => {
                         available = true;
                         decoder = Decoder::default();
-                        match mac.parse::<MacAddress>() {
-                            Ok(pods) => {
-                                effects.extend(engine.connected(pods, now));
-                            }
-                            Err(_) => tracing::warn!(mac, "the pods' address is unusable"),
-                        }
+                        effects.extend(engine.connected(mac, now));
                         conn = Conn::Connected { mac };
                     }
                 },
@@ -398,10 +382,9 @@ fn execute_effect(conn: &Conn, effect: Effect, in_call: bool) -> bool {
         Effect::Send(bytes) => return link::send(&bytes).is_ok(),
         // Off-thread: the reflection call can stall.
         Effect::RouteAudio => {
-            if let Conn::Connecting { mac } | Conn::Connected { mac } = conn {
-                let mac = mac.clone();
+            if let Conn::Connecting { mac } | Conn::Connected { mac } = *conn {
                 thread::spawn(move || {
-                    if let Err(e) = bluetooth::connect_a2dp(&mac) {
+                    if let Err(e) = bluetooth::connect_a2dp(mac) {
                         tracing::warn!("A2DP connect failed (audio may not route): {e:#}");
                     }
                     if !in_call {
@@ -425,7 +408,7 @@ fn execute_effect(conn: &Conn, effect: Effect, in_call: bool) -> bool {
         // RouteAudio. A connect under way already makes this a no-op.
         Effect::ConnectPods(pods) => {
             thread::spawn(move || {
-                if let Err(e) = bluetooth::connect_a2dp(&bluetooth::address(pods)) {
+                if let Err(e) = bluetooth::connect_a2dp(pods) {
                     tracing::warn!("connecting the pods failed: {e:#}");
                 }
             });
@@ -489,10 +472,10 @@ fn toggle(engine: &mut Engine, setting: Setting) {
 }
 
 /// Start connecting to the paired AirPods; returns their MAC.
-pub(crate) fn connect_to_airpods() -> anyhow::Result<String> {
+pub(crate) fn connect_to_airpods() -> anyhow::Result<MacAddress> {
     let mac =
         bluetooth::paired_airpods()?.ok_or_else(|| anyhow::anyhow!("no paired AirPods found"))?;
-    link::connect(mac.clone(), |event| post(Event::Bluetooth(event)));
+    link::connect(mac, |event| post(Event::Bluetooth(event)));
     Ok(mac)
 }
 

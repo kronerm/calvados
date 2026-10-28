@@ -8,6 +8,7 @@ use jni::objects::JObject;
 use jni::refs::Global;
 use parking_lot::Mutex;
 
+use crate::bluetooth::address;
 use crate::jni::android::bluetooth::adapter::BluetoothAdapter;
 use crate::jni::android::bluetooth::device::BluetoothDevice;
 use crate::jni::android::bluetooth::socket::BluetoothSocket;
@@ -16,6 +17,7 @@ use crate::jni::java::lang::boolean::Boolean;
 use crate::jni::java::lang::integer::Integer;
 use crate::jni::java::lang::reflect::constructor::Constructor;
 use crate::jni::with_env;
+use crate::proto::MacAddress;
 use crate::proto::connection::{AIRPODS_PSM, AIRPODS_UUID};
 
 /// Android's hidden `BluetoothSocket.TYPE_L2CAP`.
@@ -48,7 +50,7 @@ pub(crate) static LINK: Mutex<Link> = Mutex::new(Link {
 
 /// Open the AACP socket to `mac` on a background thread, reporting through
 /// `on_event` until the link is replaced or closed.
-pub(crate) fn connect(mac: String, on_event: impl Fn(BluetoothEvent) + Send + 'static) {
+pub(crate) fn connect(mac: MacAddress, on_event: impl Fn(BluetoothEvent) + Send + 'static) {
     let generation = {
         let mut link = LINK.lock();
         link.generation += 1;
@@ -57,7 +59,7 @@ pub(crate) fn connect(mac: String, on_event: impl Fn(BluetoothEvent) + Send + 's
     let is_current = move || LINK.lock().generation == generation;
 
     std::thread::spawn(move || {
-        let socket = match open_socket(&mac) {
+        let socket = match open_socket(mac) {
             Ok(socket) => Arc::new(socket),
             Err(e) => return on_event(BluetoothEvent::Closed(format!("{e:#}"))),
         };
@@ -115,11 +117,11 @@ pub(crate) fn close(socket: &Socket) {
     }
 }
 
-pub(crate) fn open_socket(mac: &str) -> anyhow::Result<Socket> {
-    tracing::info!(mac, "connecting AACP");
+pub(crate) fn open_socket(mac: MacAddress) -> anyhow::Result<Socket> {
+    tracing::info!(%mac, "connecting AACP");
     with_env(|env| {
         let adapter = BluetoothAdapter::default_adapter(env)?;
-        let device = adapter.get_remote_device(env, mac)?;
+        let device = adapter.get_remote_device(env, &address(mac))?;
         let socket = create_l2cap_socket(env, &adapter, &device)?.into_global(env)?;
         socket.connect(env)?;
         Ok(socket)
