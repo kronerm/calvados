@@ -1,5 +1,7 @@
 //! Local media playback control, as a media button press.
 
+use std::time::Duration;
+
 use jni::Env;
 use jni::objects::JObject;
 
@@ -32,12 +34,16 @@ pub(crate) fn active_usages<'local>(
         .collect()
 }
 
-/// Suspend the A2DP output for `hold`, then resume it, so Android rebuilds
+/// How long [`toggle_a2dp_output`] holds the suspend: long enough for the
+/// output to be torn down.
+const HOLD: Duration = Duration::from_millis(200);
+
+/// Suspend the A2DP output for [`HOLD`], then resume it, so Android rebuilds
 /// it. After a take, that clears the pods' remote suspend from when another
 /// host had the audio (otherwise playback stays silent until a seek). The audio
 /// HAL must honour `A2dpSuspended` (verified on a Pixel 9). Not during a
 /// call: Android keeps A2DP suspended itself then.
-pub(crate) fn toggle_a2dp_output(hold: std::time::Duration) -> anyhow::Result<()> {
+pub(crate) fn toggle_a2dp_output() -> anyhow::Result<()> {
     let set = |value: &str| {
         with_env(|env| {
             app_context(env)?
@@ -46,7 +52,7 @@ pub(crate) fn toggle_a2dp_output(hold: std::time::Duration) -> anyhow::Result<()
         })
     };
     set("true")?;
-    std::thread::sleep(hold);
+    std::thread::sleep(HOLD);
     set("false")
 }
 

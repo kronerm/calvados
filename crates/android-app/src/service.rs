@@ -400,8 +400,12 @@ fn execute_effect(conn: &Conn, effect: Effect, in_call: bool) -> bool {
                     if let Err(e) = bluetooth::connect_a2dp(mac) {
                         tracing::warn!("A2DP connect failed (audio may not route): {e:#}");
                     }
-                    if !in_call {
-                        toggle_a2dp_output("A2DP output restarted", TAKE_HOLD);
+                    if in_call {
+                        return;
+                    }
+                    match media::toggle_a2dp_output() {
+                        Ok(()) => tracing::info!("A2DP output restarted"),
+                        Err(e) => tracing::warn!("A2DP output toggle failed: {e:#}"),
                     }
                 });
             }
@@ -440,17 +444,6 @@ fn execute_effect(conn: &Conn, effect: Effect, in_call: bool) -> bool {
         Effect::Resume => log_media("resume", media::resume()),
     }
     true
-}
-
-/// How long [`media::toggle_a2dp_output`] holds the suspend on a take: long
-/// enough for the output to be torn down.
-const TAKE_HOLD: Duration = Duration::from_millis(200);
-
-fn toggle_a2dp_output(done: &str, hold: Duration) {
-    match media::toggle_a2dp_output(hold) {
-        Ok(()) => tracing::info!("{done}"),
-        Err(e) => tracing::warn!("A2DP output toggle failed: {e:#}"),
-    }
 }
 
 fn log_media(action: &str, result: anyhow::Result<()>) {
