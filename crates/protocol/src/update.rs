@@ -400,10 +400,6 @@ impl Updater {
                 };
                 vec![ack]
             }
-            Received::Version { status, version } => {
-                tracing::info!(status, version, "firmware update: protocol version");
-                Vec::new()
-            }
             other => {
                 tracing::debug!(?other, "firmware update: received");
                 Vec::new()

@@ -137,10 +137,11 @@ main as the rolling pre-release `testing`: a release is
   fragment header; `Packet::Uarp`; Apple hosts' route, the pods' transport
   0xd). Messages `[type 2] [len 2] [id 2]`, big-endian: `Message` out
   (Sync, version discovery proposing 4, the offer 0x05, data response
-  0x07, rescind 0x0C, the acks 0x0F and 0x18), `Received` in (0x00,
-  0x02, 0x06, 0x09 with `Processing` flags: low byte 1 staged, 2 denied,
-  3 abandoned, 4 corrupt, the reason above; 0x0D, 0x10, 0x17), the
-  running-version query (tag 5: `[status 2] [tag 4] [len 4]`, four u32).
+  0x07, rescind 0x0C, the acks 0x0F and 0x18), `Received` in (0x04
+  as `RunningVersion`, 0x06, 0x09 with `Processing` flags: low byte 1
+  staged, 2 denied, 3 abandoned, 4 corrupt, the reason above; 0x0D, 0x17;
+  the rest only logged), the running-version query (tag 5: `[status 2]
+  [tag 4] [len 4]`, four u32).
   **No apply (0x0A) message exists; keep it that way.** The GATT
   characteristic (`94110001-…`, one-byte fragment header) is what the
   Python tools use; calvados doesn't.

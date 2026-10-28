@@ -1343,17 +1343,16 @@ impl Engine {
     /// endpoint (acknowledged, as a controller does), or the update's.
     /// Their own offers (e.g. a dynamic `MTIC` asset) go unanswered.
     fn uarp_received(&mut self, message: &[u8], now: Instant) -> Vec<Effect> {
-        if let Some(exact) = uarp::running_version(message) {
-            if let Some(session) = self.session_mut() {
-                session.uarp.query = VersionQuery::Answered(exact);
-            }
-            return self
-                .running_firmware(exact)
-                .into_iter()
-                .chain(self.tell(News::Firmware(exact)))
-                .collect();
-        }
         match Received::parse(message) {
+            Some(Received::RunningVersion(exact)) => {
+                if let Some(session) = self.session_mut() {
+                    session.uarp.query = VersionQuery::Answered(exact);
+                }
+                self.running_firmware(exact)
+                    .into_iter()
+                    .chain(self.tell(News::Firmware(exact)))
+                    .collect()
+            }
             Some(Received::DownstreamAdded { id }) if self.uarp_ready(now) => {
                 tracing::info!(id, "UARP: downstream endpoint added");
                 let Some(session) = self.session_mut() else {

@@ -47,23 +47,16 @@ enum Sent {
 #[derive(Debug, Clone, Copy, num_enum::TryFromPrimitive)]
 #[repr(u16)]
 enum ReceivedType {
-    Sync = 0x00,
-    VersionResponse = 0x02,
     InformationResponse = 0x04,
     DataRequest = 0x06,
     Processing = 0x09,
     AssetAvailableAck = 0x0D,
-    RescindAck = 0x10,
     DownstreamAdded = 0x17,
 }
 
-/// Accessory information tags; only the one asked for.
-#[derive(Debug, Clone, Copy)]
-#[repr(u32)]
-enum InfoTag {
-    /// Four u32: major, minor, release, build (`7.1.21.0`).
-    RunningFirmware = 5,
-}
+/// The accessory information tag asked for: four u32, major, minor,
+/// release, build (`7.1.21.0`).
+const RUNNING_FIRMWARE: u32 = 5;
 
 /// Asset Data Response status: an unknown asset, or an offset past it.
 pub const UNKNOWN_ASSET: u16 = 0x11;
@@ -187,20 +180,12 @@ pub(crate) fn parse_frame(body: &[u8]) -> IResult<&[u8], Vec<u8>> {
         .parse(body)
 }
 
-/// A message from the pods, as far as an updater cares.
+/// A message from the pods, as far as calvados cares.
 #[derive(Debug, Clone, Copy)]
 #[cfg_attr(test, derive(PartialEq, Eq))]
 pub enum Received {
-    Sync,
-    /// Version discovery's answer: the negotiated protocol version.
-    Version {
-        status: u16,
-        version: u16,
-    },
     /// The offer acknowledged (every field echoed).
-    OfferAck {
-        asset: u16,
-    },
+    OfferAck { asset: u16 },
     /// Asset Data Request: serve `length` bytes at `offset`.
     DataRequest {
         asset: u16,
@@ -208,21 +193,14 @@ pub enum Received {
         length: u16,
     },
     /// Asset Processing Notification: see [`Processing`].
-    Processing {
-        asset: u16,
-        flags: u16,
-    },
-    RescindAck {
-        asset: u16,
-    },
+    Processing { asset: u16, flags: u16 },
     /// Downstream Endpoint Added: over AACP the other bud, unasked.
-    DownstreamAdded {
-        id: u16,
-    },
-    /// An information response, or a type an updater ignores.
-    Other {
-        kind: u16,
-    },
+    DownstreamAdded { id: u16 },
+    /// The answer to [`running_version_query`].
+    RunningVersion(ExactVersion),
+    /// Sync, version discovery's answer, a rescind's ack, another
+    /// information response, or a type nobody here needs.
+    Other { kind: u16 },
 }
 
 /// A processing notification's flags: the outcome in the low byte, a
@@ -243,9 +221,7 @@ pub enum Processing {
     Corrupt {
         reason: u8,
     },
-    Other {
-        flags: u16,
-    },
+    Other,
 }
 
 impl Processing {
@@ -256,7 +232,7 @@ impl Processing {
             2 => Self::Denied { reason },
             3 => Self::Abandoned { reason },
             4 => Self::Corrupt { reason },
-            _ => Self::Other { flags },
+            _ => Self::Other,
         }
     }
 }
@@ -286,11 +262,6 @@ impl Received {
             return Some(Self::Other { kind });
         };
         Some(match known {
-            ReceivedType::Sync => Self::Sync,
-            ReceivedType::VersionResponse => Self::Version {
-                status: be16(0)?,
-                version: be16(2)?,
-            },
             ReceivedType::AssetAvailableAck => Self::OfferAck { asset: be16(6)? },
             ReceivedType::DataRequest => Self::DataRequest {
                 asset: be16(0)?,
@@ -301,9 +272,20 @@ impl Received {
                 asset: be16(0)?,
                 flags: be16(2)?,
             },
-            ReceivedType::RescindAck => Self::RescindAck { asset: be16(0)? },
             ReceivedType::DownstreamAdded => Self::DownstreamAdded { id: be16(0)? },
-            ReceivedType::InformationResponse => Self::Other { kind },
+            // `[status 2] [tag 4] [len 4]` + value.
+            ReceivedType::InformationResponse => {
+                let value = || {
+                    let len = usize::try_from(be32(6)?).ok()?;
+                    payload.get(10..)?.get(..len)?.first_chunk()
+                };
+                match (be16(0), be32(2), value()) {
+                    (Some(0), Some(RUNNING_FIRMWARE), Some(version)) => {
+                        Self::RunningVersion(ExactVersion::from_be_bytes(version))
+                    }
+                    _ => Self::Other { kind },
+                }
+            }
         })
     }
 }
@@ -314,28 +296,8 @@ pub fn running_version_query() -> [Vec<u8>; 3] {
     [
         Message::Sync.encode(1),
         Message::VersionDiscovery.encode(2),
-        message(
-            Sent::InformationRequest,
-            3,
-            &(InfoTag::RunningFirmware as u32).to_be_bytes(),
-        ),
+        message(Sent::InformationRequest, 3, &RUNNING_FIRMWARE.to_be_bytes()),
     ]
-}
-
-/// The running firmware from an information response to
-/// [`running_version_query`]: status 0, tag 5, four u32.
-pub fn running_version(message: &[u8]) -> Option<ExactVersion> {
-    let (kind, payload) = split(message)?;
-    let (status, rest) = payload.split_first_chunk::<2>()?;
-    let (tag, rest) = rest.split_first_chunk::<4>()?;
-    let (value_len, value) = rest.split_first_chunk::<4>()?;
-    let value = value.get(..usize::try_from(u32::from_be_bytes(*value_len)).ok()?)?;
-    let running = kind == ReceivedType::InformationResponse as u16
-        && u16::from_be_bytes(*status) == 0
-        && u32::from_be_bytes(*tag) == InfoTag::RunningFirmware as u32;
-    running
-        .then(|| value.first_chunk().map(ExactVersion::from_be_bytes))
-        .flatten()
 }
 
 #[cfg(test)]
@@ -361,20 +323,22 @@ mod tests {
 
     #[test]
     fn the_response_names_the_exact_version() {
-        let version = running_version(&RESPONSE).map(|v| v.to_string());
-        assert_eq!(version.as_deref(), Some("7.1.21"));
-        let mut failed = RESPONSE;
-        failed[7] = 1;
-        assert_eq!(running_version(&failed), None);
-        let mut staged = RESPONSE;
-        staged[11] = 6;
-        assert_eq!(running_version(&staged), None);
-        assert_eq!(running_version(&RESPONSE[..20]), None);
-        assert_eq!(running_version(&[]), None);
         assert_eq!(
             Received::parse(&RESPONSE),
-            Some(Received::Other { kind: 4 })
+            Some(Received::RunningVersion("7.1.21".parse().unwrap()))
         );
+        let other = Some(Received::Other { kind: 4 });
+        let mut failed = RESPONSE;
+        failed[7] = 1;
+        assert_eq!(Received::parse(&failed), other);
+        let mut staged = RESPONSE;
+        staged[11] = 6;
+        assert_eq!(Received::parse(&staged), other);
+        let mut short = RESPONSE;
+        short[15] = 8;
+        assert_eq!(Received::parse(&short), other);
+        assert_eq!(Received::parse(&RESPONSE[..20]), None);
+        assert_eq!(Received::parse(&[]), None);
     }
 
     /// As `uarp_offer.py` built them for 9A348.
@@ -442,10 +406,7 @@ mod tests {
         );
         assert_eq!(
             parse("00020004000100000004"),
-            Some(Received::Version {
-                status: 0,
-                version: 4
-            })
+            Some(Received::Other { kind: 2 })
         );
         // The ack echoes the offer: the asset id after tag and flags.
         let ack = Message::Offer {
@@ -492,6 +453,6 @@ mod tests {
         assert_eq!(Processing::of(0x0202), Processing::Denied { reason: 2 });
         assert_eq!(Processing::of(0x0803), Processing::Abandoned { reason: 8 });
         assert_eq!(Processing::of(0x0004), Processing::Corrupt { reason: 0 });
-        assert_eq!(Processing::of(0x0106), Processing::Other { flags: 0x0106 });
+        assert_eq!(Processing::of(0x0106), Processing::Other);
     }
 }
