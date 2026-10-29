@@ -231,6 +231,11 @@ all, through the AACP `0x17` wrapper's endpoints (`AP AOP RTP BTM DSP1
 DSP2`) that Apple hosts use for analytics; the Linux daemon logs every
 AACP frame in full (`hci: aacp`) to see what follows a reboot.
 
+## A new session
+
+What the pods send a new AACP session, what holds part of it back, and the
+feature flags: [session-start.md](session-start.md).
+
 ## A host-side updater
 
 What closing the lid does, how several hosts interact, resuming, and the

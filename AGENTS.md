@@ -510,8 +510,9 @@ texts are written twice. A change to one side needs the other:
   on a fresh connect the list can come first. On a fresh connect while
   another host is connected, the rest of the startup burst (our own
   `DeviceConnection`, the `0x02` reply, `DeviceInformation`, the settings,
-  EQ) is held back: 24 s in one capture, until just before that host
-  disconnected. Mid-session, a leaving host comes as `DeviceConnection`
+  EQ) is held back until the pods count this host connected: they wait
+  for the profiles it advertises, 20 s, then up to 3 × 5 s
+  (docs/session-start.md); 24 s in one capture. Mid-session, a leaving host comes as `DeviceConnection`
   (`connected = false`), a joining host as a new list (no
   `DeviceConnection`); both confirmed by connecting and disconnecting the
   laptop by hand. A list also comes in the burst after a primary switch
@@ -538,19 +539,21 @@ texts are written twice. A change to one side needs the other:
   us as owner and a later claim gets no answer: the engine remembers what
   they last said (`PodsOwner`) and routes at once then, likely the Oct 9
   silence. The smart-routing frames (0x10) are relayed verbatim as 0x11,
-  never parsed. `AudioSource` (0x0E) is the host whose audio changed last
-  plus one activity mask over all hosts (`Activity`: 0x01 call, 0x02 media,
-  other bits unknown), so one host stopping can report nothing playing while
-  the other streams.
-- A session can get only the settings half of the startup burst (the 0x02
-  reply, `DeviceInformation`, settings, EQ) and not the state half (battery,
-  ear detection, `PrimaryBud`, `DeviceConnection`s, `ConnectedDevices`):
-  seen with two AACP hosts, on fresh connects, and right after the pods power
-  on. Only the handshake goes out at connect; the engine sends the rest of
+  never parsed. `AudioSource` (0x0E) is the last host to start something
+  plus one activity mask over all hosts (`Activity`: 0x01 call, any SCO;
+  0x02 media, A2DP; other bits unnamed stream kinds), so one host stopping
+  can report nothing playing while the other streams.
+- The startup burst has two halves (docs/session-start.md): the state
+  half (battery, ear detection, `PrimaryBud`, `DeviceConnection`s,
+  `AudioSource`, `ConnectedDevices`) answers each notification request at
+  once; the settings half (the 0x02 reply, `DeviceInformation`, settings,
+  EQ) comes once the pods count the host connected, which nothing can
+  solicit. A re-sent handshake on the same channel gets status 0x85
+  (already open). Only the handshake goes out at connect; the engine sends the rest of
   the setup (feature flags `0x4D`, notifications, EQ) on its ack: sent
   together, a late ack (~0.6 s, fresh connects) lost them, and without the
   feature flags the pods reported Adaptive as Off (`0D 01`) to that host
-  while the other got `0D 04`. `Engine::check_state_burst`, due 2 s after
+  while the other got `0D 04`. `Engine::check_startup`, due 2 s after
   the handshake and again every 2 s while it asks for something, re-sends
   the handshake when no ack came (a session opened as the pods finish booting can stay silent)
   and after 3 tries asks for a new AACP connection (`Effect::Reconnect`);
@@ -625,10 +628,11 @@ texts are written twice. A change to one side needs the other:
 - Stream check (Linux): 1 s after a confirmed take `Engine::check_stream`
   (through `tick`) emits `RestartStream` unless the pods name us
   the media source by then, and again every second, 10 times at most. The
-  pods ignore a new source for some seconds after switching to one: with
-  the phone started 0.5 s before the take, restarts 1.5 and 3.5 s after
-  that switch were ignored, one at 7.5 s made the pods suspend the phone
-  (`initiator=false` in its log) and switch. Healthy
+  pods never refuse a second host's START (they defer it ~0.7 s while the
+  other streams) and have no guard timer (docs/ownership.md); on 9A348 the
+  restarts that went unanswered were the node's `Suspend` putting no
+  AVDTP START on the air. On 7.1 (Oct 18) restarts 1.5 and 3.5 s after a
+  switch seemed ignored and one at 7.5 s worked, before HCI logging. Healthy
   Linux takes stream within ~0.7 s and are left alone: restarting on every
   take cut the running stream.
 - The engine touches media playback only through the iOS-like ear rule: a

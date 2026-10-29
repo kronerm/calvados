@@ -47,10 +47,8 @@ const REDIAL_ATTEMPTS: u8 = 3;
 /// [`Engine::check_stream`] runs. A healthy take streams within ~0.7 s.
 const STREAM_WAIT: Duration = Duration::from_secs(1);
 
-/// [`Engine::check_stream`] restarts at most this many times per take. The
-/// pods ignore a new source for some seconds after switching to one (a take
-/// right after the peer started: restarts at 1.5 and 3.5 s were ignored, 7.5 s
-/// worked), so it keeps trying past that.
+/// [`Engine::check_stream`] restarts at most this many times per take: a
+/// restart doesn't always get a START out (docs/ownership.md).
 const STREAM_RESTARTS: u8 = 10;
 
 /// How long UARP waits after a connect or a primary change.
@@ -306,7 +304,8 @@ enum Phase {
     /// minutes (Oct 18 13:36:54), not even a noise mode's echo, where a new
     /// connection worked at once.
     Acked,
-    /// Answering since the ack (the state half can be held back for ~25 s).
+    /// Answering since the ack (the settings half can take ~20-35 s:
+    /// docs/session-start.md).
     Answering,
 }
 

@@ -7,8 +7,9 @@ pub const OPCODE: u16 = 0x0E;
 
 bitflags::bitflags! {
     /// What's playing, over all hosts: the pods keep one mask, set and
-    /// cleared as each host's audio starts and stops (firmware:
-    /// docs/firmware.md). Other bits are activities not identified yet.
+    /// cleared as each host's audio starts and stops (docs/ownership.md):
+    /// a call is any SCO link, media A2DP. Other bits are stream kinds not
+    /// identified yet.
     #[derive(Debug, Clone, Copy, PartialEq, Eq)]
     pub struct Activity: u8 {
         const CALL = 0x01;
@@ -23,8 +24,9 @@ impl Activity {
     }
 }
 
-/// The host whose audio changed last, and what's playing: not who owns the
-/// audio. With nothing playing the pods send a zero address.
+/// The last host to start something, and what's playing: not who owns the
+/// audio. With nothing playing the pods send a zero address (at a session's
+/// start, the receiving host's own).
 #[derive(Debug, Clone, Copy)]
 pub struct AudioSource {
     pub mac: MacAddress,

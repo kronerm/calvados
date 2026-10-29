@@ -81,11 +81,27 @@ The OwnsConnection sender: object field +0x68 = interface with vtable
 0x1d5b24 [rkof 0x1608c4, 0x1608fa]; slot 2 = FUN_000c893e → FUN_0006e804
 (session by mac, id 6, u32 value) [rkof 0xc893e-0xc8946, 0x6e804].
 
-Priority order (Known from the comparison, meaning of the bits Inferred):
-0x20 ('SR' id 1) > 0x10 (host asserted OwnsConnection=1, most recent
-writer only) > 0x08 ('AS' stream states, probably A2DP streaming) > 0x04
-('TV') > 0x02 (connected). So a host writing OwnsConnection=1 beats a host
+Priority order (Known from the comparison): 0x20 > 0x10 (host asserted
+OwnsConnection=1, most recent writer only) > 0x08 ('AS' stream states) >
+0x04 > 0x02 (connected). So a host writing OwnsConnection=1 beats a host
 that is streaming, at once, with no timer or guard in this component.
+0x80 is outside the comparison: the winner is chosen on `flags & 0x7f`
+[rkof 0x81e44], and the exclusive setter FUN_00081f0e stores every record
+`& 0x7f` [rkof 0x81f46]; 0x80 enters only verbatim through event 0x103
+(the buds' state transfer), so it never decides the owner.
+
+Where the upper bits come from [Known]:
+- **0x20**: AACP opcode 0x44 from a host, `44 00 [03 00] [04 00] [v]`
+  (sub-type 4, three bytes): the opcode's handler FUN_000cc368 publishes
+  'SR' 0x5352 type 0x42 {sender's mac, v != 0} [rkof 0xcc436-0xcc47a],
+  the only publisher of that type; v=1 sets 0x20 (event 0x10a), v=0
+  clears 0x20/0x80 (0x10b). A later OwnsConnection=1 from any host clears
+  it again (action 4). Inferred: an Apple host's take; calvados sees only
+  `OwnsConnection = 0` then, without a yield request.
+- **0x04**: AACP opcode 0x14, a host-sent list of MACs; only a list of
+  exactly two reaches 'TV' 0x5654 type 0x22, and the *first listed* MAC
+  gets the bit [rkof 0x6d4e6 → 0xcb72c → 0xcd058, publish 0xcd0aa].
+- calvados sends neither 0x44 nor 0x14.
 
 ## AudioSource 0x0E [Known]
 
@@ -96,15 +112,26 @@ that is streaming, at once, with no timer or guard in this component.
   0xc/0x1a 0x08, 0xd/0x1b 0x10 (TBB at 0x84c7e). Bitmask 0 → mac zeroed.
   Sent (0x875e8, not forced) to every AACP session whenever the bitmask or
   the mac changed [0x84d10-0x84d3e].
-- So the 0x0E kind is a bitmask (0x02 media, 0x01 call per calvados'
-  observations; 0x04/0x08/0x10/0x20 other activities, meanings unknown), and
-  the mac is whoever changed state last, not an arbitration result: one
-  host's stop clears a bit another host also set. Values like 0x03 or 0x08
-  are possible (calvados' `Activity` keeps every bit).
+- So the 0x0E kind is a bitmask, and the mac is the last host to *set* a
+  bit: a clear leaves it [rkof 0x84cde-0x84cea vs 0x84cf6], and an empty
+  mask zeroes it [rkof 0x84cfe-0x84d0c]. Not an arbitration result: one
+  host's stop clears a bit another host also set.
+- Publishers [Known]: one state machine per (host, stream), FUN_000d8b28,
+  whose stream kind picks the 'AS' type: A2DP → 0x02 (media), SCO → 0x01
+  (call: cellular, and VoIP over the headset profile), two unnamed kinds →
+  0x04 (state in the A2DP record, +0x34) and 0x20 (state in the AAP
+  transport-0xd session table 0x200c4f38), one more → no 0x0E bit but the
+  arbiter's 0x08. 0x08/0x10 come from a separate one-device module
+  (callbacks 0x1c4a08, global 0x200c1f90). No publisher for ringing, Siri
+  or the pods' own tones was found. Observed (laptop journal Oct 19-28):
+  only 0x00, 0x01, 0x02.
 - Session-open path FUN_00087594 [0x87594] instead derives it from the
   profile state via FUN_00098d04 [0x98d04]: the first of 2 device slots (table
   0x2005ede8, 0x98 bytes each) with an active call (SCO state 0x2004f8dc) or
   A2DP stream (0x200c3bf8, +0x34 == 2), mapped by table 0x1c22a8.
+  Possible values: 0, 0x01, 0x02, 0x04, 0x06, 0x08, 0x10, 0x20, 0x22. With
+  nothing playing it names the *receiving* host with kind 0, not a zero mac
+  (Observed ~60 times).
 - The same 'AS' messages types 7–13 / 21–27 set/clear the arbiter's 0x08
   bit for that host (events 0x106/0x107).
 
@@ -167,16 +194,16 @@ that is streaming, at once, with no timer or guard in this component.
    activity) > 0x04 > 0x02. The 0x0E AudioSource is not the arbiter's view:
    on change it is the last host whose 'AS' audio state changed plus a
    global activity bitmask. 'AD' (owner changed) consumers: a broker adapter
-   [rkof 0x78b4a] (wired to stubs [rkof 0x1639d6-0x1639f0, 0x150c80]), an
+   [rkof 0x78b4a] whose callback is a `bx lr` stub [rkof 0x150c84], an
    idle-timer HSM (descriptor 0x1c6c10, 480000 = 0x75300 timer [rkof
-   0xdaf34]), and FUN_000a7708 [rkof 0xa7726-0xa77b8] (calls into a
-   further object, not traced). **Not established**: which code accepts or
-   defers an AVDTP Start from a second host, who sends the old host AVRCP
-   PAUSE / AVDTP Suspend on a take, and any guard interval. AVRCP passthrough
-   sender found: FUN_00070328(mac, op) press+release, PLAY 0x703cc, PAUSE
-   0x703e8 [rkof 0x70328-0x70400]; its callers 0x85ef0/0x85f14 (a 28-command
-   dispatcher FUN_00085c88), 0x9556c (AudioSeqManagerAPI area), 0xca0a6 —
-   none tied to the arbiter yet.
+   0xdaf34], fed by FUN_00094878), and FUN_000a7708 [rkof 0xa7726-0xa77b8],
+   which sends one bool through 0x7f410(0xd, 0xe1): whether the owner's
+   device slot has profile bit 0x80 (meaning not established). The switch
+   itself: see "The A2DP switch" below.
+   AVRCP passthrough sender: FUN_00070328(mac, op) press+release, PLAY
+   0x703cc, PAUSE 0x703e8 [rkof 0x70328-0x70400]; callers 0x85ef0/0x85f14 (a
+   28-command dispatcher FUN_00085c88), 0x9556c (AudioSeqManagerAPI area),
+   0xca0a6 — none tied to the arbiter.
 4. Asserts found on these paths: two-record arbiter pool overflow
    (0xdfee06/07), connection tracker third host (0x369f08) and count
    checks (0x369f0b/0c), active_object_event_queue.cpp:0xd8 (re-entrant
@@ -196,3 +223,25 @@ that is streaming, at once, with no timer or guard in this component.
      accept kinds other than 0/1/2.
    - After letting go without writing 0, the pods still count this host as
      owner, and a later write of 1 gets no answer (calvados: `PodsOwner`).
+
+## The A2DP switch [Observed on 9A348, code partly Known]
+
+From the laptop's HCI lines (Oct 27-28) and the image:
+- A second host's AVDTP START is never refused: 77 of 78 accepted (the
+  78th lost to a link timeout). While another host streams, the accept
+  comes 0.6-0.9 s late instead of 0.04-0.35 s, AudioSource changing in
+  between: the pods defer it. The deferring code is not found.
+- The old host gets an AVDTP SUSPEND from the pods within a few ms of its
+  `OwnsConnection = 0`; AudioSource goes to zero 0.15-0.4 s later, then
+  names the new host. No AVRCP PAUSE (6 of 6). The SUSPEND's sender is
+  FUN_000c9fc8 [rkof 0xc9fc8-0xca08a] (signal 9, only while that host
+  streams), slot +0x18 of interface vtable 0x1c526c (PLAY +0x14, PAUSE
+  +0x1c), installed at [rkof 0x162604]; its caller is not found. Inferred
+  from timing: the owner change ('AD') drives it.
+- No guard timer: the firmware's numbered timers (start 0xc1c7c, register
+  0xc1c3c) have none tied to a source switch. The "ignored" restarts on
+  9A348 were the laptop never sending a START (Oct 27 22:26:30-32 and
+  45-48, Oct 28 11:06:52-54: the node `Suspend` sent nothing over the air);
+  every START that went out was accepted, 1.2 s after a take at the
+  earliest. The 7.5 s case (Oct 18, 7.1) predates the HCI logging.
+- The phone's `START_EVT status=1` is not explained (no phone trace yet).
