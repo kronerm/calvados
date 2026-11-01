@@ -7,7 +7,7 @@ bitflags::bitflags! {
     /// `android.app.PendingIntent.FLAG_*`.
     #[derive(Debug, Clone, Copy)]
     pub struct Flags: i32 {
-        const UPDATE_CURRENT = 0x0000_0004;
+        const UPDATE_CURRENT = 0x0800_0000;
         /// The system adds extras.
         const MUTABLE = 0x0200_0000;
         const IMMUTABLE = 0x0400_0000;
