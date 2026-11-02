@@ -492,7 +492,7 @@ texts are written twice. A change to one side needs the other:
   never a bare AACP socket) only with `AutoConnect` on: when their BLE
   advertisement shows up (presence), and after a session drops unless both
   buds were put away (`DeviceState::is_stowed`: in the case, or gone
-  without a live battery reading), 3 times 3 s apart (`Engine::disconnected`
+  without a live battery reading or still charging), 3 times 3 s apart (`Engine::disconnected`
   and `tick`). "Not in an ear" was too strict: a bud just taken out hasn't
   reported its ear yet when the primary goes into the case. The pods page back only the host that last had the audio; BlueZ
   retries only after a timeout (0x08), not after a primary handover (0x15),

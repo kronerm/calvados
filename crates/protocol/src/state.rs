@@ -115,13 +115,18 @@ impl DeviceState {
     }
 
     /// Both buds put away: each in the case, or gone without a live battery
-    /// reading. A link drop then is the case closing; otherwise it's
+    /// reading but charging (only the case charges a bud). A link drop then is the case closing; otherwise it's
     /// unexpected (the primary bud handing over, the pods rebooting, out of
     /// range), also while a bud just taken out hasn't reported its ear yet.
     /// Unknown ears count as stowed.
     pub fn is_stowed(&self) -> bool {
         let gone = |info: Option<BatteryInfo>| {
-            info.is_none_or(|info| matches!(info.status, Some(ChargingStatus::Disconnected)))
+            info.is_none_or(|info| {
+                matches!(
+                    info.status,
+                    Some(ChargingStatus::Disconnected | ChargingStatus::Charging)
+                )
+            })
         };
         let away = |ear, battery| match ear {
             EarStatus::InCase => true,
@@ -475,6 +480,13 @@ mod tests {
         };
         state.apply(&ears(EarStatus::InCase));
         state.apply(&ears(EarStatus::Disconnected));
+        assert!(state.is_stowed());
+        // Still charging after its ear went (Oct 30 14:41:08): in the case.
+        state.apply(&Packet::Battery(vec![BatteryInfo::new(
+            BatteryComponent::Left,
+            43,
+            ChargingStatus::Charging,
+        )]));
         assert!(state.is_stowed());
         // Taken out: its live report comes before its ear (Oct 4 17:14).
         state.apply(&Packet::Battery(vec![BatteryInfo::new(
