@@ -554,9 +554,10 @@ texts are written twice. A change to one side needs the other:
   together, a late ack (~0.6 s, fresh connects) lost them, and without the
   feature flags the pods reported Adaptive as Off (`0D 01`) to that host
   while the other got `0D 04`. `Engine::check_startup`, due 2 s after
-  the handshake and again every 2 s while it asks for something, re-sends
-  the handshake when no ack came (a session opened as the pods finish booting can stay silent)
-  and after 3 tries asks for a new AACP connection (`Effect::Reconnect`);
+  the handshake and again every 2 s while it asks for something, asks for
+  a new AACP connection (`Effect::Reconnect`) when no ack came (a session
+  opened as the pods finish booting can stay silent; a second handshake
+  on that channel only got 0x85 and silence, a new channel an ack at once);
   acked but without battery, it re-requests notifications, 3 times at most,
   then also reconnects if nothing at all came after the ack (`Startup::Acked`
   vs `Answering`): once the pods sent nothing more for 53 minutes, not even

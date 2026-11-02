@@ -768,10 +768,11 @@ impl Engine {
     }
 
     /// [`STARTUP_WAIT`] after the handshake, and again after each check
-    /// that asked for something. Without an ack, handshakes again (the
-    /// session stayed silent) a few times, then gives up on the session
-    /// ([`Effect::Reconnect`]); acked but without battery (only the settings
-    /// half of the burst came), requests notifications again, a few times.
+    /// that asked for something. Without an ack, gives up on the session
+    /// ([`Effect::Reconnect`]): a handshake again on the same channel only
+    /// gets "already open" (docs/session-start.md), a new one answers at
+    /// once. Acked but without battery, requests notifications again, a few
+    /// times.
     fn check_startup(&mut self, now: Instant) -> Vec<Effect> {
         // Live: carried-over levels don't count as this session's burst.
         let live = self.state.battery.is_live();
@@ -781,7 +782,11 @@ impl Engine {
         // What to ask again, why, and whether to give up on the session
         // once asked enough.
         let (frame, missing, gives_up) = match (startup.phase, live) {
-            (Phase::Sent, _) => (handshake(), "no handshake ack", true),
+            (Phase::Sent, _) => {
+                startup.check = None;
+                tracing::warn!("no handshake ack: reconnecting");
+                return vec![Effect::Reconnect];
+            }
             (Phase::Acked, _) => (
                 request_notifications(),
                 "nothing since the handshake ack",
@@ -1774,11 +1779,8 @@ mod tests {
     }
 
     #[test]
-    fn handshakes_again_without_an_ack_then_reconnects() {
+    fn reconnects_without_an_ack() {
         let mut e = engine();
-        (0..STARTUP_RETRIES).for_each(|_| {
-            assert_eq!(e.check_startup(now()), [Effect::Send(handshake())]);
-        });
         assert_eq!(e.check_startup(now()), [Effect::Reconnect]);
         let mut e = engine();
         e.handle(Packet::HandshakeAck, now());
