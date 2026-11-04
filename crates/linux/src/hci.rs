@@ -6,8 +6,9 @@
 //! cut short).
 //!
 //! The pods' link is the one carrying AACP, learned from our AACP channel
-//! request. L2CAP channels opened before the daemon started (e.g. A2DP's)
-//! are unknown until reopened.
+//! request, and any later link to the same address from its start. L2CAP
+//! channels opened before the daemon started (e.g. A2DP's) are unknown
+//! until reopened.
 
 use std::collections::{HashMap, HashSet};
 use std::fmt;
@@ -189,10 +190,13 @@ fn log(note: &Note) {
         ),
         Note::MediaFlowing { dir } => tracing::debug!(%dir, "hci: a2dp media flowing"),
         Note::Aacp { dir, frame } => tracing::debug!(%dir, hex = ?HexDump(frame), "hci: aacp"),
-        Note::AacpRefused { result } => {
-            tracing::debug!(result, "hci: aacp channel refused")
-        }
-        Note::AacpClosed { by } => tracing::debug!(%by, "hci: aacp channel closed"),
+        Note::Channel { psm, by, change } => match change {
+            Change::Opened => tracing::debug!(psm = %Psm(*psm), %by, "hci: l2cap channel opened"),
+            Change::Refused(result) => {
+                tracing::debug!(psm = %Psm(*psm), %by, result, "hci: l2cap channel refused")
+            }
+            Change::Closed => tracing::debug!(psm = %Psm(*psm), %by, "hci: l2cap channel closed"),
+        },
     }
 }
 
@@ -229,6 +233,16 @@ enum Channel {
     /// AVDTP channels after the first: media transport.
     AvdtpMedia,
     Avrcp,
+    /// Any other PSM: noted when it opens and closes, not decoded.
+    Other,
+}
+
+#[derive(Debug, Clone, Copy)]
+enum Change {
+    Opened,
+    /// With the L2CAP result.
+    Refused(u16),
+    Closed,
 }
 
 #[derive(Debug)]
@@ -292,13 +306,12 @@ enum Note {
         dir: Dir,
         frame: Vec<u8>,
     },
-    /// The pods answered our AACP channel request with an L2CAP error.
-    AacpRefused {
-        result: u16,
-    },
-    /// An AACP channel's disconnection request, `by` which side.
-    AacpClosed {
+    /// An L2CAP channel on the pods' link, `by` the side that requested,
+    /// refused or closed it.
+    Channel {
+        psm: u16,
         by: Dir,
+        change: Change,
     },
 }
 
@@ -307,10 +320,12 @@ enum Note {
 struct Monitor {
     /// BR/EDR links by handle.
     links: HashMap<u16, MacAddress>,
-    /// Handles that carry AACP.
+    /// Handles that carry AACP, or link to an address that did.
     pods: HashSet<u16>,
-    /// By (handle, direction, destination CID).
-    channels: HashMap<(u16, Dir, u16), Channel>,
+    /// Addresses whose links carried AACP.
+    pods_macs: HashSet<MacAddress>,
+    /// By (handle, direction, destination CID): the PSM and the channel.
+    channels: HashMap<(u16, Dir, u16), (u16, Channel)>,
     /// Connection requests awaiting a response: (handle, identifier) →
     /// (PSM, requester's direction, requester's CID).
     requests: HashMap<(u16, u8), (u16, Dir, u16)>,
@@ -377,6 +392,9 @@ impl Monitor {
                 let (handle, mac, status) = (handle_at(1)?, mac_at(params, 3)?, params[0]);
                 if status == 0 {
                     self.links.insert(handle, mac);
+                    if self.pods_macs.contains(&mac) {
+                        self.pods.insert(handle);
+                    }
                 }
                 Some(Note::LinkUp {
                     handle,
@@ -490,7 +508,7 @@ impl Monitor {
         if !self.pods.contains(&handle) {
             return Vec::new();
         }
-        match self.channels.get(&(handle, dir, cid)) {
+        match self.channels.get(&(handle, dir, cid)).map(|&(_, c)| c) {
             Some(Channel::Aacp) => vec![Note::Aacp {
                 dir,
                 frame: payload.to_vec(),
@@ -532,10 +550,19 @@ impl Monitor {
                         && result != PENDING
                         && let Some((psm, requester, scid)) = self.requests.remove(&(handle, ident))
                     {
-                        match (result, psm) {
-                            (SUCCESS, _) => self.open(handle, psm, requester, scid, dcid),
-                            (_, AIRPODS_PSM) => notes.push(Note::AacpRefused { result }),
-                            _ => {}
+                        let change = match result {
+                            SUCCESS => {
+                                self.open(handle, psm, requester, scid, dcid);
+                                Change::Opened
+                            }
+                            _ => Change::Refused(result),
+                        };
+                        if self.pods.contains(&handle) {
+                            let by = match change {
+                                Change::Opened => requester,
+                                _ => dir,
+                            };
+                            notes.push(Note::Channel { psm, by, change });
                         }
                     }
                 }
@@ -546,8 +573,14 @@ impl Monitor {
                             self.channels.remove(&(handle, dir, dcid)),
                             self.channels.remove(&(handle, dir.reverse(), scid)),
                         ];
-                        if closed.iter().any(|c| matches!(c, Some(Channel::Aacp))) {
-                            notes.push(Note::AacpClosed { by: dir });
+                        if let Some((psm, _)) = closed.into_iter().flatten().next()
+                            && self.pods.contains(&handle)
+                        {
+                            notes.push(Note::Channel {
+                                psm,
+                                by: dir,
+                                change: Change::Closed,
+                            });
                         }
                     }
                 }
@@ -564,24 +597,25 @@ impl Monitor {
         let channel = match psm {
             AIRPODS_PSM => {
                 self.pods.insert(handle);
+                self.pods_macs.extend(self.links.get(&handle));
                 Channel::Aacp
             }
             PSM_AVDTP
-                if self
-                    .channels
-                    .iter()
-                    .any(|(&(h, ..), c)| h == handle && matches!(c, Channel::AvdtpSignaling)) =>
+                if self.channels.iter().any(|(&(h, ..), (_, c))| {
+                    h == handle && matches!(c, Channel::AvdtpSignaling)
+                }) =>
             {
                 Channel::AvdtpMedia
             }
             PSM_AVDTP => Channel::AvdtpSignaling,
             PSM_AVCTP => Channel::Avrcp,
-            _ => return,
+            _ => Channel::Other,
         };
         // Towards the requester (sent by the responder) and towards the responder.
         self.channels
-            .insert((handle, requester.reverse(), scid), channel);
-        self.channels.insert((handle, requester, dcid), channel);
+            .insert((handle, requester.reverse(), scid), (psm, channel));
+        self.channels
+            .insert((handle, requester, dcid), (psm, channel));
     }
 
     fn avdtp(&mut self, handle: u16, dir: Dir, payload: &[u8]) -> Option<Note> {
@@ -703,6 +737,23 @@ fn avc_op(op: u8) -> &'static str {
     }
 }
 
+/// A PSM by its profile's name where known.
+struct Psm(u16);
+
+impl fmt::Display for Psm {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self.0 {
+            0x0001 => f.write_str("sdp"),
+            0x0003 => f.write_str("rfcomm"),
+            PSM_AVCTP => f.write_str("avctp"),
+            0x001b => f.write_str("avctp-browsing"),
+            PSM_AVDTP => f.write_str("avdtp"),
+            AIRPODS_PSM => f.write_str("aacp"),
+            psm => write!(f, "0x{psm:04x}"),
+        }
+    }
+}
+
 struct Hex(u8);
 
 impl fmt::Display for Hex {
@@ -769,13 +820,56 @@ mod tests {
     }
 
     #[test]
-    fn aacp_channel_refusals_and_closes_are_noted() {
+    fn channels_on_the_pods_link_are_noted() {
         let mut m = monitor();
         let notes = m.feed(MON_ACL_RX, &signal(0x06, 2, &le(&[0x40, 0x41])));
-        assert!(matches!(notes[..], [Note::AacpClosed { by: Dir::Rx }]));
+        assert!(matches!(
+            notes[..],
+            [Note::Channel {
+                psm: AIRPODS_PSM,
+                by: Dir::Rx,
+                change: Change::Closed
+            }]
+        ));
         m.feed(MON_ACL_TX, &signal(0x02, 3, &le(&[AIRPODS_PSM, 0x42])));
         let notes = m.feed(MON_ACL_RX, &signal(0x03, 3, &le(&[0, 0x42, 4, 0])));
-        assert!(matches!(notes[..], [Note::AacpRefused { result: 4 }]));
+        assert!(matches!(
+            notes[..],
+            [Note::Channel {
+                psm: AIRPODS_PSM,
+                by: Dir::Rx,
+                change: Change::Refused(4)
+            }]
+        ));
+        m.feed(MON_ACL_RX, &signal(0x02, 4, &le(&[0x0001, 0x51])));
+        let notes = m.feed(MON_ACL_TX, &signal(0x03, 4, &le(&[0x61, 0x51, 0, 0])));
+        assert!(matches!(
+            notes[..],
+            [Note::Channel {
+                psm: 0x0001,
+                by: Dir::Rx,
+                change: Change::Opened
+            }]
+        ));
+    }
+
+    #[test]
+    fn a_new_link_to_the_pods_is_theirs_from_the_start() {
+        let mut m = monitor();
+        let down = [&[0][..], &HANDLE.to_le_bytes(), &[0x13]].concat();
+        m.feed(MON_EVENT, &event(0x05, &down));
+        let up = [&[0][..], &HANDLE.to_le_bytes(), &PODS, &[1, 0]].concat();
+        m.feed(MON_EVENT, &event(0x03, &up));
+        m.feed(MON_ACL_RX, &signal(0x02, 1, &le(&[PSM_AVDTP, 0x50])));
+        let notes = m.feed(MON_ACL_TX, &signal(0x03, 1, &le(&[0x60, 0x50, 0, 0])));
+        assert!(matches!(
+            notes[..],
+            [Note::Channel {
+                psm: PSM_AVDTP,
+                by: Dir::Rx,
+                change: Change::Opened
+            }]
+        ));
     }
 
     #[test]

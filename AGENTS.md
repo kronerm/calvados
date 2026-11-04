@@ -412,12 +412,15 @@ power-on (`LinkChange`). Its length caps at 255, i.e. 15 events.
   AVDTP signaling, AVRCP passthroughs, A2DP media starting to flow,
   delivery (packets sent against the controller's completed-packet credits:
   a gap of 0.5 s or more with packets outstanding is logged when it ends,
-  what's still undelivered at a link's end, and flushes), and every AACP
+  what's still undelivered at a link's end, and flushes), L2CAP channels
+  opening, refused and closing (PSM, which side: the profiles the pods
+  wait for, an AACP channel gone before our first send), and every AACP
   frame both ways, in full. The delivery lines are to see the pods going out of
   reach: on Oct 26 the laptop heard nothing for 2 min while the link held,
   the pods kept it as the source and wouldn't start the phone's stream. L2CAP channels are tracked from signaling; the pods'
-  link is the one our AACP channel opens on, so channels opened before the
-  daemon started (A2DP's) stay unknown until reopened.
+  link is the one our AACP channel opens on, and later links to the same
+  address from their start, so channels opened before the daemon started
+  (A2DP's) stay unknown until reopened.
 - `pipewire.rs` — the pods' card profile, set natively (`pipewire` crate,
   on its own thread and main loop): `off` as soon as BlueZ reports them
   connected (no AACP needed) and on `Effect::ReleaseAudio`; `a2dp-sink` on
