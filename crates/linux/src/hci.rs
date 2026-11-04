@@ -189,6 +189,10 @@ fn log(note: &Note) {
         ),
         Note::MediaFlowing { dir } => tracing::debug!(%dir, "hci: a2dp media flowing"),
         Note::Aacp { dir, frame } => tracing::debug!(%dir, hex = ?HexDump(frame), "hci: aacp"),
+        Note::AacpRefused { result } => {
+            tracing::debug!(result, "hci: aacp channel refused")
+        }
+        Note::AacpClosed { by } => tracing::debug!(%by, "hci: aacp channel closed"),
     }
 }
 
@@ -287,6 +291,14 @@ enum Note {
     Aacp {
         dir: Dir,
         frame: Vec<u8>,
+    },
+    /// The pods answered our AACP channel request with an L2CAP error.
+    AacpRefused {
+        result: u16,
+    },
+    /// An AACP channel's disconnection request, `by` which side.
+    AacpClosed {
+        by: Dir,
     },
 }
 
@@ -473,8 +485,7 @@ impl Monitor {
             return Vec::new();
         };
         if cid == CID_SIGNALING {
-            self.signaling(handle, dir, payload);
-            return Vec::new();
+            return self.signaling(handle, dir, payload);
         }
         if !self.pods.contains(&handle) {
             return Vec::new();
@@ -497,17 +508,18 @@ impl Monitor {
     }
 
     /// Track channels from L2CAP signaling (several commands per packet).
-    fn signaling(&mut self, handle: u16, dir: Dir, mut payload: &[u8]) {
+    fn signaling(&mut self, handle: u16, dir: Dir, mut payload: &[u8]) -> Vec<Note> {
         const CONNECTION_REQUEST: u8 = 0x02;
         const CONNECTION_RESPONSE: u8 = 0x03;
         const DISCONNECTION_REQUEST: u8 = 0x06;
         const SUCCESS: u16 = 0;
         const PENDING: u16 = 1;
+        let mut notes = Vec::new();
         while let (Some(&code), Some(&ident), Some(len)) =
             (payload.first(), payload.get(1), u16_at(payload, 2))
         {
             let Some(data) = payload.get(4..4 + usize::from(len)) else {
-                return;
+                return notes;
             };
             match code {
                 CONNECTION_REQUEST => {
@@ -519,22 +531,31 @@ impl Monitor {
                     if let (Some(dcid), Some(result)) = (u16_at(data, 0), u16_at(data, 4))
                         && result != PENDING
                         && let Some((psm, requester, scid)) = self.requests.remove(&(handle, ident))
-                        && result == SUCCESS
                     {
-                        self.open(handle, psm, requester, scid, dcid);
+                        match (result, psm) {
+                            (SUCCESS, _) => self.open(handle, psm, requester, scid, dcid),
+                            (_, AIRPODS_PSM) => notes.push(Note::AacpRefused { result }),
+                            _ => {}
+                        }
                     }
                 }
                 DISCONNECTION_REQUEST => {
                     if let (Some(dcid), Some(scid)) = (u16_at(data, 0), u16_at(data, 2)) {
                         // Sent towards `dcid`'s owner; `scid` is the sender's.
-                        self.channels.remove(&(handle, dir, dcid));
-                        self.channels.remove(&(handle, dir.reverse(), scid));
+                        let closed = [
+                            self.channels.remove(&(handle, dir, dcid)),
+                            self.channels.remove(&(handle, dir.reverse(), scid)),
+                        ];
+                        if closed.iter().any(|c| matches!(c, Some(Channel::Aacp))) {
+                            notes.push(Note::AacpClosed { by: dir });
+                        }
                     }
                 }
                 _ => {}
             }
             payload = &payload[4 + usize::from(len)..];
         }
+        notes
     }
 
     /// A channel opened: `scid` is the requester's end, `dcid` the
@@ -745,6 +766,16 @@ mod tests {
         m.feed(MON_ACL_RX, &signal(0x02, 7, &le(&[PSM_AVDTP, 0x50])));
         m.feed(MON_ACL_TX, &signal(0x03, 7, &le(&[0x60, 0x50, 0, 0])));
         m
+    }
+
+    #[test]
+    fn aacp_channel_refusals_and_closes_are_noted() {
+        let mut m = monitor();
+        let notes = m.feed(MON_ACL_RX, &signal(0x06, 2, &le(&[0x40, 0x41])));
+        assert!(matches!(notes[..], [Note::AacpClosed { by: Dir::Rx }]));
+        m.feed(MON_ACL_TX, &signal(0x02, 3, &le(&[AIRPODS_PSM, 0x42])));
+        let notes = m.feed(MON_ACL_RX, &signal(0x03, 3, &le(&[0, 0x42, 4, 0])));
+        assert!(matches!(notes[..], [Note::AacpRefused { result: 4 }]));
     }
 
     #[test]
