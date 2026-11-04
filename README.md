@@ -132,8 +132,9 @@ When Apple has newer firmware, the panel and the notification say so and
 offer **Update**. It has worked once (7.1.21 to 9.0.348, both buds, with
 the research tools in [`tools/firmware`](tools/firmware)). Only the buds
 are updated: the case's own firmware, in the same package, is never
-offered, and calvados can't see which version the case runs. The AirPods only accept Apple-signed, newer
-firmware, but if something goes wrong, only Apple can fix it.
+offered, and calvados can't see which version the case runs. The AirPods
+only accept Apple-signed, newer firmware, but if something goes wrong,
+only Apple can fix it.
 
 1. Put both buds in the case, plug it in, keep the lid open. Turn off
    Bluetooth on any iPhone or Mac nearby.
@@ -167,12 +168,10 @@ The last command is step 2; then steps 3 and 4.
 
 ## Known issues
 
-Seen on firmware 7.1.21; newer firmware may behave differently.
-
-- **Switching back and forth quickly** occasionally reboots the AirPods.
-  Both devices reconnect by themselves.
-- **A switch can stall** for a few seconds right after the other device
-  started playing; the laptop retries.
+- **Switching back and forth quickly** occasionally rebooted the AirPods
+  on firmware 7.1.21. Both devices reconnect by themselves.
+- **A switch to the laptop can stall** for a few seconds; the laptop
+  restarts its stream.
 - **Putting the primary bud in the case** drops the link for a few seconds.
 
 ## Credits
