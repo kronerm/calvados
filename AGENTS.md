@@ -708,8 +708,12 @@ What there is to read after one, and for how long:
 
 ## Pod reboots
 
-All observed on firmware 7.1.21 (7B21); the current release (9A348 at the
-time of writing) may not do it.
+Observed on firmware 7.1.21 (7B21), and once on 9A348 (Nov 4 16:51, phone
+time): ~3 s into a phone take's stream (the laptop's stream configured,
+not started), the pods sent the phone an AVRCP PAUSE (likely a stem
+press), the phone was playing again 0.24 s later, and the pods went
+silent within ~2 s and booted ~4.5 s after their last packet. Nothing
+from calvados in between.
 
 Rapid takeovers (a laptop take within ~6 s of a phone take) occasionally
 reboot the pods mid-switch: after they pause the old host, before they

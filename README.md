@@ -168,8 +168,9 @@ The last command is step 2; then steps 3 and 4.
 
 ## Known issues
 
-- **Switching back and forth quickly** occasionally rebooted the AirPods
-  on firmware 7.1.21. Both devices reconnect by themselves.
+- **Switching back and forth quickly**, or pausing and playing right
+  after a switch, occasionally reboots the AirPods. Both devices
+  reconnect by themselves.
 - **A switch to the laptop can stall** for a few seconds; the laptop
   restarts its stream.
 - **Putting the primary bud in the case** drops the link for a few seconds.
