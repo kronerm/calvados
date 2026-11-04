@@ -587,7 +587,12 @@ impl Engine {
         else {
             return Vec::new();
         };
-        tracing::info!(pods = %last.pods, "pods dropped unexpectedly: connecting");
+        // `Instant` stops during a suspend: a long `since_drop` is one.
+        tracing::info!(
+            pods = %last.pods,
+            since_drop = ?now.saturating_duration_since(last.at),
+            "pods dropped unexpectedly: connecting"
+        );
         self.dial(last.pods, now, dial.redials.saturating_sub(1))
     }
 
@@ -1072,6 +1077,13 @@ impl Engine {
     /// it: the pods switch to a host that starts streaming, and the revoke
     /// (`OwnsConnection = 0`) only follows. Nothing is sent; they've switched.
     fn track_audio_source(&mut self, source: AudioSource) -> Vec<Effect> {
+        if !source
+            .kind
+            .difference(Activity::CALL | Activity::MEDIA)
+            .is_empty()
+        {
+            tracing::info!(?source, "audio source with unnamed activity bits");
+        }
         let Some(local) = self.local_mac.get() else {
             return Vec::new();
         };
