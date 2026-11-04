@@ -708,7 +708,8 @@ What there is to read after one, and for how long:
 
 ## Pod reboots
 
-Observed on firmware 7.1.21 (7B21), and once on 9A348 (Nov 4 16:51, phone
+Observed on firmware 7.1.21 (7B21); the update didn't fix it: once on 9A348
+so far (Nov 4 16:51, phone
 time): ~3 s into a phone take's stream (the laptop's stream configured,
 not started), the pods sent the phone an AVRCP PAUSE (likely a stem
 press), the phone was playing again 0.24 s later, and the pods went

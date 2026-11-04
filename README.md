@@ -169,8 +169,8 @@ The last command is step 2; then steps 3 and 4.
 ## Known issues
 
 - **Switching back and forth quickly**, or pausing and playing right
-  after a switch, occasionally reboots the AirPods. Both devices
-  reconnect by themselves.
+  after a switch, occasionally reboots the AirPods; updating from 7.1.21
+  to 9.0.348 didn't fix it. Both devices reconnect by themselves.
 - **A switch to the laptop can stall** for a few seconds; the laptop
   restarts its stream.
 - **Putting the primary bud in the case** drops the link for a few seconds.
