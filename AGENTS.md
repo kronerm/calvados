@@ -185,14 +185,19 @@ main as the rolling pre-release `testing`: a release is
   pods' log channel, 0x200 a host's requests. A reboot leaves each crashed
   core's RTKit crash log in flash, announced (`CrashLog::Saved`, `06 00 00
   [n]` + per core `[name 4] [size 4]`: `AP AOP RTP BTM DSP1 DSP2`) ~10 s
-  into a session until fetched. The engine asks once a session, settled as
-  UARP waits for and no update running (`crash_log::request`: type 5, both
+  into a session (fetching doesn't clear them: the same 192 KB again on
+  Nov 6). The engine asks once per run for the same pods
+  (`crash_logs_kept`, in memory), settled as UARP waits for and no update
+  running (`crash_log::request`: type 5, both
   buds, sub 1, byte for byte what the firmware builds to push them), keeps
   the parts per bud (`01 [n | 0x80 more] [bud | 0x80]` + data) until `ff`
   (`fc 01`: aborted), logs each `CLHE` record's exception and `Cstr`
   message, and hands the bytes out as `Effect::CrashLog`: saved as
   `crash-logs/<pods>-<unix time>-bud<n>.bin` in the state dir (Linux) or
-  the app's files dir (Android). A lone `ff` is also how the pods end a
+  the app's files dir (Android). Bud 2's on Nov 6 (phone, 8087-byte MTU):
+  six 32 KB files, one per core, 22 s from the bud holding the link and
+  47 s relayed; AP's says `ASSERTION FAILED: stream_sync_a2dp.cpp:429`, the
+  others "Message Log" or nothing. A lone `ff` is also how the pods end a
   transfer they gave up on: they retry a chunk that doesn't fit the
   channel 6 times, 500 ms apart (Nov 6: 3 s, nothing). Their chunk frames
   are 1002 bytes (2565 with the larger chunk), so Linux asks for a 4096-byte
@@ -738,7 +743,9 @@ time): ~3 s into a phone take's stream (the laptop's stream configured,
 not started), the pods sent the phone an AVRCP PAUSE (likely a stem
 press), the phone was playing again 0.24 s later, and the pods went
 silent within ~2 s and booted ~4.5 s after their last packet. Nothing
-from calvados in between.
+from calvados in between. The pods' crash log (fetched Nov 6, bud 2,
+likely this one): `ASSERTION FAILED: stream_sync_a2dp.cpp:429` on the AP
+core (RTKit_release-3514.0.15).
 
 Rapid takeovers (a laptop take within ~6 s of a phone take) occasionally
 reboot the pods mid-switch: after they pause the old host, before they

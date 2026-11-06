@@ -224,6 +224,9 @@ pub struct Engine {
     local_audio: LocalAudio,
     /// This host's firmware update; kept across sessions with the same pods.
     update: Option<Update>,
+    /// The pods whose crash logs this run kept: fetching doesn't clear
+    /// them, and they're announced again every session.
+    crash_logs_kept: Option<MacAddress>,
 }
 
 /// The AACP session.
@@ -1392,14 +1395,18 @@ impl Engine {
     /// A crash-log frame: the announcement, a part, or the end, after which
     /// each bud's logs are kept and their messages logged.
     fn crash_log(&mut self, log: CrashLog) -> Vec<Effect> {
+        let kept = self.crash_logs_kept;
         let Some(session) = self.session_mut() else {
             return Vec::new();
         };
         let pods = session.pods;
+        let kept = kept == Some(pods);
         match (&mut session.crash_logs, log) {
             (logs, CrashLog::Saved(cores)) => {
-                tracing::info!(?cores, "the pods hold crash logs");
-                if let CrashLogs::Quiet = logs {
+                tracing::info!(?cores, kept, "the pods hold crash logs");
+                if let CrashLogs::Quiet = logs
+                    && !kept
+                {
                     *logs = CrashLogs::Announced;
                 }
                 Vec::new()
@@ -1418,6 +1425,9 @@ impl Engine {
                     // chunk too big for the channel, retried for 3 s.
                     (_, true) => tracing::info!("crash logs: none came"),
                     (_, false) => tracing::info!(buds = buds.len(), "crash logs received"),
+                }
+                if !buds.is_empty() {
+                    self.crash_logs_kept = Some(pods);
                 }
                 buds.into_iter()
                     .map(|(bud, data)| {
@@ -3090,6 +3100,14 @@ mod tests {
                 })
                 .collect::<Vec<_>>();
             assert_eq!(kept, [(1, vec![0xAA, 0xBB]), (2, vec![0xCC])]);
+            // Announced again in the next session: kept already.
+            e.disconnected(later());
+            e.connected(mac(PODS), later());
+            e.handle(Packet::HandshakeAck, later());
+            feed_at(&mut e, CONNECTED_DEVICES, later());
+            settle(&mut e, later());
+            feed_at(&mut e, &inventory, later());
+            assert_eq!(asks(&e.tick(later() + UARP_SETTLE)), 0);
             // Not while an update runs.
             let mut e = ready();
             running(&mut e);
