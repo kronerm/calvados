@@ -6,6 +6,7 @@ pub mod connected_devices;
 pub mod connection_history;
 pub mod control_command;
 pub mod conversation_awareness;
+pub mod crash_log;
 pub mod device_information;
 pub mod device_status;
 pub mod ear_detection;
@@ -23,6 +24,7 @@ pub use audio_source::{Activity, AudioSource};
 pub use battery_info::{BatteryComponent, BatteryInfo, ChargingStatus};
 pub use connection_history::{ConnectionHistory, HistoryEvent, LinkChange};
 pub use control_command::{ControlCommand, ControlId, Cycle, ListeningModes, NoiseControlMode};
+pub use crash_log::CrashLog;
 pub use device_status::{Bud, DeviceConnectionStatus, DeviceRole, PrimaryBud};
 pub use ear_detection::{EarDetection, EarStatus};
 pub use eq_data::EqData;
@@ -65,6 +67,8 @@ pub enum Packet {
     ConnectedDevices(Vec<MacAddress>),
     ConnectionHistory(ConnectionHistory),
     Control(ControlCommand),
+    /// The pods' saved crash logs (opcode 0x17, class 0x400).
+    CrashLog(CrashLog),
     ConversationAwareness(u8),
     DeviceConnection(DeviceConnectionStatus),
     DeviceInformation(device_information::DeviceInformation),
@@ -177,6 +181,7 @@ impl Packet {
                 map(smart_routing::parse_response, Self::RoutingResponse).parse(body)
             }
             stem_press::OPCODE => map(stem_press::parse, Self::StemPress).parse(body),
+            crash_log::OPCODE => map(crash_log::parse, Self::CrashLog).parse(body),
             crate::uarp::OPCODE => map(crate::uarp::parse_frame, Self::Uarp).parse(body),
             _ => Err(nom::Err::Error(nom::error::Error::new(
                 body,

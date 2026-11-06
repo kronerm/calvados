@@ -180,6 +180,20 @@ main as the rolling pre-release `testing`: a release is
   (`protocol::news`: 0x10 to a host, `[mac] [len 2 LE]` + news, arriving
   as 0x11 `Routing::News`). Apple's frames start `01 e5`; whether Apple
   hosts ignore ours, and whether the pods relay it unchanged, is untested.
+- `aacp/crash_log.rs` — the pods' saved crash logs (docs/firmware.md):
+  opcode 0x17 is `[class u32 LE] [len u16 LE]` + body, class 0x400 the
+  pods' log channel, 0x200 a host's requests. A reboot leaves each crashed
+  core's RTKit crash log in flash, announced (`CrashLog::Saved`, `06 00 00
+  [n]` + per core `[name 4] [size 4]`: `AP AOP RTP BTM DSP1 DSP2`) ~10 s
+  into a session until fetched. The engine asks once a session, settled as
+  UARP waits for and no update running (`crash_log::request`: type 5, both
+  buds, sub 1, byte for byte what the firmware builds to push them), keeps
+  the parts per bud (`01 [n | 0x80 more] [bud | 0x80]` + data) until `ff`
+  (`fc 01`: aborted), logs each `CLHE` record's exception and `Cstr`
+  message, and hands the bytes out as `Effect::CrashLog`: saved as
+  `crash-logs/<pods>-<unix time>-bud<n>.bin` in the state dir (Linux) or
+  the app's files dir (Android). Untested on the pods so far. Never send
+  another request type: 8/9 and 0x10-0x12 change the pods' NVRAM.
 - `connection.rs` — L2CAP PSM and service UUID, and `is_airpods_name`
   (a paired device named `AirPods…`, any case), both platforms' test.
 - UARP in the engine. **A 0x4F frame reaching a bud that isn't primary
@@ -190,7 +204,9 @@ main as the rolling pre-release `testing`: a release is
   asks for the running version (`VersionQuery`), unless an update is to
   be offered; the answer is `exact_firmware`. The pods also announce the
   other bud as downstream (0x17, acked with 0x18) and offer a dynamic
-  `MTIC` asset (left unanswered); nothing is solicited.
+  `MTIC` asset (usage metrics, left unanswered); nothing is solicited.
+  **Never offer the pods an asset tagged `MTIC`, `LOGS` or `CRSH`**: that
+  path aborts them [rkof 0xbcd82, 0xbcdca].
   Updates: `prepare_update(release)` (refusals: `Refusal`, incl. not
   connected, no release, already running, another host's update running,
   `update::check`; an actionable refusal (not connected, not in the
@@ -230,13 +246,12 @@ From captures; meanings beyond the structure are guesses.
   `(id, value)` entries, mostly one byte each (`0a 01`, `50 02`), but ids
   `03 04 06 07 30` carry a 4-byte LE value. Length not encoded, so the frame
   ends at the next magic. One capture only.
-- `0x17`: `[00] [kind] [2] [len 2 LE]` + body. Kind `04`: the pods' firmware
-  endpoints, `AP AOP RTP BTM DSP1 DSP2`, each with `00 80 00 00`. Kind `00`:
-  protobuf (`08` sequence number, `10` 1/3, `2a` nested message) wrapping an
-  Apple binary-serialized dictionary (OSSerializeBinary, signature `d3 00 00
-  00`): `VendorID` = `0x05ac`, `AccessoryService`, `MaxReportSize`, `devmot`…
-  Sent unrequested: kind `04` also right after connect, kind `00` in the
-  burst after a primary switch.
+- `0x17`: `[class u32 LE] [len 2 LE]` + body. Class 0x400 is decoded
+  (`aacp/crash_log.rs`); class 0x100000 (HID): protobuf (`08` sequence
+  number, `10` 1/3, `2a` nested message) wrapping an Apple
+  binary-serialized dictionary (OSSerializeBinary, signature `d3 00 00
+  00`): `VendorID` = `0x05ac`, `AccessoryService`, `MaxReportSize`,
+  `devmot`…, in the burst after a primary switch.
 - `0x4E`: 8 zero bytes, once per session in the startup burst.
 - `0x52`: `03 00 02 01 [00|01]`. `00` right before a bud leaving an ear
   (three times) and right after this host started playing; `01` alone,
@@ -399,7 +414,8 @@ power-on (`LinkChange`). Its length caps at 255, i.e. 15 events.
   (its log names the range when it refuses a plugin), while the published API
   definitions run ahead (container tooltips are API 32). The plugin needs 24
   (`runAsync` with an argv table).
-- `state.rs` — the state directory and the two remembered settings
+- `state.rs` — the state directory, the pods' crash logs, and the two
+  remembered settings
   (`protocol::settings`; files `auto_switch`/`auto_connect`, `on`/`off`,
   default on), the same two as the Android notification's Switch and
   Connect buttons (preferences under the same keys).
@@ -700,8 +716,10 @@ What there is to read after one, and for how long:
   `.last`, read with `btmon -r`. It rotates every `persist.bluetooth.btsnoopsize`
   packets (default 65 536, ~1-2 days; set to 1 048 576 on the test phone,
   ~2-3 weeks) and at a Bluetooth restart.
-- The pods keep nothing readable: only what happened around a crash shows.
-  Their last packet to a host, plus that host's supervision timeout (5 s on
+- The pods' own crash logs, fetched at the next session that gets their
+  announcement (`aacp/crash_log.rs`): "pod crash log" lines and
+  `crash-logs/` files.
+- Their last packet to a host, plus that host's supervision timeout (5 s on
   the phone), dates it: Oct 18 14:57:27.6, 0.4 s after confirming the
   laptop's take and right after suspending the phone, before any restart
   by the stream check.

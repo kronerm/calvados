@@ -4,7 +4,7 @@
 use std::path::PathBuf;
 use std::sync::Mutex;
 use std::thread;
-use std::time::{Duration, Instant};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use firmware_fetch::{Catalog, Client};
 use jni::JavaVM;
@@ -13,7 +13,7 @@ use crate::intents::Request;
 use crate::link::{self, BluetoothEvent};
 use crate::notification::Content;
 use crate::proto::MacAddress;
-use crate::proto::aacp::NoiseControlMode;
+use crate::proto::aacp::{NoiseControlMode, crash_log};
 use crate::proto::display;
 use crate::proto::engine::{Effect, Engine, LocalAudio};
 use crate::proto::firmware::Release;
@@ -363,6 +363,29 @@ fn cache_dir() -> anyhow::Result<PathBuf> {
     .map(PathBuf::from)
 }
 
+/// One bud's crash logs, as the pods sent them, in the app's files
+/// directory.
+fn save_crash_log(pods: MacAddress, bud: u8, data: &[u8]) {
+    let unix_secs = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map_or(0, |since| since.as_secs());
+    let saved = crate::jni::with_env(|env| {
+        crate::jni::app_context(env)?
+            .get_files_dir(env)?
+            .get_absolute_path(env)
+    })
+    .map(|dir| PathBuf::from(dir).join(crash_log::file_name(pods, bud, unix_secs)))
+    .and_then(|path| {
+        path.parent().map_or(Ok(()), std::fs::create_dir_all)?;
+        std::fs::write(&path, data)?;
+        Ok(path)
+    });
+    match saved {
+        Ok(path) => tracing::info!(path = %path.display(), "kept the pods' crash logs"),
+        Err(e) => tracing::warn!("keeping the pods' crash logs: {e:#}"),
+    }
+}
+
 /// Ask the catalog for `models` on a thread; the answer comes back as
 /// [`Event::Catalog`].
 fn check_catalog(client: &Client, models: Vec<String>) {
@@ -436,6 +459,7 @@ fn execute_effect(conn: &Conn, effect: Effect, in_call: bool) -> bool {
         }
         Effect::Pause => log_media("pause", media::pause()),
         Effect::Resume => log_media("resume", media::resume()),
+        Effect::CrashLog { pods, bud, data } => save_crash_log(pods, bud, &data),
     }
     true
 }

@@ -3,13 +3,14 @@
 //! returned [`Effect`]s in order, and call [`Engine::tick`] at
 //! [`Engine::next_wake`].
 
+use std::collections::BTreeMap;
 use std::fmt;
 use std::time::{Duration, Instant};
 
 use crate::MacAddress;
 use crate::aacp::{
-    Activity, AudioSource, ControlCommand, ControlId, Cycle, DeviceRole, EarDetection, KeyType,
-    NoiseControlMode, Packet, Routing, RoutingResponse,
+    Activity, AudioSource, ControlCommand, ControlId, CrashLog, Cycle, DeviceRole, EarDetection,
+    KeyType, NoiseControlMode, Packet, Routing, RoutingResponse, crash_log,
 };
 use crate::ble;
 use crate::firmware::ExactVersion;
@@ -183,6 +184,13 @@ pub enum Effect {
     Pause,
     /// Resume the playback [`Effect::Pause`] paused.
     Resume,
+    /// One bud's saved crash logs, as sent ([`crash_log::records`]): keep
+    /// them, as `pods`' and `bud`'s (1 or 2).
+    CrashLog {
+        pods: MacAddress,
+        bud: u8,
+        data: Vec<u8>,
+    },
 }
 
 /// What we know of this host's MAC, needed for the peer hijack.
@@ -263,6 +271,7 @@ struct Session {
     uarp: Uarp,
     /// The update status last told the other hosts.
     told: Option<UpdateStatus>,
+    crash_logs: CrashLogs,
 }
 
 impl Session {
@@ -282,6 +291,7 @@ impl Session {
                 id: 0,
             },
             told: None,
+            crash_logs: CrashLogs::Quiet,
         }
     }
 }
@@ -307,6 +317,16 @@ enum Phase {
     /// Answering since the ack (the settings half can take ~20-35 s:
     /// docs/session-start.md).
     Answering,
+}
+
+/// The pods' saved crash logs in this session: asked for once announced
+/// and the session settled, as UARP waits for, then collected per bud.
+#[derive(Debug)]
+enum CrashLogs {
+    Quiet,
+    Announced,
+    Requested(BTreeMap<u8, Vec<u8>>),
+    Done,
 }
 
 /// UARP in this session.
@@ -531,7 +551,9 @@ impl Engine {
                 }) => Some(check),
                 _ => None,
             };
-            let uarp = session.uarp.hold.filter(|_| self.uarp_waits());
+            let uarp = session.uarp.hold.filter(|_| {
+                self.uarp_waits() || matches!(session.crash_logs, CrashLogs::Announced)
+            });
             [session.startup.check, stream, uarp]
         });
         let update = match &self.update {
@@ -560,12 +582,14 @@ impl Engine {
         };
         let update = self.with_updater(|updater| updater.tick(now));
         let uarp = self.settle_uarp(now);
+        let crash_logs = self.ask_crash_logs(now);
         startup
             .into_iter()
             .chain(stream)
             .chain(redial)
             .chain(update)
             .chain(uarp)
+            .chain(crash_logs)
             .collect()
     }
 
@@ -724,6 +748,7 @@ impl Engine {
                 self.primary_changes(now)
             }
             Packet::Uarp(message) => self.uarp_received(&message, now),
+            Packet::CrashLog(log) => self.crash_log(log),
             Packet::RoutingResponse(RoutingResponse {
                 kind: Routing::News(news),
                 from,
@@ -747,11 +772,13 @@ impl Engine {
         };
         let handoff = self.notify_peers();
         let uarp = self.settle_uarp(now);
+        let crash_logs = self.ask_crash_logs(now);
         learned
             .into_iter()
             .chain(reaction)
             .chain(handoff)
             .chain(uarp)
+            .chain(crash_logs)
             .collect()
     }
 
@@ -1340,6 +1367,72 @@ impl Engine {
             .iter()
             .map(|message| Effect::Send(uarp::frame(message)))
             .collect()
+    }
+
+    /// Ask for the crash logs the pods announced, once a session, when UARP
+    /// could be sent and no update runs.
+    fn ask_crash_logs(&mut self, now: Instant) -> Vec<Effect> {
+        let updating = self
+            .updater()
+            .is_some_and(|updater| updater.status().is_active());
+        if updating || !self.uarp_ready(now) {
+            return Vec::new();
+        }
+        let Some(session) = self.session_mut() else {
+            return Vec::new();
+        };
+        let CrashLogs::Announced = session.crash_logs else {
+            return Vec::new();
+        };
+        tracing::info!("asking the pods for their crash logs");
+        session.crash_logs = CrashLogs::Requested(BTreeMap::new());
+        vec![Effect::Send(crash_log::request())]
+    }
+
+    /// A crash-log frame: the announcement, a part, or the end, after which
+    /// each bud's logs are kept and their messages logged.
+    fn crash_log(&mut self, log: CrashLog) -> Vec<Effect> {
+        let Some(session) = self.session_mut() else {
+            return Vec::new();
+        };
+        let pods = session.pods;
+        match (&mut session.crash_logs, log) {
+            (logs, CrashLog::Saved(cores)) => {
+                tracing::info!(?cores, "the pods hold crash logs");
+                if let CrashLogs::Quiet = logs {
+                    *logs = CrashLogs::Announced;
+                }
+                Vec::new()
+            }
+            (CrashLogs::Requested(buds), CrashLog::Chunk { bud, data, .. }) => {
+                buds.entry(bud).or_default().extend(data);
+                Vec::new()
+            }
+            (logs @ CrashLogs::Requested(_), end @ (CrashLog::End | CrashLog::Aborted)) => {
+                let CrashLogs::Requested(buds) = std::mem::replace(logs, CrashLogs::Done) else {
+                    return Vec::new();
+                };
+                let aborted = matches!(end, CrashLog::Aborted);
+                tracing::info!(aborted, buds = buds.len(), "crash logs received");
+                buds.into_iter()
+                    .map(|(bud, data)| {
+                        crash_log::records(&data).iter().for_each(|record| {
+                            tracing::info!(
+                                bud,
+                                kind = format_args!("{:#x}", record.kind),
+                                message = record.message.as_deref().unwrap_or_default(),
+                                "pod crash log"
+                            );
+                        });
+                        Effect::CrashLog { pods, bud, data }
+                    })
+                    .collect()
+            }
+            (logs, log) => {
+                tracing::debug!(?logs, ?log, "crash log frame unasked for");
+                Vec::new()
+            }
+        }
     }
 
     /// A new primary bud: hold UARP; an update waits until it settles.
@@ -2950,6 +3043,52 @@ mod tests {
             );
             assert!(e.state().peer_update.is_none());
             assert!(e.prepare_update(release()).is_ok());
+        }
+
+        /// A class-0x400 crash-log frame from the pods.
+        fn crash_frame(body: &[u8]) -> Vec<u8> {
+            let header = [
+                &[0x00, 0x04, 0x00, 0x00][..],
+                &(body.len() as u16).to_le_bytes(),
+            ];
+            crate::aacp::frame::data_frame(0x17, &[header.concat(), body.to_vec()].concat())
+        }
+
+        #[test]
+        fn announced_crash_logs_are_asked_for_once_settled() {
+            let asks = |fx: &[Effect]| {
+                fx.iter()
+                    .filter(|effect| matches!(effect, Effect::Send(frame) if *frame == crash_log::request()))
+                    .count()
+            };
+            let inventory =
+                crash_frame(&[&[0x06, 0, 0, 1][..], b"AP\0\0", &[0, 0x80, 0, 0]].concat());
+            let mut e = engine();
+            e.handle(Packet::HandshakeAck, now());
+            assert_eq!(asks(&feed(&mut e, &inventory)), 0, "not settled");
+            feed(&mut e, CONNECTED_DEVICES);
+            settle(&mut e, now());
+            e.tick(now() + STARTUP_WAIT);
+            assert_eq!(e.next_wake(), Some(later()));
+            assert_eq!(asks(&e.tick(later())), 1);
+            assert_eq!(asks(&feed_at(&mut e, &inventory, later())), 0, "once");
+            // Bud 1's two parts, bud 2's one, the end.
+            feed_at(&mut e, &crash_frame(&[0x01, 0x80, 0x81, 0xAA]), later());
+            feed_at(&mut e, &crash_frame(&[0x01, 0x81, 0x02, 0xCC]), later());
+            feed_at(&mut e, &crash_frame(&[0x01, 0x02, 0x81, 0xBB]), later());
+            let fx = feed_at(&mut e, &crash_frame(&[0xFF]), later());
+            let kept = fx
+                .iter()
+                .filter_map(|effect| match effect {
+                    Effect::CrashLog { bud, data, .. } => Some((*bud, data.clone())),
+                    _ => None,
+                })
+                .collect::<Vec<_>>();
+            assert_eq!(kept, [(1, vec![0xAA, 0xBB]), (2, vec![0xCC])]);
+            // Not while an update runs.
+            let mut e = ready();
+            running(&mut e);
+            assert_eq!(asks(&feed_at(&mut e, &inventory, later())), 0);
         }
     }
 }

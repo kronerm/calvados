@@ -381,6 +381,7 @@ async fn perform(daemon: &Daemon, session: Option<&Session>, effect: Effect) -> 
         Effect::LearnedKey { pods, kind, key } => presence::save_key(pods, kind, key),
         Effect::Pause => daemon.media.iter().for_each(mpris::Media::pause),
         Effect::Resume => daemon.media.iter().for_each(mpris::Media::resume),
+        Effect::CrashLog { pods, bud, data } => state::save_crash_log(pods, bud, &data),
     }
     Ok(())
 }

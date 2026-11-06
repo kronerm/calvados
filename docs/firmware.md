@@ -224,12 +224,46 @@ previous boot", `CrashReporterKey`, a halt-or-reboot crash policy; strings
 around `0x1dd35e`–`0x1ddb7a`, `0x1c3410`). Not over UARP: the solicitation
 handler [`0xbddcc`] serves `HSML`, `VERS` and `MTIC` (asset types 4, 7,
 0x16) and refuses `LOGS` and `CRSH`, which it only considers from endpoint
-type 0xe. `crashlog` and `forwarded-crashlog` [`0x1ea44d`] are RTKit's
-internal endpoints (with `management`, `kdebug`, `ioreporting`, `oslog`…),
-between the pods' own processors. Inferred: a host gets crash data, if at
-all, through the AACP `0x17` wrapper's endpoints (`AP AOP RTP BTM DSP1
-DSP2`) that Apple hosts use for analytics; the Linux daemon logs every
-AACP frame in full (`hci: aacp`) to see what follows a reboot.
+type 0xe; a host *offering* an asset with one of those three tags reaches
+`Spicy_LogAbort` [`0xbcd82`, `0xbcdca`]. `MTIC` is a RAM metrics queue
+(provider 0x1e: per paired host usage, 300 bytes; provider 1: power and
+usage, 704 bytes), no crash data.
+
+Over AACP 0x17 (Known, from code; the transfer itself untested):
+- The wrapper: `[class] [len u16 LE]` + body, the class a u32 when the
+  AAP version is above 1.1 [`0x6cf1a`], else u16. Class 0x200 is a host's
+  request to the log module (listener [`0xafa48`] → dispatcher
+  [`0xafecc`], body `[type] [bud mask] [2] [sub] [1]`); class 0x400 its
+  answers; 0x100000 HID; 0x200000 and class-0x400 type 8 ULLA.
+- The store: at boot the `crlg` object [`0x13dd4`] saves each core's RTKit
+  crash log (signature `CLHE` or `CLGH`, ≥ 0x20 bytes [`0x194d0`]) to
+  flash as `crlg.<n>` [`0x194a0`] and sets NVRAM `CrlgMap` bit per core
+  [`0x1950c`]. A record (printer [`0x1837c8`]): 32-byte header, +8 size,
+  +0xc exception kind (low byte: undefined, panic, hard fault, AP-requested,
+  force reset, stack guard, mailbox error…; 0x100 incomplete, 0x200
+  nested), sections `[tag] [4] [4] [size incl. 16]`: `Cstr` (the message),
+  `Cver`, `Ctim`, `Cmbx`, `Crg8`, `Ccst`; then a copy of the header. Asahi
+  Linux's RTKit crash log parser reads the same format.
+- The announcement [`0xb36d0`, timer 0x69 in `0xb22e8`]: `06 00 00 [n]` +
+  per core `[name 4] [size u32]` (cores AP AOP RTP BTM DSP1 DSP2), while
+  `CrlgMap` ≠ 0 and no host has asked for an automatic push. Observed: 7
+  times on Oct 27 (the update day, repeated reboots), on the phone 14 s
+  into the first session after the Nov 4 reboot, nowhere else since Oct 1;
+  not in every session (the laptop's after Nov 4 didn't get it).
+- The request: type 5 (send logs), mask `ff`, sub 1 (crash logs; 2: the AP
+  log ring `aplg.NN`): `05 ff ff 00 01 02`, what the firmware builds itself
+  for an automatic push [`0x1c4154`, `0xb24cc`]. No Apple Device ID or
+  feature-flag gate on the path. Type 6 sets the push target in NVRAM;
+  types 8/9 (log streaming, non-prod only) and 0x10-0x12 (`core_en`) change
+  NVRAM: not for a host.
+- The answer [`0xb3048`]: `01 [n | 0x80 more] [bud 1/2 | 0x80 holding the
+  link]` + up to 0x10c bytes, paced by the link's completions; `ff` ends
+  [`0xb2d7a`], `fc 01` aborts [`0x156790`]. Afterwards `cr_user`/`cr_inear`
+  are reset [`0xb2660`].
+- Coredumps (`coredump`, NVRAM `core_en`) have no path to a host.
+
+calvados asks once per session that gets the announcement
+(`aacp/crash_log.rs`).
 
 ## A new session
 
@@ -244,7 +278,12 @@ case's version: [update-host.md](update-host.md).
 ## Open
 
 - UARP: see the open list in [uarp.md](uarp.md).
-- How a host reads a crash log.
+- Crash logs, until a transfer shows: the start on the primary for its
+  own logs (`0xb35dc` is reached only through bud message 0xc5,
+  `0xc73e0`); whether the saver's `crlg.%u` [`0x194a0`] is the transfer's
+  `crlg.%02d` [`0xb04fc`]; what clears `CrlgMap`; who raises event 0x16d
+  (the pods' own push, [`0x84438`]). If nothing comes, try the bud mask
+  `00`, `01`, `02`.
 - What 0x62/0x63 carry, and the `0x02` record ids.
 - The takeover reboots (AGENTS.md "Pod reboots"): [ownership.md](ownership.md)
   has the ownership arbiter, the AudioSource mask, and the aborts on those
