@@ -743,9 +743,19 @@ time): ~3 s into a phone take's stream (the laptop's stream configured,
 not started), the pods sent the phone an AVRCP PAUSE (likely a stem
 press), the phone was playing again 0.24 s later, and the pods went
 silent within ~2 s and booted ~4.5 s after their last packet. Nothing
-from calvados in between. The pods' crash log (fetched Nov 6, bud 2,
-likely this one): `ASSERTION FAILED: stream_sync_a2dp.cpp:429` on the AP
-core (RTKit_release-3514.0.15).
+from calvados in between. Its crash log (fetched Nov 6, bud 2; dated by
+its `Ctim`, µs since boot, against the 0x2B uptime: 15:51:16.2 phone
+time) says `ASSERTION FAILED: stream_sync_a2dp.cpp:429`, task `AudioMgr`
+(docs/firmware.md): a started A2DP stream whose audio clock never
+anchored. 3 s after the start the pods send the source an AVRCP PAUSE
+(the "stem press") and wait 2.5 s more; still unanchored, they assert.
+Here the stream had been started by the hook 3 ms after the claim, and
+playback resumed 0.24 s after the pause (the player or the user, not
+calvados), so it was never suspended. Why the clock didn't anchor is
+open (offloaded media isn't in the snoop log); a started but silent
+stream is the leading guess. The earlier reboots' logs are overwritten,
+so whether they were the same is unproven; the stream check's restart
+right at a take (above) fits.
 
 Rapid takeovers (a laptop take within ~6 s of a phone take) occasionally
 reboot the pods mid-switch: after they pause the old host, before they

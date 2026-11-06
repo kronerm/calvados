@@ -262,8 +262,37 @@ Over AACP 0x17 (Known, from code; the transfer itself untested):
   are reset [`0xb2660`].
 - Coredumps (`coredump`, NVRAM `core_en`) have no path to a host.
 
-calvados asks once per session that gets the announcement
-(`aacp/crash_log.rs`).
+calvados asks once per run when announced (`aacp/crash_log.rs`). The
+announcement goes ~10-13 s after any host connects (not only after a boot)
+to one host, so far always the one holding the audio (Observed, 5 times).
+Fetching doesn't clear it: the only clear [`0xb25b8` → `0x19578`] zeroes
+NVRAM `CrlgMap`, while the reader [`0x18854`] returns the RAM copy, so the
+same logs are announced until the pods reboot.
+
+Reading a record: `Ctim` is µs since the pods' boot (the 0x2B history's
+clock); `Ccst` the current task's call stack; `Crtk` the RTKit task
+table; `AMCL`/`HLCL` rings of active-object dispatches, `[u32 id] [from]
+[to] [event] [u16] [LEB128 Δµs]`; `BTSK` the live ACLs; `CPvr` the build
+(`90.3431000025000000.6807`). `CASE`, `SHUT`, `PMGR`, `CHLU`, `UPW3`,
+`BPHY` undecoded.
+
+### `stream_sync_a2dp.cpp:429` (the Nov 4 reboot)
+
+Task `AudioMgr`; the assert stub [`0xe8f34`, `movw r2,#0x1ad`] is called
+only from [`0xfb50a`], action 7 of the A2DP stream-sync state machine
+(table `0x1cc6a4`, one object per stream, built in [`0xec938`]). On the
+stream's start it enters S0x13/S0x14, starts the clock tracker (+0x88) and
+a 3000 ms timer (+0xa4, event 0x08) [`0xfb0f4`], and waits for event 0x12,
+the audio clock (`audio_clock.cpp`, +0x58) publishing 'AC' type 0,
+anchored. First timeout: action 6, S0x15, the timer again at 2500 ms
+[`0xfb034`]; action 6 reaches [`0xca5cc`] → event 0x10e to the per-host
+machine (table `0x1c680c`), whose action 5 sends the source an **AVRCP
+PAUSE** [`0x90494` → `0xca0a4` → `0x703e8`]. Second timeout in S0x15:
+action 7, the unconditional assert. Other ways out: events 0x07 ('UT'
+type 1), 0x0f, 0x01, 0x10 (a start time); which of them a SUSPEND or
+CLOSE raises is not established. The record's AMCL ring shows the object
+going S0x14 → S0x15 on event 8 at 1956.022 s, and the crash 2.5007 s
+later.
 
 ## A new session
 
@@ -285,6 +314,8 @@ case's version: [update-host.md](update-host.md).
   (the pods' own push, [`0x84438`]). If nothing comes, try the bud mask
   `00`, `01`, `02`.
 - What 0x62/0x63 carry, and the `0x02` record ids.
+- Why the audio clock doesn't anchor after a take (the Nov 4 assert
+  above), and whether an AVDTP SUSPEND leaves the wait.
 - The takeover reboots (AGENTS.md "Pod reboots"): [ownership.md](ownership.md)
   has the ownership arbiter, the AudioSource mask, and the aborts on those
   paths (a two-host record pool that never checks for duplicates, a
