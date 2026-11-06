@@ -192,8 +192,14 @@ main as the rolling pre-release `testing`: a release is
   (`fc 01`: aborted), logs each `CLHE` record's exception and `Cstr`
   message, and hands the bytes out as `Effect::CrashLog`: saved as
   `crash-logs/<pods>-<unix time>-bud<n>.bin` in the state dir (Linux) or
-  the app's files dir (Android). Untested on the pods so far. Never send
-  another request type: 8/9 and 0x10-0x12 change the pods' NVRAM.
+  the app's files dir (Android). A lone `ff` is also how the pods end a
+  transfer they gave up on: they retry a chunk that doesn't fit the
+  channel 6 times, 500 ms apart (Nov 6: 3 s, nothing). Their chunk frames
+  are 1002 bytes (2565 with the larger chunk), so Linux asks for a 4096-byte
+  receive MTU (the kernel's default is 672; Android's sockets get 8087, the
+  pods 2582). Never send another request type (8/9 and 0x10-0x12 change the
+  pods' NVRAM), nor bud mask `00` (it clears the announcement even with no
+  logs sent).
 - `connection.rs` — L2CAP PSM and service UUID, and `is_airpods_name`
   (a paired device named `AirPods…`, any case), both platforms' test.
 - UARP in the engine. **A 0x4F frame reaching a bud that isn't primary

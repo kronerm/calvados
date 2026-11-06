@@ -1412,8 +1412,13 @@ impl Engine {
                 let CrashLogs::Requested(buds) = std::mem::replace(logs, CrashLogs::Done) else {
                     return Vec::new();
                 };
-                let aborted = matches!(end, CrashLog::Aborted);
-                tracing::info!(aborted, buds = buds.len(), "crash logs received");
+                match (end, buds.is_empty()) {
+                    (CrashLog::Aborted, _) => tracing::info!("crash logs: the pods aborted"),
+                    // Also how a transfer ends that the pods gave up on: a
+                    // chunk too big for the channel, retried for 3 s.
+                    (_, true) => tracing::info!("crash logs: none came"),
+                    (_, false) => tracing::info!(buds = buds.len(), "crash logs received"),
+                }
                 buds.into_iter()
                     .map(|(bud, data)| {
                         crash_log::records(&data).iter().for_each(|record| {

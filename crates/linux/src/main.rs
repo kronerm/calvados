@@ -37,6 +37,10 @@ use crate::pipewire::Profile;
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(5);
 /// Pause before re-attaching, so a flapping channel can't spin.
 const RECONNECT_DELAY: Duration = Duration::from_secs(3);
+/// The pods send crash logs in frames of 1002 bytes (2565 with the larger
+/// chunk) and give up on a channel too small for them; the kernel's default
+/// is 672.
+const RECV_MTU: u16 = 4096;
 /// Retry while no AirPods are paired (connects are signalled, not polled).
 const PAIRING_POLL_INTERVAL: Duration = Duration::from_secs(5);
 
@@ -401,12 +405,15 @@ async fn attach(daemon: &Daemon, after: Duration) -> anyhow::Result<Session> {
     anyhow::ensure!(device.is_connected().await?, "AirPods not connected");
     let address =
         bluer::l2cap::SocketAddr::new(device.address(), bluer::AddressType::BrEdr, AIRPODS_PSM);
-    let stream = tokio::time::timeout(
-        CONNECT_TIMEOUT,
-        bluer::l2cap::Socket::new_seq_packet()?.connect(address),
-    )
-    .await??;
+    let socket = bluer::l2cap::Socket::new_seq_packet()?;
+    socket.set_recv_mtu(RECV_MTU)?;
+    let stream = tokio::time::timeout(CONNECT_TIMEOUT, socket.connect(address)).await??;
     bluez::wait_l2cap_established(&stream).await?;
+    tracing::debug!(
+        recv = stream.recv_mtu()?,
+        send = stream.send_mtu()?,
+        "AACP MTU"
+    );
     Ok(Session {
         buf: vec![0u8; stream.recv_mtu()?],
         device,
