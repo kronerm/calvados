@@ -298,7 +298,8 @@ power-on (`LinkChange`). Its length caps at 255, i.e. 15 events.
 - `bluetooth.rs` — paired AirPods, local MAC, A2DP routing, and the
   presence scan: a `BluetoothLeScanner` scan (Apple manufacturer data `07`
   with the lid open, masked: pods charging in the closed case advertise
-  too; low power, controller-filtered, `CALLBACK_TYPE_FIRST_MATCH`) whose
+  too; balanced, controller-filtered, `CALLBACK_TYPE_FIRST_MATCH`: low
+  power found the pods 19 s after the laptop did, screen off) whose
   results start the service as `NEARBY` intents through a `PendingIntent`
   (no Java; the system keeps scanning without the app). Not across
   Bluetooth turning off, though: the scan is gone after, so the service
@@ -608,8 +609,10 @@ texts are written twice. A change to one side needs the other:
   we don't hold the audio takes it too (`Engine::ear_take`): a call wins
   over media, and with the same on both hosts the one the pods count as
   owner (`PodsOwner`) takes, so only one does. Both buds going into the case while
-  holding the audio releases it (Linux: profile `off`, so the laptop's
-  speakers play). Android still routes to the pods by itself, and the pods
+  holding the audio releases it here only (Linux: profile `off`, so the
+  laptop's speakers play), writing nothing: an `OwnsConnection = 0` made
+  the other host the owner, and the pods then paged that host, not this
+  one, when they came out of the case (Nov 6). Android still routes to the pods by itself, and the pods
   follow any host that streams. A call starting takes regardless of what plays elsewhere. Linux: MPRIS
   `PlaybackStatus` → `Playing` (D-Bus signals). Android: the
   `AudioPlaybackCallback` (`USAGE_MEDIA` starts media, a

@@ -100,8 +100,10 @@ pub(crate) fn set_presence_scan(enabled: bool) -> anyhow::Result<()> {
             flags,
         )?;
         let scanner = BluetoothAdapter::default_adapter(env)?.get_bluetooth_le_scanner(env)?;
+        // Also replaces a scan an older build started with other settings.
+        scanner.stop_scan(env, &callback)?;
         if !enabled {
-            return scanner.stop_scan(env, &callback);
+            return Ok(());
         }
         let pattern = Pattern::proximity().lid_open();
         let filter = ScanFilter::builder(env)?
@@ -114,7 +116,7 @@ pub(crate) fn set_presence_scan(enabled: bool) -> anyhow::Result<()> {
             .build(env)?;
         let filters = List::singleton(env, filter.as_obj())?;
         let settings = ScanSettings::builder(env)?
-            .set_scan_mode(env, ScanMode::LowPower)?
+            .set_scan_mode(env, ScanMode::Balanced)?
             .set_callback_type(env, CallbackType::FIRST_MATCH)?
             .build(env)?;
         match scanner.start_scan(env, &filters, &settings, &callback)? {

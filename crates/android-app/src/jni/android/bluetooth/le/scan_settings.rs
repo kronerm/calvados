@@ -5,7 +5,7 @@ use num_enum::IntoPrimitive;
 #[derive(Debug, Clone, Copy, IntoPrimitive)]
 #[repr(i32)]
 pub enum ScanMode {
-    LowPower = 0,
+    Balanced = 1,
 }
 
 bitflags::bitflags! {
