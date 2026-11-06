@@ -709,7 +709,7 @@ impl Engine {
                 // Both put in the case: let go, so playing here again comes
                 // out of this host's own speakers, as on iOS.
                 let put_away = match !was_in_case && self.state.in_case() {
-                    true => self.release(),
+                    true => self.put_away(),
                     false => Vec::new(),
                 };
                 let worn = match !previous_ears.is_some_and(EarDetection::any_in_ear)
@@ -1153,6 +1153,17 @@ impl Engine {
         tracing::info!("releasing audio ownership");
         self.set_ownership(Ownership::Idle);
         vec![Effect::Send(set_ownership(false)), Effect::ReleaseAudio]
+    }
+
+    /// Let go here only: the pods keep us as their owner, so they page this
+    /// host back when they leave the case.
+    fn put_away(&mut self) -> Vec<Effect> {
+        if !self.ownership().is_held() {
+            return Vec::new();
+        }
+        tracing::info!("put away: releasing the audio here only");
+        self.set_ownership(Ownership::Idle);
+        vec![Effect::ReleaseAudio]
     }
 
     /// Infer the local MAC from the session's first host announcement or, on
@@ -2342,7 +2353,10 @@ mod tests {
         assert_eq!(sends(&e.media_started()), 4, "one bud out: take");
         feed(&mut e, &set_ownership(true));
         let away = e.handle(ears(InCase, InCase), now());
-        assert!(away.iter().any(|e| matches!(e, Effect::ReleaseAudio)));
+        assert!(
+            matches!(away[..], [Effect::ReleaseAudio]),
+            "nothing to the pods: they page us back"
+        );
         assert!(matches!(e.ownership(), Ownership::Idle));
     }
 
