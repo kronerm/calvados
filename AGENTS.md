@@ -632,8 +632,10 @@ texts are written twice. A change to one side needs the other:
   `YieldRequest`; only the last (and `OwnsConnection = 0`) releases.
 - Ownership is asserted to the firmware (`set_ownership(true)`) only together
   with the targeted handoff sequence to a known peer, never as a bare claim.
-- Yield requests and `OwnsConnection = 0` release once (`set_ownership(false)`
-  + `Effect::ReleaseAudio`); repeats send nothing. A yield request always
+- Yield requests and `OwnsConnection = 0` release once (`Effect::ReleaseAudio`,
+  nothing to the pods: the claimant's 1 lands first, so a 0 changed nothing,
+  except handing an Apple host that took over with 0x44 the ownership for
+  good); repeats do nothing. A yield request always
   emits `ReleaseAudio` (pause), even when not holding the audio: a host
   playing without a take (app just restarted) otherwise plays on, its OS
   restarts the suspended stream ~4 s later, and the pods switch back to it
