@@ -519,6 +519,12 @@ impl Engine {
         let Some((pods, keys)) = ble::identify(address, keys) else {
             return Vec::new();
         };
+        tracing::debug!(
+            %pods,
+            hosts = ?ble::Proximity::parse(advertisement).and_then(ble::Proximity::hosts),
+            data = ?crate::aacp::HexDump(advertisement),
+            "our pods advertising"
+        );
         if self.pods().is_none_or(|ours| ours == pods) {
             let level = keys
                 .encryption

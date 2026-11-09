@@ -22,6 +22,9 @@ pub const PROXIMITY_PAIRING: u8 = 0x07;
 enum Field {
     Status = 5,
     Lid = 8,
+    /// Plaintext: bits 2-3 the hosts connected, bits 0-1 the audio's kind
+    /// [rkof 0xdd81c-0xdd832].
+    Activity = 10,
 }
 
 impl Field {
@@ -52,6 +55,9 @@ pub(crate) struct Proximity {
     lid_open: bool,
     /// The advertising bud is in the case.
     in_case: bool,
+    /// Inferred: the hosts connected, capped at 3 (`None`: a short
+    /// advertisement).
+    hosts: Option<u8>,
 }
 
 impl Proximity {
@@ -65,7 +71,13 @@ impl Proximity {
         Some(Self {
             lid_open: !lid.contains(Lid::CLOSED),
             in_case: status.contains(Status::IN_CASE),
+            hosts: Field::Activity.read(data).map(|byte| byte >> 2 & 0b11),
         })
+    }
+
+    /// Inferred: how many hosts the pods have (`None`: not advertised).
+    pub fn hosts(self) -> Option<u8> {
+        self.hosts
     }
 
     /// Out to be used: the lid open, or a bud out of the case. Pods charging
@@ -202,6 +214,7 @@ mod tests {
         let worn = hex::decode("07190124200b448f110009403f32fb9df2890e14c05e07c81fd314").unwrap();
         let worn = Proximity::parse(&worn).unwrap();
         assert!(worn.lid_open && !worn.in_case, "its lid bit reads open");
+        assert_eq!(worn.hosts(), Some(2), "worn, with two hosts");
         assert!(Proximity::parse(&data[..5]).is_none());
         assert!(Proximity::parse(&[0x12, 0, 0, 0, 0, 0, 0, 0, 0]).is_none());
     }
