@@ -54,11 +54,18 @@ pub enum LinkChange {
         reason: u16,
     },
     /// Kind `0x09`: the pods connecting out to a host, `status` 0 on
-    /// success. Seen only after the pods power on: once 0 as the phone
-    /// connected, and three tries 6 s apart, all `0x02c0`, while the phone's
-    /// Bluetooth was off.
+    /// success, logged at the connection's completion [rkof 0x54474]. They
+    /// page out only while no host is connected (docs/firmware.md): once 0
+    /// as the phone connected, and three tries 6 s apart, all `0x02c0`,
+    /// while the phone's Bluetooth was off.
     PagedHost {
         status: u16,
+    },
+    /// Kind `0x0b`: the pods disconnecting a host themselves [rkof 0x99d88],
+    /// before its `HostLeft`. Their reasons: 2 every host dropped (put away),
+    /// 4 a UARP hold with the lid closed, 0xc a third host.
+    Dropped {
+        reason: u16,
     },
     Unknown {
         kind: u8,
@@ -103,6 +110,7 @@ impl LinkChange {
             0x05 => Self::BudConnected,
             0x06 => Self::BudLeft { reason: value },
             0x09 => Self::PagedHost { status: value },
+            0x0b => Self::Dropped { reason: value },
             kind => Self::Unknown { kind, value },
         }
     }
@@ -113,7 +121,10 @@ impl LinkChange {
         match self {
             Self::HostConnected | Self::PagedHost { status: 0 } => Some(true),
             Self::HostLeft { .. } | Self::PagedHost { .. } => Some(false),
-            Self::BudConnected | Self::BudLeft { .. } | Self::Unknown { .. } => None,
+            Self::BudConnected
+            | Self::BudLeft { .. }
+            | Self::Dropped { .. }
+            | Self::Unknown { .. } => None,
         }
     }
 }
@@ -204,5 +215,30 @@ mod tests {
              1m 54s ago 02:66:77:88:99:aa HostLeft { reason: 721 }, \
              56s ago 02:66:77:88:99:aa HostConnected])"
         );
+    }
+
+    #[test]
+    fn the_pods_page_and_drop_a_host() {
+        // Nov 9 17:11: paged the phone, dropped it a minute later as the
+        // buds went away (reason 2), then its link ended (722, 0x16).
+        let payload = hex::decode(
+            "013300 a9d601bf00000000 \
+             6f8e7f7e00000000 aa9988776602 09 0000 \
+             e4bf0a8200000000 aa9988776602 0b 0200 \
+             2b7a0e8200000000 aa9988776602 02 d202"
+                .replace(' ', ""),
+        )
+        .unwrap();
+        let (_, history) = parse(&payload).unwrap();
+        let changes = history.events.iter().map(|e| e.change).collect::<Vec<_>>();
+        assert_eq!(
+            changes,
+            [
+                LinkChange::PagedHost { status: 0 },
+                LinkChange::Dropped { reason: 2 },
+                LinkChange::HostLeft { reason: 0x02d2 },
+            ]
+        );
+        assert!(history.connected_hosts().is_empty());
     }
 }
