@@ -58,10 +58,18 @@ pub(crate) fn to_reversed(mac: MacAddress) -> [u8; 6] {
     bytes
 }
 
+/// The handshake's answer, `01 00 04 00 [status 2 LE]`: 0x85 the channel
+/// already has a session, 0x68 no session free [rkof 0x6caba-0x6caca].
+#[derive(Debug, Clone, Copy)]
+pub enum HandshakeStatus {
+    Accepted,
+    Refused(u16),
+}
+
 /// One decoded AACP packet.
 #[derive(Debug, Clone)]
 pub enum Packet {
-    HandshakeAck,
+    HandshakeAck(HandshakeStatus),
     AudioSource(AudioSource),
     Battery(Vec<BatteryInfo>),
     ConnectedDevices(Vec<MacAddress>),
@@ -130,7 +138,13 @@ impl Packet {
     /// Decode one complete frame. `None` if it isn't an AACP frame at all.
     pub fn parse(frame: &[u8]) -> Option<Self> {
         match frame.split_first_chunk::<4>()? {
-            (&frame::HANDSHAKE_ACK_MAGIC, _) => Some(Self::HandshakeAck),
+            (&frame::HANDSHAKE_ACK_MAGIC, rest) => {
+                let status = rest.first_chunk::<2>().map_or(0, |s| u16::from_le_bytes(*s));
+                Some(Self::HandshakeAck(match status {
+                    0 => HandshakeStatus::Accepted,
+                    status => HandshakeStatus::Refused(status),
+                }))
+            }
             (&frame::DATA_MAGIC, rest) => {
                 let (opcode, body) = rest.split_first_chunk::<2>()?;
                 let opcode = u16::from_le_bytes(*opcode);

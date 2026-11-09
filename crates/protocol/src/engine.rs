@@ -9,7 +9,7 @@ use std::time::{Duration, Instant};
 
 use crate::MacAddress;
 use crate::aacp::{
-    Activity, AudioSource, ControlCommand, ControlId, CrashLog, Cycle, DeviceRole, EarDetection,
+    Activity, AudioSource, ControlCommand, ControlId, CrashLog, Cycle, DeviceRole, EarDetection, HandshakeStatus,
     KeyType, NoiseControlMode, Packet, Routing, RoutingResponse, crash_log,
 };
 use crate::ble;
@@ -648,7 +648,7 @@ impl Engine {
     pub fn handle(&mut self, packet: Packet, now: Instant) -> Vec<Effect> {
         if let Some(session) = self.session_mut()
             && let Phase::Acked = session.startup.phase
-            && !matches!(packet, Packet::HandshakeAck)
+            && !matches!(packet, Packet::HandshakeAck(_))
         {
             session.startup.phase = Phase::Answering;
         }
@@ -687,7 +687,12 @@ impl Engine {
                 .collect(),
             // The rest of the setup goes out only now (see
             // [`session_setup_frames`]); a retried handshake's ack resends it.
-            Packet::HandshakeAck => {
+            Packet::HandshakeAck(HandshakeStatus::Refused(status)) => {
+                // Not ours: the startup check reconnects.
+                tracing::warn!(status = format_args!("{status:#x}"), "handshake refused");
+                Vec::new()
+            }
+            Packet::HandshakeAck(HandshakeStatus::Accepted) => {
                 if let Some(session) = self.session_mut()
                     && let Phase::Sent = session.startup.phase
                 {
@@ -1914,7 +1919,7 @@ mod tests {
         let mut e = engine();
         assert_eq!(e.check_startup(now()), [Effect::Reconnect]);
         let mut e = engine();
-        e.handle(Packet::HandshakeAck, now());
+        e.handle(Packet::HandshakeAck(HandshakeStatus::Accepted), now());
         assert_eq!(
             e.check_startup(now()),
             [Effect::Send(request_notifications())]
@@ -2032,7 +2037,7 @@ mod tests {
     fn the_setup_follows_the_handshake_ack() {
         let mut e = engine();
         let setup = session_setup_frames().map(Effect::Send);
-        assert_eq!(e.handle(Packet::HandshakeAck, now()), setup);
+        assert_eq!(e.handle(Packet::HandshakeAck(HandshakeStatus::Accepted), now()), setup);
     }
 
     #[test]
@@ -2074,7 +2079,7 @@ mod tests {
         assert_eq!(left.level, 70);
         assert!(!state.battery.is_live(), "last known only");
         assert!(state.hosts.is_none(), "routing starts afresh");
-        e.handle(Packet::HandshakeAck, now());
+        e.handle(Packet::HandshakeAck(HandshakeStatus::Accepted), now());
         assert_eq!(
             e.check_startup(now()),
             [Effect::Send(request_notifications())],
@@ -2211,7 +2216,7 @@ mod tests {
     fn a_session_silent_after_the_ack_reconnects() {
         // Captured Oct 18 13:36:54: the ack, then nothing for 53 minutes.
         let mut e = engine();
-        e.handle(Packet::HandshakeAck, now());
+        e.handle(Packet::HandshakeAck(HandshakeStatus::Accepted), now());
         (0..STARTUP_RETRIES).for_each(|_| {
             assert_eq!(
                 e.check_startup(now()),
@@ -2221,7 +2226,7 @@ mod tests {
         assert_eq!(e.check_startup(now()), [Effect::Reconnect]);
         // Answering but holding the state half back: keeps waiting.
         let mut e = engine();
-        e.handle(Packet::HandshakeAck, now());
+        e.handle(Packet::HandshakeAck(HandshakeStatus::Accepted), now());
         e.handle(
             Packet::DeviceInformation(DeviceInformation {
                 name: Some("AirPods Pro".into()),
@@ -2236,9 +2241,18 @@ mod tests {
     }
 
     #[test]
+    fn a_refused_handshake_reconnects() {
+        // Oct 28: the channel already had a session, then silence.
+        let ack = hex::decode("01000400850001000300000000000000").unwrap();
+        let mut e = engine();
+        assert!(e.handle(Packet::parse(&ack).unwrap(), now()).is_empty());
+        assert_eq!(e.check_startup(now()), [Effect::Reconnect]);
+    }
+
+    #[test]
     fn rerequests_notifications_only_without_battery() {
         let mut e = engine();
-        e.handle(Packet::HandshakeAck, now());
+        e.handle(Packet::HandshakeAck(HandshakeStatus::Accepted), now());
         // Only the settings half.
         e.handle(
             Packet::DeviceInformation(DeviceInformation {
@@ -2255,7 +2269,7 @@ mod tests {
         });
         assert!(e.check_startup(now()).is_empty(), "gives up");
         let mut e = engine();
-        e.handle(Packet::HandshakeAck, now());
+        e.handle(Packet::HandshakeAck(HandshakeStatus::Accepted), now());
         e.handle(
             Packet::Battery(vec![crate::aacp::BatteryInfo {
                 component: crate::aacp::BatteryComponent::Left,
@@ -2708,7 +2722,7 @@ mod tests {
         /// case, on 7.1, with PEER connected too. Its version query is out.
         fn ready() -> Engine {
             let mut e = engine();
-            e.handle(Packet::HandshakeAck, now());
+            e.handle(Packet::HandshakeAck(HandshakeStatus::Accepted), now());
             feed(&mut e, CONNECTED_DEVICES);
             settle(&mut e, now());
             e.state.firmware.reported = Some("71.2256000021000000.6663".into());
@@ -2811,7 +2825,7 @@ mod tests {
         #[test]
         fn uarp_waits_for_a_settled_session() {
             let mut e = engine();
-            assert_eq!(kinds(&e.handle(Packet::HandshakeAck, now())), []);
+            assert_eq!(kinds(&e.handle(Packet::HandshakeAck(HandshakeStatus::Accepted), now())), []);
             assert_eq!(kinds(&feed(&mut e, CONNECTED_DEVICES)), []);
             assert_eq!(kinds(&settle(&mut e, now())), [], "a connect is fresh");
             assert_eq!(e.next_wake(), Some(now() + STARTUP_WAIT));
@@ -2825,7 +2839,7 @@ mod tests {
             assert_eq!(kinds(&from_pods(&mut e, 0x17, &[0, 2], later())), [0x18]);
             // Without the state half, never.
             let mut e = engine();
-            e.handle(Packet::HandshakeAck, now());
+            e.handle(Packet::HandshakeAck(HandshakeStatus::Accepted), now());
             feed(&mut e, CONNECTED_DEVICES);
             assert_eq!(kinds(&e.tick(later())), []);
             assert_eq!(kinds(&from_pods(&mut e, 0x17, &[0, 2], later())), []);
@@ -2930,7 +2944,7 @@ mod tests {
             // The lid closed, the pods came back on the new firmware.
             reconnect(&mut e, Duration::from_secs(1800));
             let back = now() + Duration::from_secs(1800);
-            e.handle(Packet::HandshakeAck, back);
+            e.handle(Packet::HandshakeAck(HandshakeStatus::Accepted), back);
             feed(&mut e, CONNECTED_DEVICES);
             settle(&mut e, back);
             assert_eq!(kinds(&e.tick(back + UARP_SETTLE)), [0x00, 0x01, 0x03]);
@@ -2958,7 +2972,7 @@ mod tests {
             let back = later() + Duration::from_secs(10);
             let fx = e.connected(mac(PODS), back);
             assert_eq!(kinds(&fx), []);
-            e.handle(Packet::HandshakeAck, back);
+            e.handle(Packet::HandshakeAck(HandshakeStatus::Accepted), back);
             feed(&mut e, CONNECTED_DEVICES);
             assert_eq!(kinds(&settle(&mut e, back)), []);
             // The identical offer, and no version query meanwhile.
@@ -3093,7 +3107,7 @@ mod tests {
             let inventory =
                 crash_frame(&[&[0x06, 0, 0, 1][..], b"AP\0\0", &[0, 0x80, 0, 0]].concat());
             let mut e = engine();
-            e.handle(Packet::HandshakeAck, now());
+            e.handle(Packet::HandshakeAck(HandshakeStatus::Accepted), now());
             assert_eq!(asks(&feed(&mut e, &inventory)), 0, "not settled");
             feed(&mut e, CONNECTED_DEVICES);
             settle(&mut e, now());
@@ -3117,7 +3131,7 @@ mod tests {
             // Announced again in the next session: kept already.
             e.disconnected(later());
             e.connected(mac(PODS), later());
-            e.handle(Packet::HandshakeAck, later());
+            e.handle(Packet::HandshakeAck(HandshakeStatus::Accepted), later());
             feed_at(&mut e, CONNECTED_DEVICES, later());
             settle(&mut e, later());
             feed_at(&mut e, &inventory, later());
