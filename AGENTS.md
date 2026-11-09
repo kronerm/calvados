@@ -692,6 +692,10 @@ texts are written twice. A change to one side needs the other:
     (host, connected), which is the new connection itself when joining pods
     already connected (every capture). Dropped if the device list doesn't
     contain it; used, not persisted;
+  - *known* from the pods' `AudioSource` reply while nothing plays: it
+    names the host that asked (kind 0, our MAC; [rkof 0x875aa-0x875ce]; 107
+    of 107 on the laptop, 3 of 3 on the phone), while a change to nothing
+    playing names nobody (zero MAC);
   - *known* when saved (learned earlier; apps can't read the adapter's
     address, `LOCAL_MAC_ADDRESS` being privileged-only; Linux has it from
     BlueZ) or once

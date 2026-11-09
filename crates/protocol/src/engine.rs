@@ -1229,9 +1229,16 @@ impl Engine {
             }
             _ => {}
         }
-        let mac = self.state.sole_host()?;
+        // With nothing playing, the pods' `AudioSource` names whoever asked
+        // [rkof 0x875aa-0x875ce]; a change with nothing playing names nobody.
+        let (mac, source) = match packet {
+            Packet::AudioSource(AudioSource { mac, kind }) if kind.is_empty() && !mac.is_nil() => {
+                (*mac, "named by the pods")
+            }
+            _ => (self.state.sole_host()?, "the only host"),
+        };
         (!matches!(self.local_mac, LocalMac::Known(known) if known == mac)).then(|| {
-            tracing::info!(%mac, "learned local MAC");
+            tracing::info!(%mac, source, "learned local MAC");
             self.local_mac = LocalMac::Known(mac);
             mac
         })
@@ -2757,6 +2764,19 @@ mod tests {
         );
         assert_eq!(e.local_mac(), Some(mac(LOCAL)));
         assert!(feed(&mut e, &single).is_empty());
+    }
+
+    #[test]
+    fn learns_local_mac_from_the_pods_reply() {
+        // Nothing plays: the reply names the host that asked.
+        let mut e = session(None);
+        assert!(e.handle(source(MacAddress::new([0; 6]), Activity::empty()), now()).is_empty());
+        assert!(e.handle(source(mac(PEER), Activity::MEDIA), now()).is_empty());
+        assert_eq!(e.local_mac(), None);
+        assert_eq!(
+            e.handle(source(mac(LOCAL), Activity::empty()), now()),
+            [Effect::LearnedLocalMac(mac(LOCAL))]
+        );
     }
 
     mod update {
