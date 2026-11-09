@@ -256,17 +256,19 @@ From captures; meanings beyond the structure are guesses.
 - `0x02`, after Request Notifications: a count (`1d` = 29), then that many
   `(id, value)` entries, mostly one byte each (`0a 01`, `50 02`), but ids
   `03 04 06 07 30` carry a 4-byte LE value. Length not encoded, so the frame
-  ends at the next magic. One capture only.
+  ends at the next magic. A fixed capability table: identical in every
+  session Nov 4-6, no state in it.
 - `0x17`: `[class u32 LE] [len 2 LE]` + body. Class 0x400 is decoded
   (`aacp/crash_log.rs`); class 0x100000 (HID): protobuf (`08` sequence
   number, `10` 1/3, `2a` nested message) wrapping an Apple
   binary-serialized dictionary (OSSerializeBinary, signature `d3 00 00
   00`): `VendorID` = `0x05ac`, `AccessoryService`, `MaxReportSize`,
   `devmot`…, in the burst after a primary switch.
-- `0x4E`: 8 zero bytes, once per session in the startup burst.
-- `0x52`: `03 00 02 01 [00|01]`. `00` right before a bud leaving an ear
-  (three times) and right after this host started playing; `01` alone,
-  with nothing else around it.
+- `0x4E`: 8 zero bytes, once per session in the startup burst: the NVRAM
+  value `fprox` [rkof 0xa628c, sent 0x85914].
+- `0x52`: `03 00 02 01 [00|01]`, from 0xd16ec through an interface table.
+  `01` next to `AudioSource` changes; `00` next to ear changes, before them
+  11 times and after 26: no warning of a bud leaving an ear.
 - Case charging sounds are a *command* with a non-AACP header,
   `12 3A 00 01 00 08 [00 on / 01 off]` (LibrePods), not a packet.
 
@@ -368,8 +370,10 @@ power-on (`LinkChange`). Its length caps at 255, i.e. 15 events.
   sent after the setter, is current too.
 - `mpris.rs` — pause/resume of MPRIS players on one ordered worker task.
 - `presence.rs` — reports Apple advertisers to the loop (`Input::Nearby`;
-  `Engine::nearby` decides), since the pods page only the host that last
-  had the audio. BlueZ's advertisement monitor
+  `Engine::nearby` decides), since the pods page out only while no host is
+  connected, and then one host (docs/paging.md). Our pods' advertisements
+  are logged (`our pods advertising`) with their host count (byte 10 bits
+  2-3), to confirm before presence waits on it. BlueZ's advertisement monitor
   (`Experimental = true` in `main.conf`; without it one info line, no
   monitor) reports Apple proximity pairing advertisements (manufacturer data
   `4c 00 07`, filtered by the controller); one whose rotating address
@@ -525,7 +529,10 @@ texts are written twice. A change to one side needs the other:
   buds were put away (`DeviceState::is_stowed`: in the case, or gone
   without a live battery reading or still charging), 3 times 3 s apart (`Engine::disconnected`
   and `tick`). "Not in an ear" was too strict: a bud just taken out hasn't
-  reported its ear yet when the primary goes into the case. The pods page back only the host that last had the audio; BlueZ
+  reported its ear yet when the primary goes into the case. The pods page out only while no host is connected, one host: their
+  stored preferred (`bvi05`) or the most recently connected, never one
+  they or the host disconnected on purpose (0x13-0x16, the lid-close drop
+  included) until it connects again (docs/paging.md); BlueZ
   retries only after a timeout (0x08), not after a primary handover (0x15),
   and the BLE monitor reports an advertiser only when first found, so a
   drop while they advertise needs this.
@@ -777,7 +784,7 @@ Rapid takeovers (a laptop take within ~6 s of a phone take) occasionally
 reboot the pods mid-switch: after they pause the old host, before they
 suspend its stream; nothing in AACP warns first (HCI traces of 13:20:40
 and 13:34:01). Not prevented, recovered from:
-- After a reboot the pods page only the host that last had the audio.
+- After a crash the pods page only the last audio owner (docs/paging.md).
   BlueZ reconnects the laptop itself after a link loss with timeout
   (`ReconnectAttempts` in `main.conf`).
 - Android broadcasts no disconnect reason (the HCI reason only reaches a

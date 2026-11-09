@@ -299,6 +299,11 @@ later.
 What the pods send a new AACP session, what holds part of it back, and the
 feature flags: [session-start.md](session-start.md).
 
+## Which host the pods connect to
+
+When they page out, which host, and what the advertisement says about
+it: [paging.md](paging.md).
+
 ## A host-side updater
 
 What closing the lid does, how several hosts interact, resuming, and the
