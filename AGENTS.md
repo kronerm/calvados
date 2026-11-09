@@ -552,7 +552,7 @@ texts are written twice. A change to one side needs the other:
   nothing to the firmware (no peer to hand off from); it sets `Owning` and
   emits `RouteAudio`. There is no media-triggered auto-take.
 - `Ownership`: `Idle` → `Claiming(Handoff::{Pending, Sent})` on take → `Owning(_)` when the
-  firmware confirms (`OwnsConnection = 1`). Media or a call starting again while the
+  firmware confirms (`OwnsConnection = 1`, or no answer within `CLAIM_WAIT`). Media or a call starting again while the
   handoff is unconfirmed sends it again: once the pods didn't answer at all
   (Oct 9 18:22:52) though the other host got it and paused, and ignoring
   later plays left the laptop silent until that host's next yield. `AudioSource` packets also move the
@@ -569,7 +569,14 @@ texts are written twice. A change to one side needs the other:
   letting go without a write (another host streamed), the pods still count
   us as owner and a later claim gets no answer: the engine remembers what
   they last said (`PodsOwner`) and routes at once then, likely the Oct 9
-  silence. The smart-routing frames (0x10) are relayed verbatim as 0x11,
+  silence. The pods also pick an owner unannounced: adding or removing a
+  host's record re-chooses at once [rkof 0xd8618, 0xd87a0], and `09 06 01`
+  goes only to a host whose AACP session is already open, so a host that
+  connected first owns them without being told (Nov 7 22:17:25: a claim
+  unanswered, media silent 12 s). A claim unanswered for `CLAIM_WAIT` (1 s;
+  confirmations took 73-437 ms) is therefore taken as confirmed. An
+  `OwnsConnection = 1` we didn't ask for (a host joined or left, the buds
+  put away; 7 since Nov 4) only sets `PodsOwner`: it isn't audio here. The smart-routing frames (0x10) are relayed verbatim as 0x11,
   never parsed. `AudioSource` (0x0E) is the last host to start something
   plus one activity mask over all hosts (`Activity`: 0x01 call, any SCO;
   0x02 media, A2DP; other bits unnamed stream kinds), so one host stopping

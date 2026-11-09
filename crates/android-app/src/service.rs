@@ -205,7 +205,7 @@ fn service_main(jvm: JavaVM, events: crossbeam_channel::Receiver<Event>) {
         let mut effects = event
             .as_ref()
             .and_then(|event| playing.update(event))
-            .map_or_else(Vec::new, |audio| engine.local_audio(audio));
+            .map_or_else(Vec::new, |audio| engine.local_audio(audio, now));
 
         match event {
             None | Some(Event::Playback { .. } | Event::PhoneCall(_)) => {}

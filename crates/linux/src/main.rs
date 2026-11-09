@@ -312,10 +312,13 @@ async fn run(daemon: &Daemon, mut engine: Engine, inputs: &mut mpsc::UnboundedRe
                 Input::CancelUpdate => engine.cancel_update(),
                 Input::Package(package) => engine.package(package, Instant::now()),
             },
-            Some(playing) = playback_change(&mut playback) => engine.local_audio(match playing {
-                true => LocalAudio::Media,
-                false => LocalAudio::Silent,
-            }),
+            Some(playing) = playback_change(&mut playback) => {
+                let audio = match playing {
+                    true => LocalAudio::Media,
+                    false => LocalAudio::Silent,
+                };
+                engine.local_audio(audio, Instant::now())
+            }
         };
         for effect in effects {
             if let Err(e) = perform(daemon, aacp.session(), effect).await {
