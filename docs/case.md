@@ -623,3 +623,15 @@ through; whatever fails logs only on the case's or the bud's UART.
 - The No-Apply flag [0x20034fc8+0x37] is set only when the case's own apply is refused
   (lid open or case ≤ 10 %) and cleared at the next charged close; a 10 % offer leaves no
   pending header. The tunnel path reads neither bt_prog nor any bud version.
+- (Nov 14, follow-up) coup_st comes from object 0x200bb6e0 (HSM 0x1c8cbc, the bud's side of
+  the case's Couple procedure), not the role machine: 0 in steady state. The valid flags
+  are 1 for pid 0x2024 [STFC 0x8026c84]. Boot keeps the stored role unless out of box
+  (0x8dc18; then by the factory SIDE, cfg+0x41). The case's role command (B2P 0x5a 'P'/'S'
+  [STFC 0x08021ddc] → bud 0x15a278, 0xc61d4) changes nothing while exactly one bud claims;
+  none → Right primary, both → the one with fewer host ACLs keeps it (tie: Right).
+  Inferred: docking the link holder while the other bud is out moves the link (0x15, the
+  other bud back as link primary) but not the stored role, so every probe so far closed
+  with the role on the bud without our session (22:18:38: Right docked first, Left took
+  the link; 23:44: Left docked first) → the open went there and bee88 found no session.
+  Test: take both buds out together (the stored primary takes the link), dock the other
+  one first, then the link holder, then hold and close.
