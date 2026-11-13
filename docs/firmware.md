@@ -101,6 +101,22 @@ cases have their own; other generations use H1, a different chip), and the
 layout moves between builds. To find a landmark in another build, search
 for what's named under "found by", not the address.
 
+**9B47** (9.1.47, train GongB, 2026-10-23, `updv` 47; Apple: "bug fixes"),
+diffed against 9A348 (shift map, masked byte compare, all 83 HSM tables,
+landmark decompiles). Only `rkof` and `aopf` changed (the rest: version
+stamps); `aopf` isn't analyzed. `rkof` code moved by 2-58 bytes
+(AppleAPHostLibWx 901.222 → 910.6), and none of what calvados relies on
+changed [Known]: `stream_sync_a2dp.cpp:429` (stub 0xe8f18, still 3000 then
+2500 ms), paging (guard 0x99978, tables 0x1c2a68 and 0x1c2a8c unmoved), the
+arbiter (0x1c5a9c unmoved), the UARP aborts (0xbea50, 0xbcd62/0xbcdaa), the
+gate (0xc6184), the AACP dispatch (0x6cf48 unmoved, identical). Changed:
+- the bud's wired UART frame parser (0x10217c, fed by `b2p_uart`): longer
+  minimum lengths, and an overflow now resets it instead of writing past
+  the buffer;
+- an Inferred RSSI sampler, HSM 0x1c5c30: one state fewer, its action 0
+  one event earlier, a field added;
+- 0x7ba60 (ids 0x67/0x68): no longer skipped when 0xc6184() is false.
+
 ## AAP and AACP (`rkof`, 9A348)
 
 AAP runs on L2CAP PSM 0x1001: `[frame type 2] [service 2]` + body, type 4
