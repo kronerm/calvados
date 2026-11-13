@@ -160,7 +160,8 @@ main as the rolling pre-release `testing`: a release is
   offer only to hold the pods across a lid close so the case tunnels
   through the primary and is asked its version (`calvados firmware
   try-probe-case`, D-Bus `TryProbeCase`): at most 10 % of `FTAB` served,
-  never staged, withdrawn once the case answers or after 3 minutes. It serves exactly what's asked, cut to
+  never staged, withdrawn once the case answers or after 3 minutes
+  (`Failure::NoCase`). It serves exactly what's asked, cut to
   what fits a message (`MAX_DATA`; the pods ask on from there; an unknown
   asset or an offset past the end gets status 0x11), and acks processing
   notifications. `UpdateStatus`: `Downloading` (the engine's, while the

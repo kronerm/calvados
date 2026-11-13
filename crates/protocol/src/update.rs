@@ -140,6 +140,8 @@ pub enum Failure {
     Cancelled,
     /// Nothing at all came back within [`OFFER_ANSWER`] of the offer.
     NoAnswer,
+    /// A case probe ran out of time without the case coming through.
+    NoCase,
 }
 
 impl fmt::Display for Failure {
@@ -164,6 +166,7 @@ impl fmt::Display for Failure {
                 "the AirPods didn't answer: another device may hold their update \
                  channel; disconnect it and retry",
             ),
+            Self::NoCase => f.write_str("the case never came through"),
         }
     }
 }
@@ -530,7 +533,7 @@ impl Updater {
         }
         if self.limit.is_some_and(|limit| now >= limit) {
             tracing::info!("case probe: time's up");
-            return self.cancel();
+            return self.change(|updater| updater.fail(Failure::NoCase));
         }
         let failure = match (self.phase, self.transport) {
             (_, Transport::Lost) => Failure::Lost,
@@ -826,10 +829,7 @@ mod tests {
         assert_eq!(updater.tick(now() + WATCHDOG * 2), []);
         let outputs = updater.tick(now() + PROBE_LIMIT);
         assert_eq!(kinds(&outputs), [0x0c], "rescinded");
-        assert_eq!(
-            statuses(&outputs),
-            [UpdateStatus::Failed(Failure::Cancelled)]
-        );
+        assert_eq!(statuses(&outputs), [UpdateStatus::Failed(Failure::NoCase)]);
     }
 
     #[test]

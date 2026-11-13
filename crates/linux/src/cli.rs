@@ -271,7 +271,12 @@ async fn probe_case(bus: &zbus::Connection, proxy: &CalvadosProxy<'_>) -> anyhow
         }
         match update.0.as_str() {
             "failed" | "done" | "staged" => {
-                println!("The probe is over; the daemon's journal has what the case said.");
+                if update.0 == "failed" && update.2 == "cancelled" {
+                    println!(
+                        "If the case answered, the daemon's journal has its firmware \
+                         (`UARP: the case's firmware`)."
+                    );
+                }
                 return Ok(());
             }
             _ => {}
