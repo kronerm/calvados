@@ -552,3 +552,21 @@ Known unless marked.
   foreign bud or invalid NV data triggers "auto fact rst in 2s" [0x08022b00]. Coupling
   compares bud against bud only (a mismatch starts the bud-to-bud copy); no case-vs-bud
   version check.
+
+## The bud's side of the tunnel open, all branches (Nov 13, rkof 9A348/9B47, static)
+
+Known unless marked. B2P 0x10 [0x15bdd0] → 846d4(3,1) → be4ec case 3 → bee88 (a 0xd/4
+session) → 77ef0 → 76e0c → 106f40 (0x17). Its refusals: transport 3 not enabled
+(always enabled at boot [0x1541fa]), already up (846d4 returns at once, no add, reply
+1), no 0xd/4 session, downstream count 2, slot 3 in use, no free slot, no 0xd endpoint,
+allocation. None reads offer state, role, feature flags or protocol version. Downstream
+2 goes through the same bee88 → 77ef0 → 76e0c → 106f40 path on every close, and the
+held session proves bee88's session exists, so the bud can't be refusing silently
+unless transport 3 were already up; nothing of a refusal reaches a host (only the 0x11
+reply to the case and the bud's log ring). With the case side (above), the open most
+likely never leaves the case. The bud drops transport 3 by itself after ~25 s idle
+(0x8395c) or on link loss (0xd644c) without telling the case; the case's own 14 s idle
+timeout covers that. The hold's release (bf2b0(1), cmd 0xf or 0xd ≠ 6) has no poster
+found; 'AP' 15f60c ("radio no longer wanted", timer 3 via 8cd04(3,10,…)) runs when the
+bud's location changes, e.g. when the case resets the secondary. 9B47: these paths are
+identical (addresses shifted, mostly −0x20), so updating the buds changes nothing here.
