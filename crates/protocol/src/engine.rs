@@ -9,8 +9,8 @@ use std::time::{Duration, Instant};
 
 use crate::MacAddress;
 use crate::aacp::{
-    Activity, AudioSource, ControlCommand, ControlId, CrashLog, Cycle, DeviceRole, EarDetection, HandshakeStatus,
-    KeyType, NoiseControlMode, Packet, Routing, RoutingResponse, crash_log,
+    Activity, AudioSource, ControlCommand, ControlId, CrashLog, Cycle, DeviceRole, EarDetection,
+    HandshakeStatus, KeyType, NoiseControlMode, Packet, Routing, RoutingResponse, crash_log,
 };
 use crate::ble;
 use crate::firmware::ExactVersion;
@@ -1536,7 +1536,41 @@ impl Engine {
                 };
                 session.uarp.id = session.uarp.id.wrapping_add(1);
                 let ack = Message::DownstreamAddedAck { id }.encode(session.uarp.id);
-                vec![Effect::Send(uarp::frame(&ack))]
+                // The case tunnels through the primary only while we hold the
+                // pods across a lid close: ask its version (docs/case.md).
+                let query = (id == uarp::CASE)
+                    .then(uarp::running_version_query)
+                    .into_iter()
+                    .flatten()
+                    .map(|message| {
+                        session.uarp.id = session.uarp.id.wrapping_add(1);
+                        Message::Relay {
+                            downstream: id,
+                            message: &message,
+                        }
+                        .encode(session.uarp.id)
+                    });
+                std::iter::once(ack)
+                    .chain(query)
+                    .map(|message| Effect::Send(uarp::frame(&message)))
+                    .collect()
+            }
+            Some(Received::Relayed {
+                downstream,
+                message,
+            }) => {
+                match Received::parse(message) {
+                    Some(Received::RunningVersion(exact)) if downstream == uarp::CASE => {
+                        tracing::info!(%exact, "UARP: the case's firmware");
+                    }
+                    received => tracing::info!(
+                        downstream,
+                        ?received,
+                        message = ?crate::aacp::HexDump(message),
+                        "UARP: from downstream"
+                    ),
+                }
+                Vec::new()
             }
             received => {
                 if self.updater().is_none() {
@@ -1734,7 +1768,10 @@ mod tests {
         let mut e = engine();
         e.take(now());
         assert_eq!(sends(&feed(&mut e, CONNECTED_DEVICES)), 4);
-        assert!(matches!(e.ownership(), Ownership::Claiming(Handoff::Sent { .. })));
+        assert!(matches!(
+            e.ownership(),
+            Ownership::Claiming(Handoff::Sent { .. })
+        ));
     }
 
     #[test]
@@ -1748,7 +1785,10 @@ mod tests {
         assert_eq!(e.tick(now() + CLAIM_WAIT), [Effect::RouteAudio]);
         assert!(matches!(e.ownership(), Ownership::Owning(_)));
         let later = e.tick(now() + CLAIM_WAIT * 2);
-        assert!(!later.iter().any(|e| matches!(e, Effect::RouteAudio)), "once");
+        assert!(
+            !later.iter().any(|e| matches!(e, Effect::RouteAudio)),
+            "once"
+        );
     }
 
     #[test]
@@ -1760,7 +1800,10 @@ mod tests {
         assert!(feed(&mut e, &set_ownership(true)).is_empty());
         assert!(matches!(e.ownership(), Ownership::Idle));
         let take = e.media_started(now());
-        assert!(take.iter().any(|e| matches!(e, Effect::RouteAudio)), "owned: at once");
+        assert!(
+            take.iter().any(|e| matches!(e, Effect::RouteAudio)),
+            "owned: at once"
+        );
     }
 
     #[test]
@@ -2098,7 +2141,10 @@ mod tests {
     fn the_setup_follows_the_handshake_ack() {
         let mut e = engine();
         let setup = session_setup_frames().map(Effect::Send);
-        assert_eq!(e.handle(Packet::HandshakeAck(HandshakeStatus::Accepted), now()), setup);
+        assert_eq!(
+            e.handle(Packet::HandshakeAck(HandshakeStatus::Accepted), now()),
+            setup
+        );
     }
 
     #[test]
@@ -2361,7 +2407,11 @@ mod tests {
         e.handle(source(mac(PEER), Activity::CALL | Activity::MEDIA), now());
         assert!(e.media_started(now()).is_empty(), "a call, with media too");
         e.handle(source(mac(PEER), Activity::MEDIA), now());
-        assert_eq!(sends(&e.media_started(now())), 4, "ownership + 3 handoff frames");
+        assert_eq!(
+            sends(&e.media_started(now())),
+            4,
+            "ownership + 3 handoff frames"
+        );
         assert_eq!(sends(&e.media_started(now())), 4, "unconfirmed: again");
         feed(&mut e, &set_ownership(true));
         assert!(e.media_started(now()).is_empty(), "confirmed");
@@ -2373,7 +2423,10 @@ mod tests {
         feed(&mut e, CONNECTED_DEVICES);
         e.handle(source(mac(PEER), Activity::MEDIA), now());
         assert_eq!(sends(&e.local_audio(LocalAudio::Media, now())), 4);
-        assert!(e.local_audio(LocalAudio::Media, now()).is_empty(), "still playing");
+        assert!(
+            e.local_audio(LocalAudio::Media, now()).is_empty(),
+            "still playing"
+        );
         assert_eq!(
             sends(&e.local_audio(LocalAudio::Call, now())),
             4,
@@ -2768,8 +2821,14 @@ mod tests {
     fn learns_local_mac_from_the_pods_reply() {
         // Nothing plays: the reply names the host that asked.
         let mut e = session(None);
-        assert!(e.handle(source(MacAddress::new([0; 6]), Activity::empty()), now()).is_empty());
-        assert!(e.handle(source(mac(PEER), Activity::MEDIA), now()).is_empty());
+        assert!(
+            e.handle(source(MacAddress::new([0; 6]), Activity::empty()), now())
+                .is_empty()
+        );
+        assert!(
+            e.handle(source(mac(PEER), Activity::MEDIA), now())
+                .is_empty()
+        );
         assert_eq!(e.local_mac(), None);
         assert_eq!(
             e.handle(source(mac(LOCAL), Activity::empty()), now()),
@@ -2899,7 +2958,10 @@ mod tests {
         #[test]
         fn uarp_waits_for_a_settled_session() {
             let mut e = engine();
-            assert_eq!(kinds(&e.handle(Packet::HandshakeAck(HandshakeStatus::Accepted), now())), []);
+            assert_eq!(
+                kinds(&e.handle(Packet::HandshakeAck(HandshakeStatus::Accepted), now())),
+                []
+            );
             assert_eq!(kinds(&feed(&mut e, CONNECTED_DEVICES)), []);
             assert_eq!(kinds(&settle(&mut e, now())), [], "a connect is fresh");
             assert_eq!(e.next_wake(), Some(now() + STARTUP_WAIT));
@@ -2917,6 +2979,26 @@ mod tests {
             feed(&mut e, CONNECTED_DEVICES);
             assert_eq!(kinds(&e.tick(later())), []);
             assert_eq!(kinds(&from_pods(&mut e, 0x17, &[0, 2], later())), []);
+        }
+
+        #[test]
+        fn the_case_is_asked_its_version_through_the_bud() {
+            let mut e = ready();
+            let fx = from_pods(&mut e, 0x17, &[0, 1], later());
+            assert_eq!(kinds(&fx), [0x18, 0x1b, 0x1b, 0x1b]);
+            let relayed = uarp(&fx)[1..]
+                .iter()
+                .map(|message| {
+                    assert_eq!(message[6..8], [0, 1], "to the case");
+                    message[8..].to_vec()
+                })
+                .collect::<Vec<_>>();
+            assert_eq!(relayed, uarp::running_version_query());
+            // Its answers are only logged; nothing goes to the update.
+            let answer = [&[0, 1][..], &uarp::running_version_query()[0]].concat();
+            assert!(from_pods(&mut e, 0x1b, &answer, later()).is_empty());
+            // The other bud is only acknowledged.
+            assert_eq!(kinds(&from_pods(&mut e, 0x17, &[0, 2], later())), [0x18]);
         }
 
         #[test]

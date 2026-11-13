@@ -136,8 +136,10 @@ main as the rolling pre-release `testing`: a release is
   opcode 0x4F (`[len 2 LE]` + one whole message, ≤ 1007 bytes, no
   fragment header; `Packet::Uarp`; Apple hosts' route, the pods' transport
   0xd). Messages `[type 2] [len 2] [id 2]`, big-endian: `Message` out
-  (Sync, version discovery proposing 4, the offer 0x05, data response
-  0x07, rescind 0x0C, the acks 0x0F and 0x18), `Received` in (0x04
+  (Sync, version discovery proposing 6, the buds' and the case's cap
+  (the case takes offers only at 6), the offer 0x05, data response
+  0x07, rescind 0x0C, the acks 0x0F and 0x18, the downstream relay 0x1B: `[id 2]` + a whole
+  message), `Received` in (0x04
   as `RunningVersion`, 0x06, 0x09 with `Processing` flags: low byte 1
   staged, 2 denied, 3 abandoned, 4 corrupt, the reason above; 0x0D, 0x17;
   the rest only logged), the running-version query (tag 5: `[status 2]
@@ -214,7 +216,11 @@ main as the rolling pre-release `testing`: a release is
   or the last primary change (`uarp_hold`). Once settled, each session
   asks for the running version (`VersionQuery`), unless an update is to
   be offered; the answer is `exact_firmware`. The pods also announce the
-  other bud as downstream (0x17, acked with 0x18) and offer a dynamic
+  other bud as downstream (0x17, acked with 0x18), and the case as
+  downstream 1 while it tunnels through the primary (only when a host holds
+  the pods across a lid close with an update offered, docs/case.md): it's
+  asked its version through the relay, and its answers are logged
+  (`UARP: the case's firmware`, `UARP: from downstream`). They offer a dynamic
   `MTIC` asset (usage metrics, left unanswered); nothing is solicited.
   **Never offer the pods an asset tagged `MTIC`, `LOGS` or `CRSH`**: that
   path aborts them [rkof 0xbcd82, 0xbcdca].

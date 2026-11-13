@@ -139,7 +139,9 @@ impl Packet {
     pub fn parse(frame: &[u8]) -> Option<Self> {
         match frame.split_first_chunk::<4>()? {
             (&frame::HANDSHAKE_ACK_MAGIC, rest) => {
-                let status = rest.first_chunk::<2>().map_or(0, |s| u16::from_le_bytes(*s));
+                let status = rest
+                    .first_chunk::<2>()
+                    .map_or(0, |s| u16::from_le_bytes(*s));
                 Some(Self::HandshakeAck(match status {
                     0 => HandshakeStatus::Accepted,
                     status => HandshakeStatus::Refused(status),

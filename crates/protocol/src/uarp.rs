@@ -17,8 +17,13 @@ pub const OPCODE: u16 = 0x4F;
 /// The longest message one frame carries [rkof 0x6d6d0].
 pub(crate) const MAX_MESSAGE: usize = 1007;
 
-/// The protocol version proposed; 7B21 answers 4, 9A348 takes up to 6.
-const PROTOCOL_VERSION: u16 = 4;
+/// The protocol version proposed: 9A348's buds and case both cap it at 6
+/// (7B21 answered 4), and the case takes an offer only at 6 (docs/case.md);
+/// below 5 the bud would also want each relayed message acked.
+const PROTOCOL_VERSION: u16 = 6;
+
+/// The case's downstream id, behind the primary bud (the other bud is 2).
+pub const CASE: u16 = 1;
 
 /// The header: type, payload length, message id (big-endian u16 each).
 const HEADER_LEN: usize = 6;
@@ -41,6 +46,7 @@ enum Sent {
     Rescind = 0x0C,
     ProcessingAck = 0x0F,
     DownstreamAddedAck = 0x18,
+    DownstreamRelay = 0x1B,
 }
 
 /// The types understood when received.
@@ -52,6 +58,7 @@ enum ReceivedType {
     Processing = 0x09,
     AssetAvailableAck = 0x0D,
     DownstreamAdded = 0x17,
+    DownstreamRelay = 0x1B,
 }
 
 /// The accessory information tag asked for: four u32, major, minor,
@@ -92,6 +99,11 @@ pub enum Message<'a> {
     },
     DownstreamAddedAck {
         id: u16,
+    },
+    /// A whole message for a downstream accessory, e.g. the case.
+    Relay {
+        downstream: u16,
+        message: &'a [u8],
     },
 }
 
@@ -148,6 +160,13 @@ impl Message<'_> {
             Self::DownstreamAddedAck { id } => {
                 (Sent::DownstreamAddedAck, [be16(0), be16(id)].concat())
             }
+            Self::Relay {
+                downstream,
+                message,
+            } => (
+                Sent::DownstreamRelay,
+                [&be16(downstream)[..], message].concat(),
+            ),
         };
         message(kind, id, &payload)
     }
@@ -183,7 +202,7 @@ pub(crate) fn parse_frame(body: &[u8]) -> IResult<&[u8], Vec<u8>> {
 /// A message from the pods, as far as calvados cares.
 #[derive(Debug, Clone, Copy)]
 #[cfg_attr(test, derive(PartialEq, Eq))]
-pub enum Received {
+pub enum Received<'a> {
     /// The offer acknowledged (every field echoed).
     OfferAck { asset: u16 },
     /// Asset Data Request: serve `length` bytes at `offset`.
@@ -194,8 +213,11 @@ pub enum Received {
     },
     /// Asset Processing Notification: see [`Processing`].
     Processing { asset: u16, flags: u16 },
-    /// Downstream Endpoint Added: over AACP the other bud, unasked.
+    /// Downstream Endpoint Added: over AACP the other bud, unasked, and
+    /// the case ([`CASE`]) while it tunnels through the primary.
     DownstreamAdded { id: u16 },
+    /// A downstream accessory's whole message.
+    Relayed { downstream: u16, message: &'a [u8] },
     /// The answer to [`running_version_query`].
     RunningVersion(ExactVersion),
     /// Sync, version discovery's answer, a rescind's ack, another
@@ -247,9 +269,9 @@ fn split(message: &[u8]) -> Option<(u16, &[u8])> {
     Some((kind, payload.get(..usize::from(len))?))
 }
 
-impl Received {
+impl<'a> Received<'a> {
     /// `None` when malformed (shorter than its type needs).
-    pub fn parse(message: &[u8]) -> Option<Self> {
+    pub fn parse(message: &'a [u8]) -> Option<Self> {
         let (kind, payload) = split(message)?;
         let be16 = |at: usize| {
             payload
@@ -276,6 +298,10 @@ impl Received {
                 flags: be16(2)?,
             },
             ReceivedType::DownstreamAdded => Self::DownstreamAdded { id: be16(0)? },
+            ReceivedType::DownstreamRelay => Self::Relayed {
+                downstream: be16(0)?,
+                message: payload.get(2..)?,
+            },
             // `[status 2] [tag 4] [len 4]` + value.
             ReceivedType::InformationResponse => {
                 let value = || {
@@ -311,7 +337,7 @@ mod tests {
     fn the_query_is_three_whole_messages() {
         let [sync, discovery, request] = running_version_query();
         assert_eq!(sync, [0, 0, 0, 0, 0, 1]);
-        assert_eq!(discovery, [0, 1, 0, 2, 0, 2, 0, 4]);
+        assert_eq!(discovery, [0, 1, 0, 2, 0, 2, 0, 6]);
         assert_eq!(request, [0, 3, 0, 4, 0, 3, 0, 0, 0, 5]);
     }
 
@@ -391,7 +417,8 @@ mod tests {
 
     #[test]
     fn received_messages() {
-        let parse = |hex: &str| Received::parse(&hex::decode(hex).unwrap());
+        let parse =
+            |hex: &str| Received::parse(Box::leak(hex::decode(hex).unwrap().into_boxed_slice()));
         assert_eq!(
             parse("00060008000500010000253c0032"),
             Some(Received::DataRequest {
@@ -432,6 +459,28 @@ mod tests {
             Some(Received::Other { kind: 0x0a0a })
         );
         assert_eq!(parse("0000"), None);
+    }
+
+    #[test]
+    fn relays_wrap_whole_messages() {
+        let sync = Message::Sync.encode(1);
+        let relay = Message::Relay {
+            downstream: CASE,
+            message: &sync,
+        };
+        assert_eq!(
+            hex::encode(relay.encode(4)),
+            "001b0008000400010000000000 01".replace(' ', "")
+        );
+        let reply = hex::decode("001b0008000900010000000000 01".replace(' ', "")).unwrap();
+        assert_eq!(
+            Received::parse(&reply),
+            Some(Received::Relayed {
+                downstream: CASE,
+                message: &sync
+            })
+        );
+        assert_eq!(Received::parse(&reply[..7]), None);
     }
 
     #[test]
