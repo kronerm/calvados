@@ -21,6 +21,10 @@ const ASSET: u16 = 1;
 /// offer): rescind. The pods keep no timeout of their own.
 pub(crate) const WATCHDOG: Duration = Duration::from_secs(60);
 
+/// The pods acknowledge an offer at once; silence means another host holds
+/// their UARP (one per link, the first to send any).
+const OFFER_ANSWER: Duration = Duration::from_secs(10);
+
 /// A case probe serves this much of `FTAB` at most, so it never stages.
 const PROBE_CAP: u32 = 10;
 
@@ -134,6 +138,8 @@ pub enum Failure {
     /// The transport kept dropping, or stayed down.
     Lost,
     Cancelled,
+    /// Nothing at all came back within [`OFFER_ANSWER`] of the offer.
+    NoAnswer,
 }
 
 impl fmt::Display for Failure {
@@ -154,6 +160,10 @@ impl fmt::Display for Failure {
             Self::Stalled => f.write_str("the transfer stalled"),
             Self::Lost => f.write_str("the connection was lost"),
             Self::Cancelled => f.write_str("cancelled"),
+            Self::NoAnswer => f.write_str(
+                "the AirPods didn't answer: another device may hold their update \
+                 channel; disconnect it and retry",
+            ),
         }
     }
 }
@@ -283,6 +293,8 @@ pub struct Updater {
     drops: u8,
     /// How much of `FTAB` the pods have, by their last request.
     position: u32,
+    /// When the pods must have answered the offer by.
+    answer_by: Option<Instant>,
 }
 
 impl Updater {
@@ -300,6 +312,7 @@ impl Updater {
             deadline: limit.map_or(now + WATCHDOG, |limit| limit.min(now + WATCHDOG)),
             drops: 0,
             position: 0,
+            answer_by: None,
         }
     }
 
@@ -341,7 +354,10 @@ impl Updater {
 
     /// When [`Self::tick`] is due.
     pub fn next_wake(&self) -> Option<Instant> {
-        self.status().is_active().then_some(self.deadline)
+        let deadline = self
+            .answer_by
+            .map_or(self.deadline, |at| at.min(self.deadline));
+        self.status().is_active().then_some(deadline)
     }
 
     /// UARP may be sent (again): offer. Re-offering the identical package
@@ -358,6 +374,7 @@ impl Updater {
             updater.transport = Transport::Up;
             updater.next_id = 1;
             updater.watch(now + WATCHDOG);
+            updater.answer_by = Some(now + OFFER_ANSWER);
             if let Phase::Deferred = updater.phase {
                 updater.phase = Phase::Offered;
             }
@@ -376,6 +393,7 @@ impl Updater {
             self.transport = Transport::Lost;
             return Vec::new();
         }
+        self.answer_by = None;
         self.change(|updater| {
             updater.drops += 1;
             updater.transport = Transport::Lost;
@@ -397,6 +415,7 @@ impl Updater {
             );
             return Vec::new();
         };
+        self.answer_by = None;
         self.change(|updater| updater.handle(received, now))
     }
 
@@ -498,6 +517,14 @@ impl Updater {
     /// The watchdog: nothing asked for in time (rescinded), or the
     /// transport stayed down.
     pub fn tick(&mut self, now: Instant) -> Vec<Output> {
+        if let Some(at) = self.answer_by
+            && self.status().is_active()
+            && now >= at
+        {
+            tracing::warn!("firmware update: the pods don't answer");
+            self.answer_by = None;
+            return self.change(|updater| updater.fail(Failure::NoAnswer));
+        }
         if !self.status().is_active() || now < self.deadline {
             return Vec::new();
         }
@@ -656,6 +683,11 @@ mod tests {
             .unwrap()
     }
 
+    /// The pods' acknowledgement of the offer.
+    fn offer_ack() -> Vec<u8> {
+        from_pods(0x0d, 9, &[0, 0, 0, 0, 0, 1, 0, 1])
+    }
+
     fn started() -> Updater {
         let mut updater = Updater::new(package(), Goal::Install, now());
         updater.up(now());
@@ -776,6 +808,7 @@ mod tests {
         let ftab = package().ftab();
         let mut updater = Updater::new(package(), Goal::ProbeCase, now());
         updater.up(now());
+        updater.received(&offer_ack(), now());
         assert_eq!(updater.next_wake(), Some(now() + WATCHDOG));
         // Headers and the first tenth of FTAB are served.
         assert_eq!(kinds(&updater.received(&request(0, 0x2c), now())), [0x07]);
@@ -802,6 +835,7 @@ mod tests {
     #[test]
     fn the_watchdog_rescinds() {
         let mut updater = started();
+        updater.received(&offer_ack(), now());
         assert_eq!(updater.next_wake(), Some(now() + WATCHDOG));
         assert_eq!(updater.tick(now() + WATCHDOG / 2), []);
         let outputs = updater.tick(now() + WATCHDOG);
@@ -809,6 +843,16 @@ mod tests {
         assert_eq!(
             statuses(&outputs),
             [UpdateStatus::Failed(Failure::NotStarted)]
+        );
+
+        // Silence from the start: another host holds the pods' UARP.
+        let mut updater = started();
+        assert_eq!(updater.next_wake(), Some(now() + OFFER_ANSWER));
+        let outputs = updater.tick(now() + OFFER_ANSWER);
+        assert_eq!(kinds(&outputs), [0x0c]);
+        assert_eq!(
+            statuses(&outputs),
+            [UpdateStatus::Failed(Failure::NoAnswer)]
         );
 
         let mut updater = started();

@@ -92,6 +92,7 @@ fn failure_code(failure: Failure) -> (u8, u8) {
         Failure::Stalled => (7, 0),
         Failure::Lost => (8, 0),
         Failure::Cancelled => (9, 0),
+        Failure::NoAnswer => (10, 0),
     }
 }
 
@@ -104,6 +105,7 @@ fn failure_of(code: u8, argument: u8) -> Option<Failure> {
         7 => Failure::Stalled,
         8 => Failure::Lost,
         9 => Failure::Cancelled,
+        10 => Failure::NoAnswer,
         _ => return None,
     })
 }

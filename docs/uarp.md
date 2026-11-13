@@ -297,3 +297,16 @@ Other tags → status 0x1c.
 - Semantics of 0x1d/0x1e, 0x1f–0x22 tables, 0x88B29104–0x88B2911x names, vendor
   properties 1/2 content, ep[0]/ep[1] numeric limits (runtime), statistics tag 7 field
   meanings, what sets ctx+0x11c (sp+0x14c).
+
+## One host at a time over AACP (Nov 13)
+
+Known: the bud keeps a two-slot endpoint table keyed by transport
+(0x76e0c: 4 GATT, 0xd AACP, 0xe), so there's one AACP UARP endpoint for
+all hosts. 0xbea24 creates it for a host only when none of type 0xd
+exists (and drops a GATT one); 0x9b2d4, from the host-link drop path
+(0x98534), removes a host's. Observed: the phone's version query at
+15:30:33 UTC was answered, the laptop's identical one 6 s later and its
+offer got nothing at all; at 16:27 local, with the phone away, the laptop
+was answered. Inferred: the first host to send UARP on its link keeps it
+until that link drops (whether creation waits for the first 0x4F or the
+AACP connect wasn't traced).

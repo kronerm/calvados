@@ -13,7 +13,7 @@ use crate::aacp::{
     HandshakeStatus, KeyType, NoiseControlMode, Packet, Routing, RoutingResponse, crash_log,
 };
 use crate::ble;
-use crate::firmware::ExactVersion;
+use crate::firmware::{ExactVersion, Firmware};
 use crate::news::News;
 use crate::protocol::{
     self, handshake, hijack_sequence, request_notifications, session_setup_frames, set_cycle,
@@ -233,6 +233,10 @@ pub struct Engine {
     /// The pods whose crash logs this run kept: fetching doesn't clear
     /// them, and they're announced again every session.
     crash_logs_kept: Option<MacAddress>,
+    /// The last pods' firmware, kept past [`CARRY_OVER`]: the pods serve
+    /// UARP to one host per link, the first to ask, so the exact version is
+    /// asked only while unknown (or after the pods report another build).
+    firmware_known: Option<(MacAddress, Firmware)>,
 }
 
 /// The AACP session.
@@ -470,6 +474,14 @@ impl Engine {
             true => self.state.carried_over(),
             false => DeviceState::default(),
         };
+        if let Some((_, firmware)) = self
+            .firmware_known
+            .as_ref()
+            .filter(|(known, _)| *known == pods)
+            && self.state.firmware.exact.is_none()
+        {
+            self.state.firmware = firmware.clone();
+        }
         // A running or staged update carries on once the session settles;
         // one that's over (done, failed, refused) has been seen and makes way
         // for the firmware.
@@ -491,6 +503,7 @@ impl Engine {
         };
         let redial = self.settings.auto_connect && !self.state.is_stowed();
         tracing::info!(redial, "session ended");
+        self.firmware_known = Some((pods, self.state.firmware.clone()));
         self.link = Link::Down {
             last: Some(Ended { pods, at: now }),
             dial: redial.then_some(Dial {
@@ -1395,6 +1408,7 @@ impl Engine {
         };
         self.session()
             .is_some_and(|session| update || matches!(session.uarp.query, VersionQuery::Due))
+            && (update || self.state.firmware.exact.is_none())
     }
 
     /// Once UARP may be sent: offer (or resume) the update, else ask for
@@ -1635,7 +1649,9 @@ impl Engine {
     fn share(&self) -> Vec<Effect> {
         let queried = self.session().and_then(|session| match session.uarp.query {
             VersionQuery::Answered(exact) => Some(exact),
-            VersionQuery::Due | VersionQuery::Sent => None,
+            // Asked in an earlier session.
+            VersionQuery::Due => self.state.firmware.exact,
+            VersionQuery::Sent => None,
         });
         queried
             .map(News::Firmware)
@@ -3053,6 +3069,30 @@ mod tests {
         }
 
         #[test]
+        fn the_exact_version_is_asked_once_per_build() {
+            let mut e = ready();
+            running_version(&mut e, [9, 0, 348]);
+            // Hours later, the same pods: known, so UARP stays free for a
+            // host that updates (the pods serve one per link).
+            let back = later() + CARRY_OVER * 60;
+            e.disconnected(later());
+            e.connected(mac(PODS), back);
+            e.handle(Packet::HandshakeAck(HandshakeStatus::Accepted), back);
+            feed_at(&mut e, CONNECTED_DEVICES, back);
+            settle(&mut e, back);
+            assert_eq!(kinds(&e.tick(back + UARP_SETTLE)), []);
+            assert_eq!(e.state().firmware.exact, "9.0.348".parse().ok());
+            // Another build reported: asked again.
+            let info = crate::aacp::device_information::DeviceInformation {
+                name: None,
+                model: None,
+                firmware: Some("91.3431046004000000.29".into()),
+            };
+            let fx = e.handle(Packet::DeviceInformation(info), back + UARP_SETTLE);
+            assert_eq!(kinds(&fx), [0x00, 0x01, 0x03]);
+        }
+
+        #[test]
         fn the_cycle_set_is_told_and_shared() {
             use crate::aacp::NoiseControlMode;
             let mut e = ready();
@@ -3215,6 +3255,7 @@ mod tests {
         fn the_watchdog_and_cancelling_rescind() {
             let mut e = ready();
             running(&mut e);
+            from_pods(&mut e, 0x0d, &[0, 0, 0, 0, 0, 1, 0, 1], later());
             assert!(e.next_wake().is_some_and(|wake| wake <= later() + WATCHDOG));
             let fx = e.tick(later() + WATCHDOG);
             assert_eq!(kinds(&fx), [0x0c]);

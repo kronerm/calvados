@@ -217,9 +217,16 @@ main as the rolling pre-release `testing`: a release is
   aborts it** [rkof 0xbea70], so nothing UARP goes out unless the session
   is settled (`uarp_ready`: handshake acked and answering, a live battery,
   the primary known) and `UARP_SETTLE` (5 s) has passed since the connect
-  or the last primary change (`uarp_hold`). Once settled, each session
-  asks for the running version (`VersionQuery`), unless an update is to
-  be offered; the answer is `exact_firmware`. The pods also announce the
+  or the last primary change (`uarp_hold`). Once settled, a session
+  asks for the running version (`VersionQuery`) only while it's unknown
+  for these pods (`Engine::firmware_known`, in memory, dropped when 0x1D
+  reports another build), unless an update is to be offered; the answer
+  is `exact_firmware`. The pods serve UARP over AACP to one host per link,
+  the first to send any (one endpoint for transport 0xd, [rkof 0x76e0c,
+  0xbea24], freed when that host's link drops [0x9b2d4]): a second host's
+  messages get no answer at all (Nov 13: the phone's query took it, the
+  laptop's offer went unanswered), so an offer unanswered for 10 s fails
+  as `Failure::NoAnswer`. The pods also announce the
   other bud as downstream (0x17, acked with 0x18), and the case as
   downstream 1 while it tunnels through the primary (only when a host holds
   the pods across a lid close with an update offered, docs/case.md): it's
