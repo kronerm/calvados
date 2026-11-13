@@ -120,7 +120,8 @@ false), byte 8 the lid (bit 3 only docked with the lid closed, 0x10
 always, an open counter in bits 0-2), **byte 10 in plaintext: bits 2-3 the
 host ACLs plus one while one is being established (the guard's terms),
 capped at 3; bits 0-1 the audio's kind**, bytes 11-26 encrypted. The worn
-capture in `ble.rs` reads 2 hosts. Nothing stops it while hosts are
+capture in `ble.rs` reads 2 hosts. Observed Nov 13 15:11:35, the lid
+opening: 0, then 1 0.2 s later (the phone), then 2 10 s later (the laptop). Nothing stops it while hosts are
 connected. Inferred: 181.25 ms apart, 20 ms for 10 s after the lid opens.
 A short format (`07 11 06` + 16 encrypted bytes) exists too; its byte 8 is
 ciphertext, so the Android scan's lid filter drops about half of them.

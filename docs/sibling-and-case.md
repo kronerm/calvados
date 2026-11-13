@@ -157,6 +157,17 @@ Return codes index the name table at STFC 0x0806d29c: 0 "R2L", 1 "L2R", 2 APPLY_
   ESM1/PDFW to 0x2d-0x30 [be4ec table, bf950], each only if the file exists; no writer of these
   files was found, so whether this model ever relays case firmware through a bud is not established.
 - No bud-side check that the case is on a matching version was found.
+- **A host can't reach the case's UARP** (9B47 NERF, loaded at 0, Known code;
+  event meanings from Nordic's peer manager, Inferred). Its UARP
+  characteristics need an encrypted link (0x3bda8: write and CCCD access
+  `0x0202`, Just Works). The case grants LE security only during a Find My
+  owner pairing: its security-parameters request (0x3bbdc, case 5) rejects
+  when already Find My paired ("Already paired. Reject request.") and
+  otherwise only while a pairing session flag is set. Its sends are also
+  gated on Find My paired and encrypted (0x3cfdc). Find My pairing needs
+  Apple's servers (the S1-S4 and BAA certificates in its strings), so only
+  an Apple host updates the case. Observed Nov 13: with the lid open,
+  nothing near the laptop advertised the Find My pairing service (0xFD44).
 
 ## Bottom line: a host stages / applies FTAB on the primary only
 Known:
