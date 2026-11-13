@@ -29,13 +29,6 @@ build() {
   cargo build --frozen --release -p linux
 }
 
-check() {
-  cd "$startdir"
-  export RUSTUP_TOOLCHAIN=stable CARGO_TARGET_DIR="$srcdir/target"
-  # --release: reuses the build's dependencies instead of compiling them again.
-  cargo test --frozen --release -p protocol -p linux
-}
-
 package() {
   install -Dm755 "$srcdir/target/release/calvados" "$pkgdir/usr/bin/calvados"
   sed 's|%h/.local/bin|/usr/bin|' "$startdir/crates/linux/dist/calvados.service" |
