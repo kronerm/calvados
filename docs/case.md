@@ -438,3 +438,16 @@ vendor page 0xFF00, report ID 1, 64 bytes. On Linux it's hidraw (root
 only without a udev rule). Nothing was sent to it. The firmware's
 `transport:e<uart|usb|tunnel>` and the UARP host priority table (tid 3,
 priority 9, Inferred USB) point to UARP over this interface.
+- Re-read (STFC 9A348): the HID interface is inert. OUT reports go to a
+  `return 0` handler (0x080352f7, via 0x0800cd88), SET_REPORT data is
+  ignored, nothing is ever sent IN. The report descriptor goes on with a
+  Consumer Control collection (ID 3: next, previous, play/pause).
+  Enumeration starts on any Rp level at CC (0x0803b8c4), regardless of the
+  lid or the buds. A CDC-ACM port (CLI or B2P/FWUP pipe, "usbTxService") is
+  appended only after the case CLI's `crabapple` unlock (0x08042e34,
+  string 0x0806da3c), and the CLI is on UART or tunnelled through a bud.
+  The CLI's `usb side:… eusb:… durant:<app|dfu> reset:…` (0x08041b28)
+  routes the data lines to a bud's pins and can put it into DFU; "Wired
+  bud" (0x08037580) opens a FWUP pipe to a bud. Inferred: factory paths.
+  So over USB a host can neither update the case nor reach the buds
+  without the case CLI.
