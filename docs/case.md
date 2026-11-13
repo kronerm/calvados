@@ -570,3 +570,13 @@ timeout covers that. The hold's release (bf2b0(1), cmd 0xf or 0xd ≠ 6) has no 
 found; 'AP' 15f60c ("radio no longer wanted", timer 3 via 8cd04(3,10,…)) runs when the
 bud's location changes, e.g. when the case resets the secondary. 9B47: these paths are
 identical (addresses shifted, mostly −0x20), so updating the buds changes nothing here.
+
+## Observed Nov 13, 23:05 (9A348, laptop, plain hold, no 0x15 polling)
+
+Lid open ~1 min before, case charging. Held at 10 % from 23:06:24; lid closed
+~23:06:27 for 2m20s: the link held throughout, the secondary dropped at +4 s, no 0x17
+for downstream 1. The probe's 3-minute limit rescinded at 23:08:52 (lid open since
+23:08:47). Second close ~23:08:55: the primary went silent and ended the link (0x13)
+31 s later, then booted (27 s up at 23:09:54), as in the 22:20 run, so the 31 s
+release on a second close isn't the polling's doing (here the offer was already
+rescinded, though).
