@@ -404,3 +404,13 @@ in the closed case before 2 s, the case's exact tag-5 value, and ds 3's idle tim
   use, no host endpoint), none expected here. Suspects (Inferred): the
   secondary in flux at 2-3 s (the phone dropped at the close), or the
   primary's radio bit clear in the closed case.
+- Phone off, laptop the only host (17:29-17:32): four closes, the first
+  while the transfer ran (2-4 %, it went on with the lid closed), three
+  while held at 10 %. Same result: only downstream 2, never 1. With no
+  other host to drop, every close went the same way: `PrimaryBud` and the
+  secondary `Disconnected` 4.1 s after the close, for as long as the lid
+  stayed closed; back 2-3 s after it opened, announced again as 2. So the
+  secondary is still there at the case's 2 s and 3 s checks, the phone's
+  drop isn't the cause, and an active transfer doesn't help. Left open:
+  the case's config +0xc (no timer at all without it), the primary's S1
+  radio bit, and the apply flag.
