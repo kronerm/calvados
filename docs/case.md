@@ -592,3 +592,13 @@ for downstream 1. The probe's 3-minute limit rescinded at 23:08:52 (lid open sin
 31 s later, then booted (27 s up at 23:09:54), as in the 22:20 run, so the 31 s
 release on a second close isn't the polling's doing (here the offer was already
 rescinded, though).
+
+## Observed Nov 13, 23:44 (9A348, laptop, plain hold, Right primary)
+
+Right made primary (left docked first), so the case's pick is tid 0 with no doubled
+retry. Held from 23:45:29; closes ~23:45:32 (opened ~23:46:06) and ~23:46:10 (opened
+~23:46:44), the second within ~5 s of opening. The link held through both (no 31 s
+release this time), the secondary dropped at +4 s each time and was re-announced as
+downstream 2 on opening; no downstream 1. So the side of the primary isn't it either.
+Every condition read statically passes on both sides, yet the case never comes
+through; whatever fails logs only on the case's or the bud's UART.
