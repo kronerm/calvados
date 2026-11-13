@@ -544,7 +544,13 @@ Known unless marked.
   ulp needs ~30 s, the docked reset hits only a bud with its radio off. Transition table
   12×12 at 0x0806cd80, entries 0x0806ce40, exits 0x0806ce10; the 30 s presence limit at
   0x20026710. The queued send 0x0801c4ec has a per-bud mode [0x20026580+bud·4] (1 fail,
-  2 queue) whose setter wasn't traced. Left: the role pick, that mode, or the bud's reply.
+  2 queue): mode 0 (send now) for a charging or not-charging bud, 1 only in idle,
+  search and presence (FUN_080209c0 levels [0x0801c6fc]). Role pick FUN_0801e074: per tid,
+  present AND cached S0 bit 1 (rkof 0x1586cc, 0xc61a4, Inferred "link owner"); one
+  claimant → it, both → tid 0, neither → nothing. tid = bud index, 0 "R Bud", 1 "L Bud"
+  [0x0806e0ec]. Every other failure on the 0x10 path logs (only on the case's UART). Left:
+  the open went to the other bud (stale or doubled S0 bit 1), or the bud's reply.
+  Test: Right as primary (tid 0, no doubled retry, also the both-claim pick).
 - If both buds report S0 bit 1, the role pick FUN_0801e074 returns 2 → tid 0 [0x08012708],
   which may be the secondary (no host session; it would answer state 0).
 - No attempt counter; the retry flag [0x20036188+0x1c] is re-armed on lid open.
