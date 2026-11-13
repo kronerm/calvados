@@ -310,6 +310,34 @@ CLOSE raises is not established. The record's AMCL ring shows the object
 going S0x14 → S0x15 on event 8 at 1956.022 s, and the crash 2.5007 s
 later.
 
+### Resets that leave no crash log
+
+Only the RTKit exception entry `0x182d28` writes the RAM log the next
+boot saves: asserts (`0x1823c`), faults, and the RTKit watchdog's
+pre-expiry (`0x182cfc`). The orderly reset `0x1c1f0` writes none. Its
+main caller is the Shutdown Manager (`0x15f804(reason)`, the reason kept
+in NVRAM `stn_rs`, names from the shell table `0x1d5954`): 1 uvlo,
+2 case_uvp, 3 case_reset, 4 hard_reset, 5 soft_reset, 6 assert (the only
+one with a log), 7 safety_fault. The case asks for most of them over B2P
+[handler `0x158d6c`]: 0x60 → case_reset unless UARP is busy (`0xbe420`),
+0x5c → soft_reset, 0x110 → case_uvp.
+
+The case resets docked buds (STFC): 4 s after the lid closes
+[`0x0801f18a`] each bud whose radio is off is reset (state 9, B2P 0x60,
+"reset attempt %d"; a CRABS hardware reset if that fails); a bud still
+holding a host is left until its radio goes off, then reset 1 s later.
+Observed: every put-away on Nov 12-13 was followed by a boot 1-3 s after
+the session ended (the next session's 0x2B uptime), and the secondary
+drops ~4 s after each close. So a short uptime after the buds were in the
+closed case is this, not a crash. A host can't read the reason: it isn't
+in any AACP packet (the case gets it, record 0x188/6, with 3, 5 and 6
+mapped to 0); a crash log's `SHUT` section has it (`0x15f7e0`, 0x48
+bytes), and the pods' MTIC metrics asset might (untested).
+Nov 13 19:14 (buds in ears, the phone's Bluetooth turned off mid-stream):
+a boot ~3 s after the phone's session ended, no crash log, so one of the
+log-less reasons or a reset below the AP (PMU watchdog, brown-out);
+nothing found turns a vanished A2DP source into a reset.
+
 ## A new session
 
 What the pods send a new AACP session, what holds part of it back, and the
