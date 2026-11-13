@@ -349,3 +349,25 @@ Risks: step 3 means a real staging that the case may B2B-copy and apply. A 0x4F 
 non-primary aborts (rkof 0xbea70). The hold drops every other host and keeps the buds out
 of ULP. Not established: a hold without a newer image, whether the bud accepts a page
 in the closed case before 2 s, the case's exact tag-5 value, and ds 3's idle timeout.
+
+## Additions (Nov 13, STFC 9A348 base 0x08001800, rkof 9A348)
+
+- The case's offer gate for the tunnel (tid 0/1), FUN_08015138 [Known]: config
+  bytes +0xc and +0xd set, not applying, the offer newer than its active and
+  pending versions, and `[0x200350c8+0x46] > 5`, stored by FUN_08015378
+  (0x0801539c, logs "Prot %d %s"): Inferred the negotiated UARP protocol
+  version, so the case wants 6 or more. calvados proposes 4 to the buds;
+  proposed to the case, it would get "Deny tunnel(%u) offer".
+- STFC, STFW and NERF are signed (0xCCD28106) and checked ("Attempting Dev
+  Sig Check", FUN_08013784), not personalized; only R1FW needs a ticket. The
+  tunnel path has no Find My or host-identity check that was found.
+- The case MCU flashes the nRF itself from a staged NERF ("Apply BLE"
+  0x0800349c). A refused apply logs "No Apply %u %u" and sets the deferred
+  flag `[0x20034fc8+0x37]`, retried by FUN_08012f34 at a lid close. What
+  starts the first apply after a tunnel staging, without a host's 0x0A, is
+  open.
+- The bud's payload filter (fPayloadReady 0xbcfa8) takes FTAB, LTAB, RTAB
+  and HSML and skips everything else; every rkof file write site is
+  firm.00/01, mani.00, 0x19b90's file or remotefs, so store-and-forward is
+  out. Transports 0x1a/0x1b are registered at 0x1541c6 and set only by the
+  case's B2P message 0x10 or a byte-stream adapter, never by a host.
