@@ -426,3 +426,15 @@ in the closed case before 2 s, the case's exact tag-5 value, and ds 3's idle tim
   link is a direct input (Inferred: what blocks the tunnel under our hold);
   'AP''s methods (registered near 0x161cbc) and coup_st's sources
   (0x200c200c+0x74, 0xc56b2/0xc58b4/0xc592c) are unresolved.
+
+## USB (Observed Nov 13)
+
+Plugged into the laptop with a data cable, the case enumerates at once
+(lid and buds irrelevant): `05ac:139e` "MagSafe Charging Case (USB-C)",
+Apple Inc., bcdDevice 47.08, full speed, 500 mA, one interface, HID class
+0/0, interrupt endpoints 0x81 in and 0x01 out. Report descriptor
+`06 00 ff 09 01 a1 01 09 01 85 01 15 00 26 ff 00 75 08 95 40 82 22 01 c0`:
+vendor page 0xFF00, report ID 1, 64 bytes. On Linux it's hidraw (root
+only without a udev rule). Nothing was sent to it. The firmware's
+`transport:e<uart|usb|tunnel>` and the UARP host priority table (tid 3,
+priority 9, Inferred USB) point to UARP over this interface.
