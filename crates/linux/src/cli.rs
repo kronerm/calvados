@@ -22,7 +22,10 @@ usage: calvados                      run the daemon
        calvados set cycle toggle anc|transparency|adaptive
        calvados firmware status     the firmware, the latest release, an update
        calvados firmware update     update the AirPods to the latest release
-       calvados firmware cancel     stop an update";
+       calvados firmware cancel     stop an update
+       calvados firmware try-probe-case
+                                    ask the case its version through a bud
+                                    (needs a newer release; never installs)";
 
 #[zbus::proxy(
     interface = "dev.kroner.Calvados1",
@@ -58,6 +61,7 @@ trait Calvados {
     fn peer_update(&self) -> zbus::Result<WirePeerUpdate>;
     fn start_update(&self) -> zbus::Result<()>;
     fn cancel_update(&self) -> zbus::Result<()>;
+    fn try_probe_case(&self) -> zbus::Result<()>;
     #[zbus(property)]
     fn auto_switch(&self) -> zbus::Result<bool>;
     #[zbus(property)]
@@ -110,6 +114,7 @@ pub async fn run(args: &[String]) -> anyhow::Result<()> {
         ["firmware", "status"] => firmware_status(&proxy).await,
         ["firmware", "update"] => firmware_update(&bus, &proxy).await,
         ["firmware", "cancel"] => proxy.cancel_update().await.map_err(failure),
+        ["firmware", "try-probe-case"] => probe_case(&bus, &proxy).await,
         _ => anyhow::bail!("{USAGE}"),
     }
 }
@@ -233,6 +238,40 @@ async fn firmware_update(bus: &zbus::Connection, proxy: &CalvadosProxy<'_>) -> a
             }
             "done" => return Ok(()),
             "failed" => anyhow::bail!("the update failed: {}", update.2),
+            _ => {}
+        }
+        if events.next().await.is_none() {
+            anyhow::bail!("lost the daemon");
+        }
+    }
+}
+
+/// Hold the pods with an offer that never stages, for the case to answer
+/// through the primary once the lid closes; follow it until it ends.
+async fn probe_case(bus: &zbus::Connection, proxy: &CalvadosProxy<'_>) -> anyhow::Result<()> {
+    let mut events = events(bus).await?;
+    proxy.try_probe_case().await.map_err(failure)?;
+    println!(
+        "Probing the case: both AirPods in the case, the lid open, the case\n\
+         charging. Once this shows the transfer under way, close the lid for\n\
+         about 10 seconds, then open it. The firmware is never staged; the probe\n\
+         ends once the case answers, or after 3 minutes (the daemon's journal\n\
+         has the answer: `UARP: the case's firmware`)."
+    );
+    let mut last = None;
+    loop {
+        let update = proxy.update().await.map_err(failure)?;
+        if last.as_ref() != Some(&update.0) {
+            if let Some(line) = describe(&update) {
+                println!("{line}");
+            }
+            last = Some(update.0.clone());
+        }
+        match update.0.as_str() {
+            "failed" | "done" | "staged" => {
+                println!("The probe is over; the daemon's journal has what the case said.");
+                return Ok(());
+            }
             _ => {}
         }
         if events.next().await.is_none() {

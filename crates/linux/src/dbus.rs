@@ -9,7 +9,7 @@ use protocol::display::{self, Buds, Place, cycle_names, mode_name, parse_cycle, 
 use protocol::engine::Engine;
 use protocol::firmware::Release;
 use protocol::settings::Setting;
-use protocol::update::UpdateStatus;
+use protocol::update::{Goal, UpdateStatus};
 use tokio::sync::{oneshot, watch};
 use zbus::fdo::{RequestNameFlags, RequestNameReply};
 use zbus::object_server::InterfaceRef;
@@ -252,7 +252,24 @@ impl CalvadosService {
         let (reply, answer) = oneshot::channel();
         self.0
             .inputs
-            .send(Input::StartUpdate(reply))
+            .send(Input::StartUpdate(Goal::Install, reply))
+            .map_err(|_| stopping())?;
+        answer
+            .await
+            .map_err(|_| stopping())?
+            .map_err(zbus::fdo::Error::Failed)
+    }
+
+    /// Offer `LatestFirmware` only to hold the pods across a lid close, so
+    /// the case tunnels through the primary and is asked its version. Never
+    /// staged; withdrawn once the case answers, or after 3 minutes. Needs a
+    /// release newer than what the buds run, like `StartUpdate`.
+    async fn try_probe_case(&self) -> zbus::fdo::Result<()> {
+        tracing::info!("D-Bus: probe the case");
+        let (reply, answer) = oneshot::channel();
+        self.0
+            .inputs
+            .send(Input::StartUpdate(Goal::ProbeCase, reply))
             .map_err(|_| stopping())?;
         answer
             .await

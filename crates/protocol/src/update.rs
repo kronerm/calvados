@@ -21,12 +21,30 @@ const ASSET: u16 = 1;
 /// offer): rescind. The pods keep no timeout of their own.
 pub(crate) const WATCHDOG: Duration = Duration::from_secs(60);
 
+/// A case probe serves this much of `FTAB` at most, so it never stages.
+const PROBE_CAP: u32 = 10;
+
+/// A case probe ends by this long after it started, if not before.
+const PROBE_LIMIT: Duration = Duration::from_secs(3 * 60);
+
 /// How long a dropped transport may stay down before giving up.
 const INTERRUPTED_WAIT: Duration = Duration::from_secs(5 * 60);
 
 /// Transport drops in a row (without a request served in between) taken
 /// before giving up.
 const DROPS: u8 = 3;
+
+/// What an offer is for.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Goal {
+    /// Stage the image, for the case to install.
+    Install,
+    /// Only hold the pods across a lid close, so the case tunnels through
+    /// the primary and can be asked its version (docs/case.md): never
+    /// staged (at most [`PROBE_CAP`] % served), withdrawn by
+    /// [`PROBE_LIMIT`] or once the case answered.
+    ProbeCase,
+}
 
 /// Where an update stands, local or a peer's.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -206,6 +224,15 @@ pub fn check(state: &DeviceState, version: ExactVersion) -> Result<(), Refusal> 
     }
 }
 
+/// See [`Updater::watch`].
+fn watched(limit: Option<Instant>, holding: bool, at: Instant) -> Instant {
+    match (limit, holding) {
+        (Some(limit), true) => limit,
+        (Some(limit), false) => limit.min(at),
+        (None, _) => at,
+    }
+}
+
 /// What an [`Updater`] asks for.
 #[derive(Debug, Clone)]
 #[cfg_attr(test, derive(PartialEq, Eq))]
@@ -242,6 +269,11 @@ enum Transport {
 #[derive(Debug)]
 pub struct Updater {
     package: Package,
+    goal: Goal,
+    /// A probe's end.
+    limit: Option<Instant>,
+    /// A probe withholds data now.
+    holding: bool,
     phase: Phase,
     transport: Transport,
     next_id: u16,
@@ -254,14 +286,18 @@ pub struct Updater {
 }
 
 impl Updater {
-    pub fn new(package: Package, now: Instant) -> Self {
-        tracing::info!(version = %package.version(), "firmware update: starting");
+    pub fn new(package: Package, goal: Goal, now: Instant) -> Self {
+        tracing::info!(version = %package.version(), ?goal, "firmware update: starting");
+        let limit = matches!(goal, Goal::ProbeCase).then_some(now + PROBE_LIMIT);
         Self {
             package,
+            goal,
+            limit,
+            holding: false,
             phase: Phase::Offered,
             transport: Transport::Opening,
             next_id: 1,
-            deadline: now + WATCHDOG,
+            deadline: limit.map_or(now + WATCHDOG, |limit| limit.min(now + WATCHDOG)),
             drops: 0,
             position: 0,
         }
@@ -269,6 +305,16 @@ impl Updater {
 
     pub fn version(&self) -> ExactVersion {
         self.package.version()
+    }
+
+    pub fn goal(&self) -> Goal {
+        self.goal
+    }
+
+    /// The watchdog's next deadline, never past a probe's end; held data
+    /// waits for the end only.
+    fn watch(&mut self, at: Instant) {
+        self.deadline = watched(self.limit, self.holding, at);
     }
 
     pub fn status(&self) -> UpdateStatus {
@@ -311,7 +357,7 @@ impl Updater {
         self.change(|updater| {
             updater.transport = Transport::Up;
             updater.next_id = 1;
-            updater.deadline = now + WATCHDOG;
+            updater.watch(now + WATCHDOG);
             if let Phase::Deferred = updater.phase {
                 updater.phase = Phase::Offered;
             }
@@ -368,7 +414,7 @@ impl Updater {
                 asset,
                 offset,
                 length,
-            } if active => vec![self.serve(asset, offset, length, now)],
+            } if active => self.serve(asset, offset, length, now).into_iter().collect(),
             Received::Processing { asset, flags } => {
                 let ack = self.encode(Message::ProcessingAck { asset, flags });
                 let outcome = Processing::of(flags);
@@ -391,8 +437,19 @@ impl Updater {
 
     /// What's asked, from the package, as much as fits a message (the
     /// pods ask on from where it ends); an unknown asset or an offset past
-    /// the end gets [`UNKNOWN_ASSET`] (the pods then abandon).
-    fn serve(&mut self, asset: u16, offset: u32, length: u16, now: Instant) -> Vec<u8> {
+    /// the end gets [`UNKNOWN_ASSET`] (the pods then abandon). A probe
+    /// leaves requests past its cap unanswered.
+    fn serve(&mut self, asset: u16, offset: u32, length: u16, now: Instant) -> Option<Vec<u8>> {
+        let ftab = self.package.ftab();
+        let cap = ftab.start + (ftab.end - ftab.start) / 100 * PROBE_CAP;
+        if let (Goal::ProbeCase, ASSET, true) = (self.goal, asset, offset >= cap) {
+            if !self.holding {
+                tracing::info!(offset, "case probe: holding, nothing more served");
+                self.holding = true;
+                self.watch(now);
+            }
+            return None;
+        }
         let id = self.take_id();
         let data = match asset {
             ASSET => self.package.read(offset, length.min(MAX_DATA)),
@@ -405,16 +462,17 @@ impl Updater {
                 length,
                 "firmware update: request for nothing we have"
             );
-            return Message::DataResponse {
-                status: UNKNOWN_ASSET,
-                asset,
-                offset,
-                requested: length,
-                data: &[],
-            }
-            .encode(id);
+            return Some(
+                Message::DataResponse {
+                    status: UNKNOWN_ASSET,
+                    asset,
+                    offset,
+                    requested: length,
+                    data: &[],
+                }
+                .encode(id),
+            );
         };
-        let ftab = self.package.ftab();
         if ftab.contains(&offset) {
             let served = u32::try_from(data.len()).unwrap_or(0);
             self.position = offset + served - ftab.start;
@@ -423,16 +481,18 @@ impl Updater {
             tracing::info!(offset, length, "firmware update: the pods started pulling");
             self.phase = Phase::Transferring;
         }
-        self.deadline = now + WATCHDOG;
+        self.deadline = watched(self.limit, self.holding, now + WATCHDOG);
         self.drops = 0;
-        Message::DataResponse {
-            status: 0,
-            asset,
-            offset,
-            requested: length,
-            data,
-        }
-        .encode(id)
+        Some(
+            Message::DataResponse {
+                status: 0,
+                asset,
+                offset,
+                requested: length,
+                data,
+            }
+            .encode(id),
+        )
     }
 
     /// The watchdog: nothing asked for in time (rescinded), or the
@@ -440,6 +500,10 @@ impl Updater {
     pub fn tick(&mut self, now: Instant) -> Vec<Output> {
         if !self.status().is_active() || now < self.deadline {
             return Vec::new();
+        }
+        if self.limit.is_some_and(|limit| now >= limit) {
+            tracing::info!("case probe: time's up");
+            return self.cancel();
         }
         let failure = match (self.phase, self.transport) {
             (_, Transport::Lost) => Failure::Lost,
@@ -593,7 +657,7 @@ mod tests {
     }
 
     fn started() -> Updater {
-        let mut updater = Updater::new(package(), now());
+        let mut updater = Updater::new(package(), Goal::Install, now());
         updater.up(now());
         updater
     }
@@ -602,7 +666,7 @@ mod tests {
     fn a_whole_update_serves_exactly_what_is_asked_and_never_applies() {
         let bytes = package_bytes();
         let ftab = package().ftab();
-        let mut updater = Updater::new(package(), now());
+        let mut updater = Updater::new(package(), Goal::Install, now());
         assert_eq!(updater.status(), UpdateStatus::Offered);
         let mut sent = Vec::new();
         let offered = updater.up(now());
@@ -708,6 +772,34 @@ mod tests {
     }
 
     #[test]
+    fn a_case_probe_never_stages() {
+        let ftab = package().ftab();
+        let mut updater = Updater::new(package(), Goal::ProbeCase, now());
+        updater.up(now());
+        assert_eq!(updater.next_wake(), Some(now() + WATCHDOG));
+        // Headers and the first tenth of FTAB are served.
+        assert_eq!(kinds(&updater.received(&request(0, 0x2c), now())), [0x07]);
+        let cap = ftab.start + (ftab.end - ftab.start) / 100 * PROBE_CAP;
+        let below = request(cap - 4, 4);
+        assert_eq!(kinds(&updater.received(&below, now())), [0x07]);
+        // Past that, nothing; the probe holds until its end, not the watchdog.
+        let later = now() + WATCHDOG / 2;
+        assert_eq!(kinds(&updater.received(&request(cap, 4), later)), []);
+        assert_eq!(
+            kinds(&updater.received(&request(ftab.end - 4, 4), later)),
+            []
+        );
+        assert_eq!(updater.next_wake(), Some(now() + PROBE_LIMIT));
+        assert_eq!(updater.tick(now() + WATCHDOG * 2), []);
+        let outputs = updater.tick(now() + PROBE_LIMIT);
+        assert_eq!(kinds(&outputs), [0x0c], "rescinded");
+        assert_eq!(
+            statuses(&outputs),
+            [UpdateStatus::Failed(Failure::Cancelled)]
+        );
+    }
+
+    #[test]
     fn the_watchdog_rescinds() {
         let mut updater = started();
         assert_eq!(updater.next_wake(), Some(now() + WATCHDOG));
@@ -742,7 +834,7 @@ mod tests {
         );
         assert_eq!(kinds(&outputs), []);
         // Back: Sync, version, the identical offer, still transferring.
-        let first = Updater::new(package(), now()).up(now());
+        let first = Updater::new(package(), Goal::Install, now()).up(now());
         let again = updater.up(now());
         assert_eq!(kinds(&again), [0x00, 0x01, 0x05]);
         assert_eq!(again[..3], first[..3]);
@@ -774,14 +866,14 @@ mod tests {
             [UpdateStatus::Failed(Failure::Cancelled)]
         );
         assert_eq!(updater.cancel(), []);
-        let mut updater = Updater::new(package(), now());
+        let mut updater = Updater::new(package(), Goal::Install, now());
         assert_eq!(kinds(&updater.cancel()), [], "no transport yet");
     }
 
     #[test]
     fn large_requests_are_served_as_far_as_a_message_goes() {
         let large = Package::parse(package_bytes_with(&[7; 4096])).unwrap();
-        let mut updater = Updater::new(large, now());
+        let mut updater = Updater::new(large, Goal::Install, now());
         updater.up(now());
         let outputs = updater.received(&request(0, u16::MAX), now());
         let Output::Write(response) = &outputs[0] else {
@@ -798,7 +890,7 @@ mod tests {
 
     #[test]
     fn nothing_is_sent_while_down() {
-        let mut updater = Updater::new(package(), now());
+        let mut updater = Updater::new(package(), Goal::Install, now());
         assert_eq!(kinds(&updater.received(&request(0, 4), now())), []);
         updater.up(now());
         updater.down(now());

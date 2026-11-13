@@ -256,7 +256,10 @@ fn service_main(jvm: JavaVM, events: crossbeam_channel::Receiver<Event>) {
                         .as_deref()
                         .and_then(|model| catalog.latest(model))
                         .cloned();
-                    match engine.prepare_update(release.as_ref().map(|release| release.version)) {
+                    match engine.prepare_update(
+                        release.as_ref().map(|release| release.version),
+                        crate::proto::update::Goal::Install,
+                    ) {
                         Ok(started) => {
                             effects.extend(started);
                             if let Some(release) = release {

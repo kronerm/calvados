@@ -23,7 +23,7 @@ use crate::settings::{Setting, Settings};
 use crate::state::DeviceState;
 use crate::superbinary::Package;
 use crate::uarp::{self, Message, Received};
-use crate::update::{self, Failure, Output, Refusal, UpdateStatus, Updater};
+use crate::update::{self, Failure, Goal, Output, Refusal, UpdateStatus, Updater};
 
 /// How long after the handshake, and after each retry, the startup is
 /// checked ([`Engine::check_startup`]).
@@ -362,7 +362,7 @@ enum VersionQuery {
 #[derive(Debug)]
 enum Update {
     /// The platform fetches the package for this release.
-    Downloading(ExactVersion),
+    Downloading(ExactVersion, Goal),
     Running(Updater),
     /// Ended before it ran.
     Failed(Failure),
@@ -379,7 +379,7 @@ impl Update {
 
     fn status(&self) -> UpdateStatus {
         match self {
-            Self::Downloading(_) => UpdateStatus::Downloading,
+            Self::Downloading(..) => UpdateStatus::Downloading,
             Self::Running(updater) => updater.status(),
             Self::Failed(failure) => UpdateStatus::Failed(*failure),
         }
@@ -1290,6 +1290,7 @@ impl Engine {
     pub fn prepare_update(
         &mut self,
         release: Option<ExactVersion>,
+        goal: Goal,
     ) -> Result<Vec<Effect>, Refusal> {
         let release = self.may_update(release).inspect_err(|&refusal| {
             // Shown as the update's status on both UIs, like a failure, when
@@ -1299,8 +1300,8 @@ impl Engine {
                 self.update = Some(Update::Failed(Failure::Refused(refusal)));
             }
         })?;
-        tracing::info!(%release, "firmware update: fetching the package");
-        self.update = Some(Update::Downloading(release));
+        tracing::info!(%release, ?goal, "firmware update: fetching the package");
+        self.update = Some(Update::Downloading(release, goal));
         if let Some(session) = self.session_mut() {
             session.told = None;
         }
@@ -1336,7 +1337,7 @@ impl Engine {
     /// The package [`Engine::prepare_update`] asked for, `None` when it
     /// couldn't be had: checked again, then offered.
     pub fn package(&mut self, package: Option<Package>, now: Instant) -> Vec<Effect> {
-        let Some(Update::Downloading(release)) = self.update else {
+        let Some(Update::Downloading(release, goal)) = self.update else {
             return Vec::new();
         };
         let started = package
@@ -1355,7 +1356,7 @@ impl Engine {
             });
         match started {
             Ok(package) => {
-                self.update = Some(Update::Running(Updater::new(package, now)));
+                self.update = Some(Update::Running(Updater::new(package, goal, now)));
                 let told = self.tell_update(UpdateStatus::Offered);
                 told.into_iter().chain(self.settle_uarp(now)).collect()
             }
@@ -1369,7 +1370,7 @@ impl Engine {
 
     /// Withdraw the update.
     pub fn cancel_update(&mut self) -> Vec<Effect> {
-        if let Some(Update::Downloading(_)) = self.update {
+        if let Some(Update::Downloading(..)) = self.update {
             self.update = Some(Update::Failed(Failure::Cancelled));
             return self.tell_update(UpdateStatus::Failed(Failure::Cancelled));
         }
@@ -1559,7 +1560,8 @@ impl Engine {
                 downstream,
                 message,
             }) => {
-                match Received::parse(message) {
+                let received = Received::parse(message);
+                match received {
                     Some(Received::RunningVersion(exact)) if downstream == uarp::CASE => {
                         tracing::info!(%exact, "UARP: the case's firmware");
                     }
@@ -1569,6 +1571,18 @@ impl Engine {
                         message = ?crate::aacp::HexDump(message),
                         "UARP: from downstream"
                     ),
+                }
+                // The version query's last answer ends a probe.
+                let answered = matches!(
+                    received,
+                    Some(Received::RunningVersion(_) | Received::Other { kind: 4 })
+                );
+                let probing = self
+                    .updater()
+                    .is_some_and(|updater| matches!(updater.goal(), Goal::ProbeCase));
+                if downstream == uarp::CASE && answered && probing {
+                    tracing::info!("case probe: the case answered");
+                    return self.cancel_update();
                 }
                 Vec::new()
             }
@@ -2949,7 +2963,7 @@ mod tests {
         }
 
         fn running(e: &mut Engine) {
-            e.prepare_update(release()).unwrap();
+            e.prepare_update(release(), Goal::Install).unwrap();
             let fx = e.package(Some(package()), later());
             assert_eq!(told(&fx), [News::Update(UpdateStatus::Offered)]);
             assert_eq!(kinds(&fx), [0x00, 0x01, 0x05], "offered at once");
@@ -3002,6 +3016,29 @@ mod tests {
         }
 
         #[test]
+        fn a_case_probe_ends_once_the_case_answered() {
+            let mut e = ready();
+            e.prepare_update(release(), Goal::ProbeCase).unwrap();
+            assert_eq!(
+                kinds(&e.package(Some(package()), later())),
+                [0x00, 0x01, 0x05]
+            );
+            from_pods(&mut e, 0x17, &[0, 1], later());
+            // The case's version: its information response, relayed.
+            let info = [
+                &[0, 4, 0, 26, 0, 3, 0, 0, 0, 0, 0, 5, 0, 0, 0, 16][..],
+                &[0; 16],
+            ]
+            .concat();
+            let fx = from_pods(&mut e, 0x1b, &[&[0, 1][..], &info].concat(), later());
+            assert_eq!(kinds(&fx), [0x0c], "the offer withdrawn");
+            assert_eq!(
+                e.update_status(),
+                Some(UpdateStatus::Failed(Failure::Cancelled))
+            );
+        }
+
+        #[test]
         fn the_running_version_is_learned_and_shared() {
             let mut e = ready();
             let fx = running_version(&mut e, [7, 1, 21]);
@@ -3031,7 +3068,10 @@ mod tests {
         #[test]
         fn only_pods_ready_for_it_are_updated() {
             let mut e = ready();
-            assert_eq!(e.prepare_update(None), Err(Refusal::NoRelease));
+            assert_eq!(
+                e.prepare_update(None, Goal::Install),
+                Err(Refusal::NoRelease)
+            );
             e.handle(
                 Packet::EarDetection(EarDetection {
                     primary: EarStatus::InEar,
@@ -3039,18 +3079,27 @@ mod tests {
                 }),
                 now(),
             );
-            assert_eq!(e.prepare_update(release()), Err(Refusal::NotInCase));
+            assert_eq!(
+                e.prepare_update(release(), Goal::Install),
+                Err(Refusal::NotInCase)
+            );
             // Shown as the status, for both UIs, and kept to ourselves.
             assert_eq!(
                 e.update_status(),
                 Some(UpdateStatus::Failed(Failure::Refused(Refusal::NotInCase)))
             );
             e.disconnected(now());
-            assert_eq!(e.prepare_update(release()), Err(Refusal::NotConnected));
+            assert_eq!(
+                e.prepare_update(release(), Goal::Install),
+                Err(Refusal::NotConnected)
+            );
             let mut e = ready();
-            let fx = e.prepare_update(release()).unwrap();
+            let fx = e.prepare_update(release(), Goal::Install).unwrap();
             assert_eq!(told(&fx), [News::Update(UpdateStatus::Downloading)]);
-            assert_eq!(e.prepare_update(release()), Err(Refusal::Running));
+            assert_eq!(
+                e.prepare_update(release(), Goal::Install),
+                Err(Refusal::Running)
+            );
             assert_eq!(
                 e.update_status(),
                 Some(UpdateStatus::Downloading),
@@ -3062,7 +3111,10 @@ mod tests {
         fn an_old_outcome_makes_way_for_the_firmware() {
             let mut e = ready();
             e.state.firmware.reported = Some("90.3431000025000000.6807".into());
-            assert_eq!(e.prepare_update(release()), Err(Refusal::NotNewer));
+            assert_eq!(
+                e.prepare_update(release(), Goal::Install),
+                Err(Refusal::NotNewer)
+            );
             assert_eq!(e.update_status(), None, "nothing to do about it");
             let mut e = ready();
             e.handle(
@@ -3072,7 +3124,10 @@ mod tests {
                 }),
                 now(),
             );
-            assert_eq!(e.prepare_update(release()), Err(Refusal::NotInCase));
+            assert_eq!(
+                e.prepare_update(release(), Goal::Install),
+                Err(Refusal::NotInCase)
+            );
             assert!(e.update_status().is_some(), "shown until the next session");
             reconnect(&mut e, Duration::from_secs(5));
             assert_eq!(e.update_status(), None);
@@ -3177,7 +3232,7 @@ mod tests {
             );
             // Cancelled while downloading: the package comes to nothing.
             let mut e = ready();
-            e.prepare_update(release()).unwrap();
+            e.prepare_update(release(), Goal::Install).unwrap();
             e.cancel_update();
             assert_eq!(e.package(Some(package()), later()), []);
         }
@@ -3185,7 +3240,8 @@ mod tests {
         #[test]
         fn a_package_is_checked_again() {
             let mut e = ready();
-            e.prepare_update("9.0.349".parse().ok()).unwrap();
+            e.prepare_update("9.0.349".parse().ok(), Goal::Install)
+                .unwrap();
             e.package(Some(package()), later());
             assert_eq!(
                 e.update_status(),
@@ -3193,7 +3249,7 @@ mod tests {
                 "not the release's"
             );
             let mut e = ready();
-            e.prepare_update(release()).unwrap();
+            e.prepare_update(release(), Goal::Install).unwrap();
             e.state.firmware.exact = release();
             e.package(Some(package()), later());
             assert_eq!(
@@ -3201,7 +3257,7 @@ mod tests {
                 Some(UpdateStatus::Failed(Failure::Refused(Refusal::NotNewer)))
             );
             let mut e = ready();
-            e.prepare_update(release()).unwrap();
+            e.prepare_update(release(), Goal::Install).unwrap();
             let fx = e.package(None, later());
             assert_eq!(
                 told(&fx),
@@ -3230,7 +3286,10 @@ mod tests {
             feed(&mut e, &from_peer(News::Update(progress)));
             let peer = e.state().peer_update.unwrap();
             assert_eq!((peer.host, peer.status), (mac(PEER), progress));
-            assert_eq!(e.prepare_update(release()), Err(Refusal::PeerRunning));
+            assert_eq!(
+                e.prepare_update(release(), Goal::Install),
+                Err(Refusal::PeerRunning)
+            );
             // It left.
             e.handle(
                 Packet::DeviceConnection(crate::aacp::DeviceConnectionStatus {
@@ -3241,7 +3300,7 @@ mod tests {
                 now(),
             );
             assert!(e.state().peer_update.is_none());
-            assert!(e.prepare_update(release()).is_ok());
+            assert!(e.prepare_update(release(), Goal::Install).is_ok());
         }
 
         /// A class-0x400 crash-log frame from the pods.

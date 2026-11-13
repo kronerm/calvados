@@ -26,6 +26,7 @@ use protocol::firmware::Release;
 use protocol::protocol::parse_datagram;
 use protocol::settings::{Setting, Settings};
 use protocol::superbinary::Package;
+use protocol::update::Goal;
 use tokio::signal::unix::{SignalKind, signal};
 use tokio::sync::{mpsc, oneshot, watch};
 use tracing_subscriber::{EnvFilter, layer::SubscriberExt as _, util::SubscriberInitExt as _};
@@ -72,7 +73,7 @@ enum Input {
     /// current release, `None` when it failed.
     Catalog(Vec<String>, Option<Release>),
     /// Update the pods to the catalog's release; refused with a reason.
-    StartUpdate(oneshot::Sender<Result<(), String>>),
+    StartUpdate(Goal, oneshot::Sender<Result<(), String>>),
     CancelUpdate,
     /// The release's package for the update, `None` when it couldn't be had.
     Package(Option<Package>),
@@ -285,7 +286,7 @@ async fn run(daemon: &Daemon, mut engine: Engine, inputs: &mut mpsc::UnboundedRe
                     catalog.found(models, release);
                     Vec::new()
                 }
-                Input::StartUpdate(reply) => {
+                Input::StartUpdate(goal, reply) => {
                     let release = engine
                         .state()
                         .firmware
@@ -293,7 +294,7 @@ async fn run(daemon: &Daemon, mut engine: Engine, inputs: &mut mpsc::UnboundedRe
                         .as_deref()
                         .and_then(|model| catalog.latest(model))
                         .cloned();
-                    let prepared = engine.prepare_update(release.as_ref().map(|release| release.version));
+                    let prepared = engine.prepare_update(release.as_ref().map(|release| release.version), goal);
                     let (answer, effects) = match (prepared, release) {
                         (Ok(effects), Some(release)) => {
                             catalog.fetch_package(release, &daemon.inputs);
