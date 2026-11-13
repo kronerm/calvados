@@ -635,3 +635,10 @@ through; whatever fails logs only on the case's or the bud's UART.
   the link; 23:44: Left docked first) → the open went there and bee88 found no session.
   Test: take both buds out together (the stored primary takes the link), dock the other
   one first, then the link holder, then hold and close.
+- (Nov 14) The proximity advertisement shows the stored role [rkof FUN_0014fe68]: status
+  0x40 = this bud is stored secondary (0xc61a4 false), 0x20 = this bud is Left (SIDE 2),
+  0x80 out of box, 0x01 = 0xc6214; 0x02/0x04 and 0x08/0x10 = the stored primary's and
+  secondary's locations. Live: 22:18-22:20 and 23:05 runs 0x35 (Left primary) + 0x55,
+  link on Left; 00:33-00:37 run 0x15 (Right primary) + 0x75, link on Right. So the stored
+  role was on the link holder in every probe: the role pick isn't the gate either, and
+  the "docking moves the link but not the role" inference above is wrong.
