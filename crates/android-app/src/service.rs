@@ -279,6 +279,13 @@ fn service_main(jvm: JavaVM, events: crossbeam_channel::Receiver<Event>) {
                         decoder = Decoder::default();
                         effects.extend(engine.connected(mac, now));
                         conn = Conn::Connected { mac };
+                        // Nobody else opens A2DP when the pods paged us while
+                        // another host is connected. A no-op if it's up.
+                        thread::spawn(move || {
+                            if let Err(e) = bluetooth::connect_a2dp(mac) {
+                                tracing::warn!("A2DP connect failed: {e:#}");
+                            }
+                        });
                     }
                 },
                 // The bridge reports a dead link once; a stale report while

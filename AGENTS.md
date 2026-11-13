@@ -286,7 +286,10 @@ power-on (`LinkChange`). Its length caps at 255, i.e. 15 events.
 - `exports.rs` — the JNI entry points of `PersistentService.java`.
 - `service.rs` — the event loop: one channel of typed `Event`s (the ACL
   up or down, Bluetooth on, a notification `Request`, nearby advertisers,
-  link events, stop) driving the `Engine`; effects out. MACs are
+  link events, stop) driving the `Engine`; effects out. Every session
+  that opens also connects A2DP (a no-op when up): Android 17 opens no
+  profile over a link the pods paged, and the pods open none while another
+  host is connected (Nov 13: 92 s with only SDP and AACP). MACs are
   `MacAddress` from the JNI boundary on. Also the firmware
   update's I/O, with `firmware-fetch` as on Linux: the catalog checked
   once a day per product (`Catalog::due`) and the package fetched on
