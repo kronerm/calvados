@@ -451,3 +451,13 @@ priority 9, Inferred USB) point to UARP over this interface.
   bud" (0x08037580) opens a FWUP pipe to a bud. Inferred: factory paths.
   So over USB a host can neither update the case nor reach the buds
   without the case CLI.
+- The CLIs aren't reachable from a host (static, Known unless marked).
+  The bud's RTKit shell (read loop rkof 0x1d628) reads only its console,
+  whose serial list gets two UARTs at boot (0x147a6, 0x147b6; added only by
+  0x19c7e4); on a production unit (0x18f2c: `is_prod_override` or the
+  register at chipbase+0x607c) 0x7f62c drops one of them. Every other user
+  of the shell only registers commands. On the case, CLI routing
+  (0x0803dde4: 0 UART, 1 USB, 2 TUNNEL) goes to TUNNEL only through the
+  CLI's own `routing` command (0x08048efc); the six other callers pick USB.
+  B2P sessions 0x1d/0x1e are "b2b auth" (Couple), not a CLI. Inferred: no
+  AACP, UARP or GATT path reaches either CLI.
