@@ -414,3 +414,15 @@ in the closed case before 2 s, the case's exact tag-5 value, and ds 3's idle tim
   drop isn't the cause, and an active transfer doesn't help. Left open:
   the case's config +0xc (no timer at all without it), the primary's S1
   radio bit, and the apply flag.
+- Re-read (STFC 9A348, Known unless marked): the tunnel's config is the
+  init-data object 0x20001790 (from flash 0x0807c8b4; +0 a function
+  0x08004c01, +0xc 1, +0xd 1, +0x11 1), written only at 0x080121c6, never
+  changed: 1 on any case. The apply flag is `[0x20034fc8+0x37]` (the fwup
+  context, +0x35 its state), set only at 0x08012e58 by a refused apply and
+  cleared when one starts (Inferred: 0 here). A failed check at the timer
+  logs nothing (0x08012d06; only "Tunnel avail" on success). The bud
+  builds S1 at rkof 0x1589ac-0x158a00: bit 0 from 'AP' methods (0xb64b4,
+  slot +0x10) or when `0xc6244() & 0xaf03a(host ACL)` is 0, so a held host
+  link is a direct input (Inferred: what blocks the tunnel under our hold);
+  'AP''s methods (registered near 0x161cbc) and coup_st's sources
+  (0x200c200c+0x74, 0xc56b2/0xc58b4/0xc592c) are unresolved.
