@@ -306,7 +306,8 @@ Today's probe ran with the lid open, so no tunnel existed. That fits.
   downstream 1, so the bud holds no case slot at all; only downstream 2 came back, as the
   secondary rejoined after the first close. Not a bud that added the case and never
   announced it: the tunnel never got as far as 0x77ef0. The held link survived the first
-  close (26 s) and dropped 31 s into the second (0x13).
+  close (26 s); 31 s into the second, the pods ended it (0x13) and rebooted (2m45s up at
+  22:23:30), announcing no crash log at the next session.
 - Re-trigger: close the lid again. A cycle needs the lid open, then closed for at least
   2 s. Each close is another attempt.
 - The catch is the host link. On lid close, bf2b0(0) [rkof 0xbf2d8-0xbf35c] keeps exactly
