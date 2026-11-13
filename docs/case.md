@@ -473,3 +473,16 @@ priority 9, Inferred USB) point to UARP over this interface.
   ([0x2002658c + tid·0x40 + 0x15/0x16]). Left: the case's role pick
   FUN_0801e074 when both buds report S0 bit 1, and its coupling state
   `[0x2003533c+0x4c]` around the close.
+- Every expiry check reads as passing in the observed state (STFC, Known
+  code): FUN_0801e074 returns the bud with S0 bit 1 (0 or 1; both → 2,
+  mapped to 0 at 0x08012708); FUN_0801d8e0's coupling state
+  (`[0x2003533c+0x4c]`, names at 0x0806cd0c) is started only by a missing
+  peer, a new case, bud connection events, a B2P command or the CLI, never
+  by the lid; the bud records are polled (message 0x6a, every 1 s or
+  faster, reply 0x6b at 0x08026924) and cleared only when a bud is removed
+  (FUN_0801fa30). Remaining suspects, both silent: after "Tunnel avail"
+  0x0802a2ac skips the B2P 0x10 when the (tid, ds 3) descriptor's +8 is
+  already 1 [0x0802a2c8-0x0802a2d2], a stale "open"; or the bud refusing
+  (846d4 → be420 → bee88 → 0x77ef0). `try-probe-case` sends Discover
+  Downstream (0x15) every 3 s while it holds, so a slot added but never
+  announced shows up.

@@ -28,6 +28,11 @@ const OFFER_ANSWER: Duration = Duration::from_secs(10);
 /// A case probe serves this much of `FTAB` at most, so it never stages.
 const PROBE_CAP: u32 = 10;
 
+/// While a case probe holds, how often it asks the primary to announce its
+/// downstream accessories again: a case that tunnelled but went unannounced
+/// shows up then.
+const DISCOVER_EVERY: Duration = Duration::from_secs(3);
+
 /// A case probe ends by this long after it started, if not before.
 const PROBE_LIMIT: Duration = Duration::from_secs(3 * 60);
 
@@ -284,6 +289,8 @@ pub struct Updater {
     limit: Option<Instant>,
     /// A probe withholds data now.
     holding: bool,
+    /// When a holding probe asks for its downstreams next.
+    discover_at: Option<Instant>,
     phase: Phase,
     transport: Transport,
     next_id: u16,
@@ -306,6 +313,7 @@ impl Updater {
             goal,
             limit,
             holding: false,
+            discover_at: None,
             phase: Phase::Offered,
             transport: Transport::Opening,
             next_id: 1,
@@ -354,9 +362,10 @@ impl Updater {
 
     /// When [`Self::tick`] is due.
     pub fn next_wake(&self) -> Option<Instant> {
-        let deadline = self
-            .answer_by
-            .map_or(self.deadline, |at| at.min(self.deadline));
+        let deadline = [self.answer_by, self.discover_at]
+            .into_iter()
+            .flatten()
+            .fold(self.deadline, Instant::min);
         self.status().is_active().then_some(deadline)
     }
 
@@ -465,6 +474,7 @@ impl Updater {
             if !self.holding {
                 tracing::info!(offset, "case probe: holding, nothing more served");
                 self.holding = true;
+                self.discover_at = Some(now + DISCOVER_EVERY);
                 self.watch(now);
             }
             return None;
@@ -524,6 +534,16 @@ impl Updater {
             tracing::warn!("firmware update: the pods don't answer");
             self.answer_by = None;
             return self.change(|updater| updater.fail(Failure::NoAnswer));
+        }
+        if let Some(at) = self.discover_at
+            && self.status().is_active()
+            && self.is_up()
+            && now >= at
+            && now < self.deadline
+        {
+            self.discover_at = Some(now + DISCOVER_EVERY);
+            tracing::debug!("case probe: asking for the downstreams");
+            return self.change(|updater| vec![updater.encode(Message::DiscoverDownstream)]);
         }
         if !self.status().is_active() || now < self.deadline {
             return Vec::new();
@@ -822,8 +842,12 @@ mod tests {
             kinds(&updater.received(&request(ftab.end - 4, 4), later)),
             []
         );
-        assert_eq!(updater.next_wake(), Some(now() + PROBE_LIMIT));
-        assert_eq!(updater.tick(now() + WATCHDOG * 2), []);
+        // While it holds, it asks for the downstreams every few seconds.
+        assert_eq!(updater.next_wake(), Some(later + DISCOVER_EVERY));
+        let asked = later + DISCOVER_EVERY;
+        assert_eq!(kinds(&updater.tick(asked)), [0x15]);
+        assert_eq!(updater.next_wake(), Some(asked + DISCOVER_EVERY));
+        assert_eq!(kinds(&updater.tick(now() + WATCHDOG * 2)), [0x15]);
         let outputs = updater.tick(now() + PROBE_LIMIT);
         assert_eq!(kinds(&outputs), [0x0c], "rescinded");
         assert_eq!(

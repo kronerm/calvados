@@ -41,6 +41,7 @@ enum Sent {
     Sync = 0x00,
     VersionDiscovery = 0x01,
     InformationRequest = 0x03,
+    DiscoverDownstream = 0x15,
     AssetAvailable = 0x05,
     DataResponse = 0x07,
     Rescind = 0x0C,
@@ -100,6 +101,8 @@ pub enum Message<'a> {
     DownstreamAddedAck {
         id: u16,
     },
+    /// Ask for every downstream accessory to be announced (0x17) again.
+    DiscoverDownstream,
     /// A whole message for a downstream accessory, e.g. the case.
     Relay {
         downstream: u16,
@@ -160,6 +163,7 @@ impl Message<'_> {
             Self::DownstreamAddedAck { id } => {
                 (Sent::DownstreamAddedAck, [be16(0), be16(id)].concat())
             }
+            Self::DiscoverDownstream => (Sent::DiscoverDownstream, Vec::new()),
             Self::Relay {
                 downstream,
                 message,
