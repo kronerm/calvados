@@ -261,11 +261,13 @@ async fn probe_case(bus: &zbus::Connection, proxy: &CalvadosProxy<'_>) -> anyhow
     let mut last = None;
     loop {
         let update = proxy.update().await.map_err(failure)?;
-        if last.as_ref() != Some(&update.0) {
+        // Progress in steps of 5 %, as `firmware update`.
+        let shown = (update.0.clone(), update.1 / 5);
+        if last.as_ref() != Some(&shown) {
             if let Some(line) = describe(&update) {
                 println!("{line}");
             }
-            last = Some(update.0.clone());
+            last = Some(shown);
         }
         match update.0.as_str() {
             "failed" | "done" | "staged" => {
