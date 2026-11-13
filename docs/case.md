@@ -358,6 +358,13 @@ in the closed case before 2 s, the case's exact tag-5 value, and ds 3's idle tim
   (0x0801539c, logs "Prot %d %s"): Inferred the negotiated UARP protocol
   version, so the case wants 6 or more. calvados proposes 4 to the buds;
   proposed to the case, it would get "Deny tunnel(%u) offer".
+- The case's maximum is **6** [Known]. Both images carry the same UARP
+  accessory library: the version reply is min(proposed, cap), at least 1
+  (STFC 0x0804b520-0x0804b52c, rkof 0x104a88-0x104a96), the cap being the
+  init options' u16 at +0xc, 9 when left 0 (STFC 0x0804c3a0, rkof
+  0x106554). The case's init (0x080158bc) sets it to 6 (`local_40` = 6,
+  the options at `local_4c`, passed at 0x08015b1a), as the bud does. So
+  the case accepts an offer only at exactly 6.
 - STFC, STFW and NERF are signed (0xCCD28106) and checked ("Attempting Dev
   Sig Check", FUN_08013784), not personalized; only R1FW needs a ticket. The
   tunnel path has no Find My or host-identity check that was found.
