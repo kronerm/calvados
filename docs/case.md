@@ -493,3 +493,33 @@ priority 9, Inferred USB) point to UARP over this interface.
   (846d4 → be420 → bee88 → 0x77ef0). `try-probe-case` sends Discover
   Downstream (0x15) every 3 s while it holds, so a slot added but never
   announced shows up.
+
+## NERF 9B47: Find My pairing gates the UARP service itself (Nov 13, static)
+
+9B47 `nerf.bin` (base 0); its addresses differ from the ones above, which may
+be another build's. Known unless marked.
+- Pairing state byte RAM 0x20008ba0: bit 0 "BA paired", bit 1 FMN enabled, bit 2
+  loaded; getter FUN_0003f320. Set only by the loader FUN_0003f2b4 (a stored 0xd0-byte
+  record reads back) and FUN_0003f4e8 at Find My pairing completion; the record is
+  written only by PAIRING_COMPLETE FUN_000381f4, in PAIR_SESSION, after the
+  server-backed INITIATE_PAIRING steps. A plain LE bond doesn't set it (BONDED only
+  moves PAIR -> PAIR_BONDED). The case MCU can only query it (B2P 0x4de), the buds'
+  sync only clear it.
+- Cleared by findMySmUnpair FUN_00038044, then a reset: B2P 0x154 FACTORY_RESET from the
+  MCU (event 0x900e "Clr coupling" -> "Send fact rst" [STFC 0x0801bcaa]; Inferred: the
+  case button's factory reset), bud reconciliation (0x38678), a failed Find My pairing,
+  a failed boot storage check, or the owner's "RX Unpair" (0x3cc54, encrypted owner
+  link only).
+- The UARP and ACS (2ee26cd4) services are added by FUN_0003bda8 only when paired (boot
+  0x3c050, disconnect 0x3a56c). **An unpaired case has no UARP characteristic**; a
+  paired one refuses every new pairing (FUN_0003bbdc event 5). Sec params {bond, no
+  MITM, no LESC, NoInputNoOutput}: legacy Just Works. A bond left in PAIR_BONDED
+  without Find My pairing is deleted and the chip reset at disconnect (0x380f4).
+- Advertising: unpaired, each lid opening moves PAIR_ADV_HALTED -> PAIR, a connectable
+  Find My pairing advert (service data 0xFD44, public address, 30 ms) for 10 minutes
+  (FUN_0003990c). Paired: rotating static random address, Apple 0x12 (near owner,
+  length 2, FUN_00039af0; separated FUN_00039a24, Inferred long form).
+- STFC's offer handler 0x08015138 keys on the transport only; for tid 2 (BLE) it
+  denies if [0x20001748+0x48+0xd] == 0 (setter not traced). No per-host check found.
+- So no non-Apple host reaches the case's UARP over LE: the service appears only
+  after a Find My pairing, which needs Apple's servers.
