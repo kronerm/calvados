@@ -523,3 +523,32 @@ be another build's. Known unless marked.
   denies if [0x20001748+0x48+0xd] == 0 (setter not traced). No per-host check found.
 - So no non-Apple host reaches the case's UARP over LE: the service appears only
   after a Find My pairing, which needs Apple's servers.
+
+## The tunnel's descriptor and sends on the case (Nov 13, STFC 9A348, static)
+
+Known unless marked.
+- The ds descriptor (FUN_0802a380: 0x20026e18 + tid·0x2c0 + idx·0x58, `+8` open) is RAM
+  only: the C runtime zeroes it at every boot [0x080490c8-0x08049118]. An open
+  (0x0802a2ac, B2P 0x10 {3,1} via 0x0802a22c) writes only a timestamp; `+8` = 1 only
+  on the bud's connect rsp with state 1 [0x0802664a]. Closed by a rsp with another
+  state, "Close tid", data errors, link re-init (bud removal 0x08020944), boot, and an
+  idle timeout (`+0x20` = 14000, "tid:%s ds:%d idle TO" [0x08028b5e]). So no lasting
+  "stuck open" state exists: the earlier hypothesis is out.
+- The send helper 0x0802a328 passes 0x10 only to a bud whose case-side state
+  ([0x200356a0+bud·4+0x50], names at 0x0806cd2c) is first connect (3), charging (4),
+  not charging (5) or disabled (11); in any other state (idle, searching, connecting,
+  presence check, prepare ulp, ulp, reset, give up) it drops it without a log. The
+  leading candidate for the silent failure (Inferred).
+- If both buds report S0 bit 1, the role pick FUN_0801e074 returns 2 → tid 0 [0x08012708],
+  which may be the secondary (no host session; it would answer state 0).
+- No attempt counter; the retry flag [0x20036188+0x1c] is re-armed on lid open.
+- Reboots: IWDG (5 s kicks [0x080353dc]); SYSRESETREQ 0x0802f770 (callers not reachable
+  from a host); none on USB attach or wireless charging found. Button, lid open:
+  Press, Hold 0.48 s, Pairing Hold 1.98 s, "Case Hw Reset" ~10 s, factory reset ~13.5 s
+  (stored, finished at the next boot, FUN_08019698). Running flat: Inferred a power-on
+  reset (coupling and Find My, in flash, survive).
+- Factory reset: "Clr coupling" (event 0x900e) wipes coupling, sends B2P 0x154 to NERF
+  (Find My unpair) [0x0801b5ac, 0x0801bcaa]; re-coupling is automatic (B2P 0x4ae). A
+  foreign bud or invalid NV data triggers "auto fact rst in 2s" [0x08022b00]. Coupling
+  compares bud against bud only (a mismatch starts the bud-to-bud copy); no case-vs-bud
+  version check.
