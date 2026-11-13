@@ -2250,6 +2250,7 @@ mod tests {
             Packet::PrimaryBud(PrimaryBud {
                 bud: Bud::Right,
                 active: false,
+                peer: true,
             }),
             now(),
         );
@@ -2278,6 +2279,7 @@ mod tests {
             Packet::PrimaryBud(PrimaryBud {
                 bud: Bud::Left,
                 active: false,
+                peer: true,
             }),
             now(),
         );
@@ -2601,6 +2603,7 @@ mod tests {
             Packet::PrimaryBud(crate::aacp::PrimaryBud {
                 bud: crate::aacp::Bud::Left,
                 active: false,
+                peer: true,
             }),
             now(),
         );
@@ -2616,6 +2619,7 @@ mod tests {
             Packet::PrimaryBud(crate::aacp::PrimaryBud {
                 bud: crate::aacp::Bud::Left,
                 active: false,
+                peer: true,
             }),
             now(),
         );
@@ -2911,6 +2915,7 @@ mod tests {
                 Packet::PrimaryBud(PrimaryBud {
                     bud: Bud::Left,
                     active: false,
+                    peer: true,
                 }),
             ]
             .into_iter()
@@ -3234,6 +3239,7 @@ mod tests {
                 Packet::PrimaryBud(PrimaryBud {
                     bud: Bud::Right,
                     active: false,
+                    peer: true,
                 }),
                 switch,
             );

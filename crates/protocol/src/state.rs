@@ -404,6 +404,7 @@ mod tests {
         state.apply(&Packet::PrimaryBud(PrimaryBud {
             bud: Bud::Right,
             active: false,
+            peer: true,
         }));
         state.apply(&Packet::Battery(vec![
             BatteryInfo::new(BatteryComponent::Right, 66, ChargingStatus::Discharging),
@@ -467,6 +468,7 @@ mod tests {
         state.apply(&Packet::PrimaryBud(PrimaryBud {
             bud: Bud::Right,
             active: false,
+            peer: true,
         }));
         state.apply(&Packet::Battery(vec![
             BatteryInfo::new(BatteryComponent::Right, 60, ChargingStatus::Discharging),
@@ -526,6 +528,7 @@ mod tests {
         state.apply(&Packet::PrimaryBud(PrimaryBud {
             bud: Bud::Right,
             active: true,
+            peer: true,
         }));
         assert_eq!(state.ears(), Some((EarStatus::InCase, EarStatus::InEar)));
     }

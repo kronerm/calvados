@@ -52,14 +52,18 @@ pub struct PrimaryBud {
     pub bud: Bud,
     /// Inferred: toggles around a switch; meaning unknown.
     pub active: bool,
+    /// The role machine's state 0x14 [rkof 0x873b0-0x873ce, 0xc6214].
+    /// Inferred: the other bud is linked (clear while it's gone).
+    pub peer: bool,
 }
 
-/// `[bud] 00 01 [active]`
+/// `[bud] 00 [peer] [active]`
 pub fn parse_primary_bud(input: &[u8]) -> IResult<&[u8], PrimaryBud> {
-    (byte, take(2usize), u8)
-        .map(|(bud, _, active)| PrimaryBud {
+    (byte, take(1usize), u8, u8)
+        .map(|(bud, _, peer, active)| PrimaryBud {
             bud,
             active: active != 0,
+            peer: peer != 0,
         })
         .parse(input)
 }

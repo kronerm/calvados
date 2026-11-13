@@ -204,6 +204,7 @@ mod tests {
         state.apply(&Packet::PrimaryBud(PrimaryBud {
             bud: Bud::Left,
             active: false,
+            peer: true,
         }));
         let buds = Buds::of(&state);
         let (left, right, case) = (buds.left.unwrap(), buds.right.unwrap(), buds.case.unwrap());
