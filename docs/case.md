@@ -423,7 +423,7 @@ in the closed case before 2 s, the case's exact tag-5 value, and ds 3's idle tim
   logs nothing (0x08012d06; only "Tunnel avail" on success). The bud
   builds S1 at rkof 0x1589ac-0x158a00: bit 0 from 'AP' methods (0xb64b4,
   slot +0x10) or when `0xc6244() & 0xaf03a(host ACL)` is 0, so a held host
-  link is a direct input (Inferred: what blocks the tunnel under our hold);
+  link is a direct input;
   'AP''s methods (registered near 0x161cbc) and coup_st's sources
   (0x200c200c+0x74, 0xc56b2/0xc58b4/0xc592c) are unresolved.
 
@@ -461,3 +461,15 @@ priority 9, Inferred USB) point to UARP over this interface.
   CLI's own `routing` command (0x08048efc); the six other callers pick USB.
   B2P sessions 0x1d/0x1e are "b2b auth" (Couple), not a CLI. Inferred: no
   AACP, UARP or GATT path reaches either CLI.
+- 'AP' decoded (rkof vtable 0x1c4334 at 0x161cbc, HSM 0x1c8124, actions
+  0xde930; Known): S1 holds paging and the 'BS' sleep arbiter, S2 drops
+  every host (reason 2), S3 releases, S4 arms paging; S4 → S5 → S1 when
+  the radio is no longer wanted (in the case: 0x15f60c, unless S0 bit 3 and
+  host ACLs). S1 bit 0 is clear only in 'AP' S1; a held host link sets it.
+  The laptop's session survived a 77 s close, so the primary never went
+  through S1 → S2: bit 0 was set and isn't the blocker (the earlier
+  "Inferred" here was backwards). The bud builds S0/S1 fresh per case
+  request (FUN_001586cc via 0x158d6c); the case reads its cached copy
+  ([0x2002658c + tid·0x40 + 0x15/0x16]). Left: the case's role pick
+  FUN_0801e074 when both buds report S0 bit 1, and its coupling state
+  `[0x2003533c+0x4c]` around the close.
