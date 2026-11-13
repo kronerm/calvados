@@ -602,3 +602,24 @@ release this time), the secondary dropped at +4 s each time and was re-announced
 downstream 2 on opening; no downstream 1. So the side of the primary isn't it either.
 Every condition read statically passes on both sides, yet the case never comes
 through; whatever fails logs only on the case's or the bud's UART.
+
+## Corrections (Nov 14, rkof/STFC 9A348, static)
+
+- S1 bit 0 is `AP.isInState(4)` (S4 and its children S5/S6) [rkof 0x1589ba, vt+0x18
+  0xb63f6]; clear in S0-S3. From S1 the way back to S4 runs through S2, which drops every
+  host, so a held link means the bit stayed set; the case's docked reset (which reads the
+  same bit [STFC 0x0801ec5c-0x0801ed16]) never hit the held primary. Radio isn't the gate.
+- 0x77ef0 marks a slot announced (+0x2e) before any ack, so Discover Downstream never
+  repeats a 0x17: the 22:19 "no slot" inference from 0x15 is void. The raw frames of the
+  23:44 run show no 0x17 for id 1, so no add happened there.
+- S0 bit 1 (0xc61a4 = 0xc6449 on object 0x200b8778) is the stored pair role, cfg+0x40 in
+  a CRC'd retained struct (1 primary, 2 secondary; 0xa5b44), not the link holder. Writers:
+  the role machine's commit (HSM 0x1c90f8 action 8 0xe08fe, a toggle of action 4's saved
+  value), the case over B2P (0x15a284), boot normalisation (0x152f48 → secondary when a
+  peer is stored and r10, unresolved; 0xc2470/0xc2486 → primary), 0xd69ee. Inferred: both
+  buds could read secondary after the case's resets, leaving FUN_0801e074 no claimant.
+- AACP PrimaryBud is `[side] 00 [role machine in 0x14] [active]` [rkof 0x873b0-0x873ce];
+  the third byte was 0 with the secondary gone and 1 with it back.
+- The No-Apply flag [0x20034fc8+0x37] is set only when the case's own apply is refused
+  (lid open or case ≤ 10 %) and cleared at the next charged close; a 10 % offer leaves no
+  pending header. The tunnel path reads neither bt_prog nor any bud version.
