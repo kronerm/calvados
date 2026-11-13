@@ -538,7 +538,13 @@ Known unless marked.
   ([0x200356a0+bud·4+0x50], names at 0x0806cd2c) is first connect (3), charging (4),
   not charging (5) or disabled (11); in any other state (idle, searching, connecting,
   presence check, prepare ulp, ulp, reset, give up) it drops it without a log. The
-  leading candidate for the silent failure (Inferred).
+  leading candidate for the silent failure (Inferred). Ruled out on follow-up: the lid
+  close cancels a running presence check and re-arms it for 15 s (0x0801f190-0x0801f1ac),
+  so at close+2..3 s the primary is charging or not charging, both of which send; prepare
+  ulp needs ~30 s, the docked reset hits only a bud with its radio off. Transition table
+  12×12 at 0x0806cd80, entries 0x0806ce40, exits 0x0806ce10; the 30 s presence limit at
+  0x20026710. The queued send 0x0801c4ec has a per-bud mode [0x20026580+bud·4] (1 fail,
+  2 queue) whose setter wasn't traced. Left: the role pick, that mode, or the bud's reply.
 - If both buds report S0 bit 1, the role pick FUN_0801e074 returns 2 → tid 0 [0x08012708],
   which may be the secondary (no host session; it would answer state 0).
 - No attempt counter; the retry flag [0x20036188+0x1c] is re-armed on lid open.
