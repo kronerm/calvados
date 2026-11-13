@@ -392,3 +392,15 @@ in the closed case before 2 s, the case's exact tag-5 value, and ds 3's idle tim
 - Around each close the secondary bud reported `Disconnected` (ear
   detection) for a few seconds, e.g. 16:52:04, 4 s after the close, then
   came back and was announced again as downstream 2.
+- Re-read (STFC 9A348): a close starts a 2 s timer (0x1e8480 µs, config
+  +0xc) [0x08012adc]; at expiry [0x080126da-0x08012718] the lid must be
+  closed, the buds coupled (FUN_0801d8e0: both coup_st 0, the case's
+  coupling state not 1-5, both buds valid, each one's peer the other), the
+  lid-event counter ≥ 2, a role bud (S0 bit 1) whose S1 bit 0 ("radio") is
+  set; one retry 1 s later, then nothing until the next close. Charging
+  source, bt_prog, fwup bits, the offer and the host type aren't inputs. A
+  close goes to the apply path instead when `[0x20034fc8+0x37]` is set. On
+  the bud, 0x77ef0 can refuse silently (2 downstreams already, a key in
+  use, no host endpoint), none expected here. Suspects (Inferred): the
+  secondary in flux at 2-3 s (the phone dropped at the close), or the
+  primary's radio bit clear in the closed case.
