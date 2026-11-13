@@ -301,6 +301,12 @@ Today's probe ran with the lid open, so no tunnel existed. That fits.
   The slot is removed only when transport 0x03 goes down [0xbe7b0-0xbe7d0]. Inferred
   (when 0x781c0 runs was not traced): once downstream 1 exists, a later 0xd session can
   get it back with 0x15, as long as the case keeps ds 3 open.
+- Observed Nov 13 (9A348, laptop, `try-probe-case` sending 0x15 every 3 s while holding,
+  two lid closes): every 0x15 got a 0x16 with status 0 within ~0.1 s, and no 0x17 for
+  downstream 1, so the bud holds no case slot at all; only downstream 2 came back, as the
+  secondary rejoined after the first close. Not a bud that added the case and never
+  announced it: the tunnel never got as far as 0x77ef0. The held link survived the first
+  close (26 s) and dropped 31 s into the second (0x13).
 - Re-trigger: close the lid again. A cycle needs the lid open, then closed for at least
   2 s. Each close is another attempt.
 - The catch is the host link. On lid close, bf2b0(0) [rkof 0xbf2d8-0xbf35c] keeps exactly
