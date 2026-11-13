@@ -378,3 +378,17 @@ in the closed case before 2 s, the case's exact tag-5 value, and ds 3's idle tim
   firm.00/01, mani.00, 0x19b90's file or remotefs, so store-and-forward is
   out. Transports 0x1a/0x1b are registered at 0x1541c6 and set only by the
   case's B2P message 0x10 or a byte-stream adapter, never by a host.
+
+## Observed Nov 13 (9A348, laptop calvados, `try-probe-case`)
+
+- The hold works: with the probe's offer accepted (10 % of `FTAB` pulled,
+  then held), every lid close dropped the phone and kept the laptop's
+  session (advertisement byte 10: 2 hosts, then 1).
+- The case never tunnelled: four closes during a hold (16:49:07 for 40 s,
+  16:50:20 for 77 s, 16:51:57 briefly, 16:52:00 for 26 s, local time), the
+  case on a wireless charger, the lid moved many times since 16:46. The bud
+  announced only downstream 2 (the other bud), each time ~0.05 s or a few
+  seconds after the close; never 1.
+- Around each close the secondary bud reported `Disconnected` (ear
+  detection) for a few seconds, e.g. 16:52:04, 4 s after the close, then
+  came back and was announced again as downstream 2.
