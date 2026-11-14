@@ -269,6 +269,9 @@ end
 -- "More": the AirPods' other settings, title and value, a click stepping to
 -- the next value, and the rename field. Collapsed on every open.
 local moreOpen = false
+
+-- The width a scroll's scrollbar takes from its content.
+local SCROLLBAR_GUTTER = 14
 local draftName = nil
 
 local function rename()
@@ -394,9 +397,17 @@ render = function()
   end
   local content = ui.column({ flexGrow = 1, gap = 18, align = "stretch" }, rows)
   -- With More open the panel is at its cap and scrolls. A scroll fills
-  -- the panel, so the panel can't shrink around one: closed, it's gone.
+  -- the panel, so the panel can't shrink around one: closed, it's gone,
+  -- and its scrollbar's gutter (6 px bar + 8 px gap, Noctalia's
+  -- `Style::scrollbarWidth`/`scrollbarGap`) is kept free instead, so
+  -- opening More doesn't shift the content.
   if moreOpen then
     content = ui.scroll({ key = "scroll", flexGrow = 1 }, { content })
+  else
+    content = ui.row({ key = "plain", flexGrow = 1, align = "start" }, {
+      content,
+      ui.box({ width = SCROLLBAR_GUTTER }),
+    })
   end
   panel.render(content)
 end
