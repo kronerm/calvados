@@ -760,8 +760,10 @@ min) → the next session's version query shows it (`Done`). Rules:
   stays (nothing rescinds it);
 - other calvados hosts learn the progress through `News`, and an update
   isn't started while one of them reports one running.
-Untested over AACP so far: the transfer itself (the GATT one worked), and
-`News` through the pods' relay.
+Done over AACP on Nov 14 (9A348 → 9B47, laptop): offer to "staged" in
+5 minutes (8604 requests of 971 bytes, ~26 KB/s, no drop); the lid's close
+then drops the link ~30 s in, as on every close. Untested: `News` through
+the pods' relay.
 
 ## Debugging a reboot
 

@@ -64,7 +64,7 @@ It never sends 0x0A (apply), solicits nothing, rescinds after a minute
 without a request, and re-offers the identical package after a drop to
 resume. Nothing UARP is sent until the AACP session has settled and 5 s
 after a connect or a primary change, because of the abort below. The
-whole update over 0x4F hasn't run yet; the GATT one did.
+whole update over 0x4F ran on Nov 14 (below).
 
 **A complete update from Linux (Oct 27).** With the case charging, freshly
 reopened, the phone's Bluetooth and the calvados daemon off,
@@ -78,6 +78,14 @@ maximum) and running 9.0.348, nothing staged; after a forced primary
 switch the other bud reports the same, and both firmware slots of 0x1D
 read `90.3431000025000000.6807`. The case's own firmware wasn't offered
 (not reachable over GATT).
+
+**A complete update over AACP (Nov 14).** `calvados firmware update` on
+the laptop, both buds in the charging case, lid open, the phone's
+Bluetooth off: 9A348 → 9B47 offered 11:34:00, acked (deferred) at once,
+the primary pulled 8604 requests of 971 bytes (twice GATT's 475, ~26 KB/s)
+and reported "fully staged" at 11:38:57, no drop or stall. With the lid
+closed the primary held the laptop's link (the staged offer) for 30 s, then
+let go (0x13), as on every close; the case copies and applies from there.
 
 **Over AACP (Oct 27, on 9A348).** UARP also runs inside AACP, opcode 0x4F
 on the service-4 session: `04 00 04 00 4F 00 [len u16 LE]` + one whole UARP
