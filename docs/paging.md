@@ -140,10 +140,10 @@ retained block (the warm-reset target above) survives it is open.
 
 ## For calvados
 
-- Linux presence races the pods. Proposed, not implemented (presence
-  only logs the count): when they advertise 0 hosts and the laptop wasn't
-  the last owner, wait for the count to rise (the other host got paged) or
-  for one page to run out (~0.5 s + ~5 s) before connecting.
+- Linux presence races the pods, and connects at once (it only logs the
+  host count). Waiting for the pods to page another host first (0 hosts,
+  the laptop not the last owner: wait for the count to rise or a page to
+  run out, ~0.5 s + ~5 s) was considered and not wanted (Nov 14).
 - After a lid-close drop or a manual disconnect, the pods won't page that
   host again: it has to connect itself (the redial and presence do).
 - Don't send 0x36, 0x20, 0x14 or 0x44 by default.
