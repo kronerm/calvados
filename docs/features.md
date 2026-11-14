@@ -45,8 +45,11 @@ name in 0x1D.
 With the setting on (and our feature flags 0x4D = 0xD7, which LibrePods
 says it needs while audio plays), the pods switch to transparency by
 themselves while you speak and send 0x4B `02 00 01 [level]`: 1-2 speaking
-started, 6, 8, 9 back to normal (R; we have seen only 7, at a switch,
-with it off, C). The host lowers its own media: `Engine::conversation`
+started, 6, 8, 9 back to normal (R). Seen on 9B47 (Nov 14, the phone,
+ANC on): `1` `2` as you start; `3` `5` pairs every so often while the
+conversation lasts (unnamed; the pods stay open); `11` `4` `8` `9` at its
+end, ~5 min later in that test; `7` alone at a mode switch with it off
+(C). The host lowers its own media: `Engine::conversation`
 emits `Effect::Duck` once while media plays here, `Effect::Unduck` on
 6/8/9, on losing the audio, or when the setting goes off. Linux sets the
 pods' output node to 40 % of its volume with `wpctl` (AVRCP absolute
