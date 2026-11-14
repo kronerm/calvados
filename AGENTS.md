@@ -125,6 +125,18 @@ Cargo's downloads, `target` and cargo-apk2 are cached per job, keyed on
 - `settings.rs` — `Setting`/`Settings`: AutoSwitch and AutoConnect, with
   the storage key both platforms use; stored by the platforms, obeyed by
   the engine.
+- `pod_settings.rs` — the pods' own settings (`PodSetting`: Conversation
+  Awareness, Personalized Volume, the adaptive level, mic, charge limit,
+  case sounds, one-bud ANC, volume swipe and its length, press speed, hold
+  duration, sleep detection): control id, `Kind` (toggle `01`/`02`, level
+  0-100, choice), the name used on D-Bus, the CLI and Android intents, the
+  title both UIs show, `text`/`parse`/`next` (a tap's next value).
+  `DeviceState::pods` keeps what the pods report (most come in the startup
+  burst); shown only once reported, never stored. `Engine::set_pod`,
+  `Engine::rename` (0x1A). Conversation Awareness: the pods' 0x4B level
+  1-2 while media plays here emits `Effect::Duck` once; 6, 8, 9, losing
+  the audio, or the setting going off `Effect::Unduck`. Encodings and the
+  research: docs/features.md.
 - `display.rs` — what both platforms show, so they read the same: `Buds`
   (per component: level, charging, last known, place, primary), the
   ownership label, the noise modes' names (D-Bus `NoiseMode`, the Android
@@ -437,7 +449,9 @@ power-on (`LinkChange`). Its length caps at 255, i.e. 15 events.
   refusal's text; the package is fetched after it returns), `CancelUpdate`,
   `TryProbeCase`, `Update` (`(state, percent, detail)`) and `PeerUpdate`
   (the host first).
-- `cli.rs` — `calvados watch` / `set …` / `firmware
+- `cli.rs` — `calvados set pod <setting> <value>|toggle` and `rename
+  <name>` (D-Bus `Pods` a{ss}, `SetPod`, `Rename`; `watch` carries `pods`),
+  `calvados watch` / `set …` / `firmware
   status|update|cancel|try-probe-case`: a zbus proxy client of the daemon's
   own D-Bus object (no daemon logic), for shells without D-Bus. `firmware
   update` follows `Update` until staged, then says to close the lid
@@ -480,7 +494,9 @@ power-on (`LinkChange`). Its length caps at 255, i.e. 15 events.
   full. Channels are tracked from signaling on the link our AACP channel
   opens on (and later links to that address from their start), so channels
   opened before the daemon started (A2DP's) stay unknown until reopened.
-- `pipewire.rs` — the pods' card profile, set natively (`pipewire` crate,
+- `pipewire.rs` — `Effect::Duck`/`Unduck`: the pods' `bluez_output.*`
+  node to 40 % of its volume and back, through `wpctl` (the node's volume
+  is the pods' AVRCP absolute volume). Also the pods' card profile, set natively (`pipewire` crate,
   on its own thread and main loop): `off` as soon as BlueZ reports them
   connected (no AACP needed) and on `Effect::ReleaseAudio`; `a2dp-sink` on
   `Effect::RouteAudio`. With `off` the laptop keeps the link but can't pull
