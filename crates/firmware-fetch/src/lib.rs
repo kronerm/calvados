@@ -4,12 +4,12 @@
 //! requests, on whatever thread the platform runs them.
 
 use std::collections::HashMap;
-use std::io::Read as _;
+use std::io::{self, Read, Seek, SeekFrom};
 use std::path::Path;
 use std::time::{Duration, Instant};
 
 use anyhow::Context as _;
-use protocol::firmware::Release;
+use protocol::firmware::{BuildId, Release};
 use protocol::superbinary::Package;
 
 mod catalog;
@@ -21,6 +21,8 @@ const DOWNLOAD_TIMEOUT: Duration = Duration::from_secs(10 * 60);
 const DOWNLOAD_LIMIT: u64 = 256 * 1024 * 1024;
 /// The SuperBinary inside the asset's zip.
 const PACKAGE_NAME: &str = "AssetData/Firmware.acsw/firmware.uarp";
+/// Its build's `SourceVersion` and `BuildVersion`, as the pods report them.
+const VERSION_NAME: &str = "AssetData/Firmware.acsw/version.plist";
 
 /// The checks so far, by product (its models, as asked); owned by the
 /// platform's loop.
@@ -107,7 +109,48 @@ impl Client {
             .call()?
             .body_mut()
             .read_to_vec()?;
-        Ok(catalog::parse(&body))
+        Ok(catalog::parse(&body).map(|mut release| {
+            release.id = release.package.as_deref().and_then(|url| {
+                self.build_id(url)
+                    .inspect_err(|e| tracing::info!(%url, "the package's build: {e:#}"))
+                    .ok()
+            });
+            release
+        }))
+    }
+
+    /// The package's build from its `version.plist`, read with range
+    /// requests: the zip's directory and that file, a few KB of 11 MB.
+    fn build_id(&self, url: &str) -> anyhow::Result<BuildId> {
+        let length = self
+            .0
+            .head(url)
+            .call()?
+            .headers()
+            .get("content-length")
+            .and_then(|length| length.to_str().ok()?.parse().ok())
+            .context("no length")?;
+        let zip = io::BufReader::with_capacity(
+            64 * 1024,
+            Ranges {
+                agent: &self.0,
+                url,
+                length,
+                at: 0,
+            },
+        );
+        let mut archive = zip::ZipArchive::new(zip)?;
+        let mut xml = Vec::new();
+        archive
+            .by_name(VERSION_NAME)?
+            .take(64 * 1024)
+            .read_to_end(&mut xml)?;
+        let plist = plist::Value::from_reader_xml(xml.as_slice())?;
+        let text = |key| plist.as_dictionary()?.get(key)?.as_string();
+        let (source, build) = text("SourceVersion")
+            .zip(text("BuildVersion"))
+            .context("no SourceVersion or BuildVersion")?;
+        Ok(BuildId::new(source, build))
     }
 
     /// `release`'s package from [`Self::package`], logged; `None` when it
@@ -156,6 +199,57 @@ impl Client {
     }
 }
 
+/// A remote file read with HTTP range requests.
+struct Ranges<'a> {
+    agent: &'a ureq::Agent,
+    url: &'a str,
+    length: u64,
+    at: u64,
+}
+
+impl Read for Ranges<'_> {
+    fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
+        if self.at >= self.length || buf.is_empty() {
+            return Ok(0);
+        }
+        let end = (self.at + buf.len() as u64).min(self.length) - 1;
+        let bytes = self
+            .agent
+            .get(self.url)
+            .header("Range", &format!("bytes={}-{end}", self.at))
+            .call()
+            .and_then(|mut response| {
+                partial(response.status().as_u16())?;
+                response.body_mut().read_to_vec()
+            })
+            .map_err(io::Error::other)?;
+        let read = bytes.len().min(buf.len());
+        buf[..read].copy_from_slice(&bytes[..read]);
+        self.at += read as u64;
+        Ok(read)
+    }
+}
+
+/// Only a partial answer: a whole file would be read into one buffer.
+fn partial(status: u16) -> Result<(), ureq::Error> {
+    match status {
+        206 => Ok(()),
+        _ => Err(ureq::Error::StatusCode(status)),
+    }
+}
+
+impl Seek for Ranges<'_> {
+    fn seek(&mut self, to: SeekFrom) -> io::Result<u64> {
+        let at = match to {
+            SeekFrom::Start(at) => Some(at),
+            SeekFrom::End(by) => self.length.checked_add_signed(by),
+            SeekFrom::Current(by) => self.at.checked_add_signed(by),
+        };
+        self.at = at.ok_or_else(|| io::Error::other("seek out of range"))?;
+        Ok(self.at)
+    }
+}
+
 /// `bytes` as `release`'s package, checked.
 fn checked(bytes: Vec<u8>, release: &Release) -> anyhow::Result<Package> {
     let package = Package::parse(bytes)?;
@@ -187,6 +281,15 @@ fn store(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Against Apple's servers: `cargo test -p firmware-fetch -- --ignored`.
+    #[test]
+    #[ignore]
+    fn the_live_release_names_its_build() {
+        let release = Client::default().release(&["A3048".into()]).unwrap();
+        let id = release.id.clone().expect("read from version.plist");
+        println!("{release}: {id:?}");
+    }
 
     #[test]
     fn a_product_is_checked_once_a_day() {

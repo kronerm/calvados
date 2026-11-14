@@ -9,7 +9,7 @@
 use std::fmt;
 use std::time::{Duration, Instant};
 
-use crate::firmware::ExactVersion;
+use crate::firmware::{ExactVersion, Release};
 use crate::state::DeviceState;
 use crate::superbinary::Package;
 use crate::uarp::{MAX_DATA, Message, Processing, Received, Rejection, UNKNOWN_ASSET};
@@ -219,16 +219,16 @@ impl fmt::Display for Refusal {
 
 impl std::error::Error for Refusal {}
 
-/// Whether pods in `state` take `version`: both buds in the open case (an
-/// AACP session reports their ears) and `version` newer than what they run
+/// Whether pods in `state` take `release`: both buds in the open case (an
+/// AACP session reports their ears) and `release` newer than what they run
 /// ([`Firmware::older_than`]). Power is the pods' call: they defer an offer
 /// until the case charges.
 ///
 /// [`Firmware::older_than`]: crate::firmware::Firmware::older_than
-pub fn check(state: &DeviceState, version: ExactVersion) -> Result<(), Refusal> {
+pub fn check(state: &DeviceState, release: &Release) -> Result<(), Refusal> {
     let newer = state
         .firmware
-        .older_than(version)
+        .older_than(release)
         .ok_or(Refusal::VersionUnknown)?;
     match (state.in_case(), newer) {
         (false, _) => Err(Refusal::NotInCase),
@@ -962,29 +962,35 @@ mod tests {
     fn preconditions() {
         const OLD: &str = "71.2256000021000000.6663";
         let version = "9.0.348".parse().unwrap();
+        let release = &Release {
+            version,
+            build: "9A348".into(),
+            package: None,
+            id: None,
+        };
         let ready = state(EarStatus::InCase, ChargingStatus::Charging, OLD);
-        assert_eq!(check(&ready, version), Ok(()));
+        assert_eq!(check(&ready, release), Ok(()));
         let worn = state(EarStatus::InEar, ChargingStatus::Charging, OLD);
-        assert_eq!(check(&worn, version), Err(Refusal::NotInCase));
+        assert_eq!(check(&worn, release), Err(Refusal::NotInCase));
         let unplugged = state(EarStatus::InCase, ChargingStatus::Discharging, OLD);
-        assert_eq!(check(&unplugged, version), Ok(()), "the pods defer, not us");
+        assert_eq!(check(&unplugged, release), Ok(()), "the pods defer, not us");
         let same = state(
             EarStatus::InCase,
             ChargingStatus::Charging,
             "90.3431000025000000.6807",
         );
         assert_eq!(
-            check(&same, version),
+            check(&same, release),
             Err(Refusal::NotNewer),
             "same major.minor"
         );
         let mut exact = same.clone();
         exact.firmware.exact = "9.0.300".parse().ok();
-        assert_eq!(check(&exact, version), Ok(()), "exactly older");
+        assert_eq!(check(&exact, release), Ok(()), "exactly older");
         exact.firmware.exact = Some(version);
-        assert_eq!(check(&exact, version), Err(Refusal::NotNewer));
+        assert_eq!(check(&exact, release), Err(Refusal::NotNewer));
         let mut unknown = ready;
         unknown.firmware.reported = None;
-        assert_eq!(check(&unknown, version), Err(Refusal::VersionUnknown));
+        assert_eq!(check(&unknown, release), Err(Refusal::VersionUnknown));
     }
 }

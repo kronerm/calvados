@@ -141,10 +141,16 @@ Cargo's downloads, `target` and cargo-apk2 are cached per job, keyed on
   known while no bud is inside, when the advertisement knows better).
 - `firmware.rs` — the running version and the catalog's `Release`.
   `Version::of_running`: 0x1D's `71.2256000021000000.6663` is major and a
-  one-digit minor (7.1), then a build counter; it carries no release
-  number (7B19–7B21 all read 7.1; 9A348 `90.…`), so `Firmware::older_than`
-  (`Release::is_newer_than`, `update::check`) compares exactly when UARP
-  gave the `ExactVersion` (7.1.21), else major.minor only.
+  one-digit minor (7.1), then `<SourceVersion>.<BuildVersion>`
+  (`BuildId`), no release number (7B19–7B21 all read 7.1). The release's
+  package carries the same pair in its `version.plist` (9B47:
+  `3431046004000000.29`; also its `bver`), which `firmware-fetch` reads with
+  range requests at each catalog check (`Release::id`, a few KB of the
+  zip). So `Firmware::older_than` (`Release::is_newer_than`,
+  `update::check`) compares exactly when the version is known (UARP, or
+  the build is the latest release's: `Firmware::runs`); another build of
+  the same or an older major.minor counts as older (the pods refuse what
+  isn't newer); else major.minor only.
   `DeviceState::firmware` (`Firmware`: model, 0x1D string, exact version)
   is carried over a reconnect like the name, never stored; the exact
   version is dropped only when the reported string changes. A session
@@ -224,11 +230,14 @@ Cargo's downloads, `target` and cargo-apk2 are cached per job, keyed on
   past the connect or the last primary change (the session's `uarp.hold`).
 - The pods serve UARP over AACP to one host per link, the first to send
   any, until that host's link drops (docs/uarp.md, "One host at a time"):
-  a second host gets no answer at all, hence `Failure::NoAnswer`. So once
-  settled a session asks the running version (`VersionQuery`) only while
-  it's unknown for these pods (`Engine::firmware_known`, in memory, dropped
-  when 0x1D reports another build), and not when an update is to be
-  offered; the answer goes through `running_firmware`.
+  a second host gets no answer at all, hence `Failure::NoAnswer`. So a
+  host that isn't updating leaves UARP alone: the exact version comes from
+  0x1D's build matching the catalog's latest release
+  (`Engine::release_known`, `identify`; see `firmware.rs`), and a settled
+  session asks it over UARP (`VersionQuery`) only when no 0x1D came and
+  it's unknown (`Engine::firmware_known`, in memory), or when its staged
+  update waits for the new version; the answer goes through
+  `running_firmware`.
 - The pods announce the other bud as downstream (0x17, acked with 0x18),
   and the case as downstream 1 while it tunnels through the primary (only
   across a lid close with an offer held, and only from a case on 90.x;

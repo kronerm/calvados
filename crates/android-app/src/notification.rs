@@ -535,6 +535,7 @@ mod tests {
             version: "9.0.348".parse().unwrap(),
             build: "9A348".into(),
             package: None,
+            id: None,
         };
         let peer = PeerUpdate {
             host: "64:4a:00:11:22:33".parse().unwrap(),

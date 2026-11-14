@@ -13,7 +13,7 @@ use crate::aacp::{
     HandshakeStatus, KeyType, NoiseControlMode, Packet, Routing, RoutingResponse, crash_log,
 };
 use crate::ble;
-use crate::firmware::{ExactVersion, Firmware};
+use crate::firmware::{ExactVersion, Firmware, Release};
 use crate::news::News;
 use crate::protocol::{
     self, handshake, hijack_sequence, request_notifications, session_setup_frames, set_cycle,
@@ -237,6 +237,9 @@ pub struct Engine {
     /// UARP to one host per link, the first to ask, so the exact version is
     /// asked only while unknown (or after the pods report another build).
     firmware_known: Option<(MacAddress, Firmware)>,
+    /// The catalog's latest release for the pods: their `0x1D` build
+    /// matching it tells the exact version without UARP.
+    latest: Option<Release>,
 }
 
 /// The AACP session.
@@ -366,7 +369,7 @@ enum VersionQuery {
 #[derive(Debug)]
 enum Update {
     /// The platform fetches the package for this release.
-    Downloading(ExactVersion, Goal),
+    Downloading(Release, Goal),
     Running(Updater),
     /// Ended before it ran.
     Failed(Failure),
@@ -787,6 +790,7 @@ impl Engine {
                 self.primary_changes(now)
             }
             Packet::Uarp(message) => self.uarp_received(&message, now),
+            Packet::DeviceInformation(_) => self.identify(),
             Packet::CrashLog(log) => self.crash_log(log),
             Packet::RoutingResponse(RoutingResponse {
                 kind: Routing::News(news),
@@ -1302,7 +1306,7 @@ impl Engine {
     /// asks for its package ([`Engine::package`]).
     pub fn prepare_update(
         &mut self,
-        release: Option<ExactVersion>,
+        release: Option<Release>,
         goal: Goal,
     ) -> Result<Vec<Effect>, Refusal> {
         let release = self.may_update(release).inspect_err(|&refusal| {
@@ -1314,6 +1318,7 @@ impl Engine {
             }
         })?;
         tracing::info!(%release, ?goal, "firmware update: fetching the package");
+        self.latest = Some(release.clone());
         self.update = Some(Update::Downloading(release, goal));
         if let Some(session) = self.session_mut() {
             session.told = None;
@@ -1321,7 +1326,7 @@ impl Engine {
         Ok(self.tell_update(UpdateStatus::Downloading))
     }
 
-    fn may_update(&self, release: Option<ExactVersion>) -> Result<ExactVersion, Refusal> {
+    fn may_update(&self, release: Option<Release>) -> Result<Release, Refusal> {
         if !self.is_connected() {
             return Err(Refusal::NotConnected);
         }
@@ -1329,11 +1334,11 @@ impl Engine {
         if self.update_status().is_some_and(UpdateStatus::is_active) {
             return Err(Refusal::Running);
         }
-        self.may_start(release).map(|()| release)
+        self.may_start(&release).map(|()| release)
     }
 
     /// What may change while the package downloads.
-    fn may_start(&self, release: ExactVersion) -> Result<(), Refusal> {
+    fn may_start(&self, release: &Release) -> Result<(), Refusal> {
         let peer_running = self
             .state
             .peer_update
@@ -1350,12 +1355,13 @@ impl Engine {
     /// The package [`Engine::prepare_update`] asked for, `None` when it
     /// couldn't be had: checked again, then offered.
     pub fn package(&mut self, package: Option<Package>, now: Instant) -> Vec<Effect> {
-        let Some(Update::Downloading(release, goal)) = self.update else {
+        let Some(Update::Downloading(release, goal)) = &self.update else {
             return Vec::new();
         };
+        let (release, goal) = (release.clone(), *goal);
         let started = package
             .filter(|package| {
-                let matches = package.version() == release;
+                let matches = package.version() == release.version;
                 if !matches {
                     tracing::warn!(release = %release, package = %package.version(), "firmware update: not the release's package");
                 }
@@ -1363,7 +1369,7 @@ impl Engine {
             })
             .ok_or(Failure::Download)
             .and_then(|package| {
-                self.may_start(release)
+                self.may_start(&release)
                     .map_err(Failure::Refused)
                     .map(|()| package)
             });
@@ -1400,15 +1406,24 @@ impl Engine {
             && self.state.primary_bud.is_some()
     }
 
-    /// Something to send once UARP may be, in this session.
+    /// Something to send once UARP may be, in this session: the update to
+    /// offer, or the version query, only when nothing else tells it (no
+    /// `0x1D`) or a staged update waits for the new version. The pods serve
+    /// UARP to the first host that sends any, until its link drops.
     fn uarp_waits(&self) -> bool {
-        let update = match &self.update {
-            Some(Update::Running(updater)) => updater.status().is_active() && !updater.is_up(),
-            _ => false,
+        let (offer, staged) = match &self.update {
+            Some(Update::Running(updater)) => (
+                updater.status().is_active() && !updater.is_up(),
+                matches!(updater.status(), UpdateStatus::Staged),
+            ),
+            _ => (false, false),
         };
-        self.session()
-            .is_some_and(|session| update || matches!(session.uarp.query, VersionQuery::Due))
-            && (update || self.state.firmware.exact.is_none())
+        let firmware = &self.state.firmware;
+        let ask = firmware.exact.is_none() && (staged || firmware.reported.is_none());
+        offer
+            || self
+                .session()
+                .is_some_and(|session| matches!(session.uarp.query, VersionQuery::Due) && ask)
     }
 
     /// Once UARP may be sent: offer (or resume) the update, else ask for
@@ -1606,6 +1621,26 @@ impl Engine {
                 }
                 self.with_updater(|updater| updater.received(message, now))
             }
+        }
+    }
+
+    /// The catalog's latest release for the pods (a check's result): the
+    /// exact version when they run it.
+    pub fn release_known(&mut self, release: Release) -> Vec<Effect> {
+        self.latest = Some(release);
+        self.identify()
+    }
+
+    /// The exact version from the reported build when it's the latest
+    /// release's: no UARP needed (the pods serve it to one host only).
+    fn identify(&mut self) -> Vec<Effect> {
+        match &self.latest {
+            Some(release) if self.state.firmware.exact.is_none() && self.state.firmware.runs(release) => {
+                let exact = release.version;
+                tracing::info!(%exact, "the reported build is the latest release");
+                self.running_firmware(exact)
+            }
+            _ => Vec::new(),
         }
     }
 
@@ -2876,8 +2911,17 @@ mod tests {
         use crate::superbinary::tests::package;
         use crate::update::{UpdateStatus, WATCHDOG};
 
-        fn release() -> Option<ExactVersion> {
-            "9.0.348".parse().ok()
+        fn release() -> Option<Release> {
+            release_of("9.0.348")
+        }
+
+        fn release_of(version: &str) -> Option<Release> {
+            Some(Release {
+                version: version.parse().ok()?,
+                build: String::new(),
+                package: None,
+                id: None,
+            })
         }
 
         /// Once a connect has settled.
@@ -2886,15 +2930,16 @@ mod tests {
         }
 
         /// A settled session: acked, the burst in, both buds in the charging
-        /// case, on 7.1, with PEER connected too. Its version query is out.
+        /// case, with PEER connected too. No `0x1D` came, so its version
+        /// query is out; then the pods report 7.1.
         fn ready() -> Engine {
             let mut e = engine();
             e.handle(Packet::HandshakeAck(HandshakeStatus::Accepted), now());
             feed(&mut e, CONNECTED_DEVICES);
             settle(&mut e, now());
-            e.state.firmware.reported = Some("71.2256000021000000.6663".into());
             let fx = e.tick(later());
             assert_eq!(kinds(&fx), [0x00, 0x01, 0x03], "the version query");
+            e.state.firmware.reported = Some("71.2256000021000000.6663".into());
             e
         }
 
@@ -3074,7 +3119,7 @@ mod tests {
         }
 
         #[test]
-        fn the_exact_version_is_asked_once_per_build() {
+        fn the_exact_version_is_asked_only_without_a_report() {
             let mut e = ready();
             running_version(&mut e, [9, 0, 348]);
             // Hours later, the same pods: known, so UARP stays free for a
@@ -3087,14 +3132,28 @@ mod tests {
             settle(&mut e, back);
             assert_eq!(kinds(&e.tick(back + UARP_SETTLE)), []);
             assert_eq!(e.state().firmware.exact, "9.0.348".parse().ok());
-            // Another build reported: asked again.
-            let info = crate::aacp::device_information::DeviceInformation {
-                name: None,
-                model: None,
-                firmware: Some("91.3431046004000000.29".into()),
+            // Another build reported: not asked (the report tells enough);
+            // the latest release's build is that release.
+            let info = |firmware: &str| {
+                Packet::DeviceInformation(crate::aacp::device_information::DeviceInformation {
+                    name: None,
+                    model: None,
+                    firmware: Some(firmware.into()),
+                })
             };
-            let fx = e.handle(Packet::DeviceInformation(info), back + UARP_SETTLE);
-            assert_eq!(kinds(&fx), [0x00, 0x01, 0x03]);
+            let at = back + UARP_SETTLE;
+            assert_eq!(kinds(&e.handle(info("91.3431040000000000.12"), at)), []);
+            assert_eq!(kinds(&e.tick(at)), []);
+            assert_eq!(e.state().firmware.exact, None);
+            let latest = Release {
+                id: Some(crate::firmware::BuildId::new("3431046004000000", "29")),
+                ..release_of("9.1.47").unwrap()
+            };
+            assert!(e.state().firmware.older_than(&latest) == Some(true));
+            e.release_known(latest);
+            assert_eq!(e.state().firmware.exact, None, "not its build");
+            assert_eq!(kinds(&e.handle(info("91.3431046004000000.29"), at)), []);
+            assert_eq!(e.state().firmware.exact, "9.1.47".parse().ok());
         }
 
         #[test]
@@ -3287,7 +3346,7 @@ mod tests {
         #[test]
         fn a_package_is_checked_again() {
             let mut e = ready();
-            e.prepare_update("9.0.349".parse().ok(), Goal::Install)
+            e.prepare_update(release_of("9.0.349"), Goal::Install)
                 .unwrap();
             e.package(Some(package()), later());
             assert_eq!(
@@ -3297,7 +3356,7 @@ mod tests {
             );
             let mut e = ready();
             e.prepare_update(release(), Goal::Install).unwrap();
-            e.state.firmware.exact = release();
+            e.state.firmware.exact = "9.0.348".parse().ok();
             e.package(Some(package()), later());
             assert_eq!(
                 e.update_status(),

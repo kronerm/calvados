@@ -283,8 +283,9 @@ async fn run(daemon: &Daemon, mut engine: Engine, inputs: &mut mpsc::UnboundedRe
                     Instant::now(),
                 ),
                 Input::Catalog(models, release) => {
+                    let known = release.clone().map(|release| engine.release_known(release));
                     catalog.found(models, release);
-                    Vec::new()
+                    known.unwrap_or_default()
                 }
                 Input::StartUpdate(goal, reply) => {
                     let release = engine
@@ -294,7 +295,7 @@ async fn run(daemon: &Daemon, mut engine: Engine, inputs: &mut mpsc::UnboundedRe
                         .as_deref()
                         .and_then(|model| catalog.latest(model))
                         .cloned();
-                    let prepared = engine.prepare_update(release.as_ref().map(|release| release.version), goal);
+                    let prepared = engine.prepare_update(release.clone(), goal);
                     let (answer, effects) = match (prepared, release) {
                         (Ok(effects), Some(release)) => {
                             catalog.fetch_package(release, &daemon.inputs);

@@ -49,6 +49,7 @@ pub fn parse(xml: &[u8]) -> Option<Release> {
                     release: number("FirmwareVersionRelease")?,
                 },
                 build: text("Build")?.to_owned(),
+                id: None,
             })
         })
         .max_by_key(|release| release.version)

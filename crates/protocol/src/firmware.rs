@@ -26,6 +26,24 @@ impl Version {
     }
 }
 
+/// A build's identity, `<SourceVersion>.<BuildVersion>`: the pods' running
+/// string past its first field (`3431046004000000.29` for 9B47), and what
+/// the release's package says in its `version.plist`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct BuildId(String);
+
+impl BuildId {
+    pub fn new(source: &str, build: &str) -> Self {
+        Self(format!("{source}.{build}"))
+    }
+
+    /// From the pods' running string; `None` without both fields.
+    pub fn of_running(raw: &str) -> Option<Self> {
+        let (_, rest) = raw.split_once('.')?;
+        rest.contains('.').then(|| Self(rest.to_owned()))
+    }
+}
+
 /// A non-empty run of ASCII digits (`parse` alone takes a sign).
 fn digits(s: &str) -> Option<u32> {
     s.bytes()
@@ -111,7 +129,7 @@ pub struct Firmware {
     pub model: Option<String>,
     /// As `0x1D` reports it: see [`Version::of_running`].
     pub reported: Option<String>,
-    /// From UARP (Linux).
+    /// From UARP, or the release whose [`BuildId`] it reports.
     pub exact: Option<ExactVersion>,
 }
 
@@ -138,14 +156,25 @@ impl Firmware {
             .or_else(|| Version::of_running(self.reported.as_deref()?))
     }
 
-    /// Whether `version` is newer: exactly when UARP told, else by
-    /// major.minor (`0x1D` carries no release number); `None` when unknown.
-    pub fn older_than(&self, version: ExactVersion) -> Option<bool> {
-        match self.exact {
-            Some(exact) => Some(exact < version),
-            None => self
-                .version()
-                .map(|running| running < version.major_minor()),
+    /// The reported build is `release`'s.
+    pub fn runs(&self, release: &Release) -> bool {
+        let running = self.reported.as_deref().and_then(BuildId::of_running);
+        running.is_some() && running == release.id
+    }
+
+    /// Whether `release` is newer: exactly when known; else another build
+    /// of the same or an older major.minor (`0x1D` carries no release
+    /// number; the pods refuse what isn't newer anyway); else by
+    /// major.minor. `None` when unknown.
+    pub fn older_than(&self, release: &Release) -> Option<bool> {
+        let latest = release.version.major_minor();
+        let reported = self.reported.as_deref().and_then(BuildId::of_running);
+        match (self.exact, reported, &release.id) {
+            (Some(exact), ..) => Some(exact < release.version),
+            (None, Some(running), Some(id)) => {
+                Some(running != *id && self.version().is_some_and(|version| version <= latest))
+            }
+            (None, ..) => self.version().map(|running| running < latest),
         }
     }
 }
@@ -159,12 +188,14 @@ pub struct Release {
     pub build: String,
     /// The asset's zip (`AssetData/Firmware.acsw/firmware.uarp` inside).
     pub package: Option<String>,
+    /// From the package's `version.plist`, when it could be read.
+    pub id: Option<BuildId>,
 }
 
 impl Release {
     /// Newer than what runs ([`Firmware::older_than`]); not while unknown.
     pub fn is_newer_than(&self, running: &Firmware) -> bool {
-        running.older_than(self.version).unwrap_or(false)
+        running.older_than(self).unwrap_or(false)
     }
 }
 
@@ -206,6 +237,7 @@ mod tests {
             version: "7.1.22".parse().unwrap(),
             build: "7B22".into(),
             package: None,
+            id: None,
         };
         let mut running = Firmware {
             reported: Some("71.2256000021000000.6663".into()),
@@ -217,6 +249,30 @@ mod tests {
         running.exact = "7.1.22".parse().ok();
         assert!(!release.is_newer_than(&running));
         assert!(!release.is_newer_than(&Firmware::default()));
+    }
+
+    #[test]
+    fn the_reported_build_identifies_the_release() {
+        let release = Release {
+            version: "9.1.47".parse().unwrap(),
+            build: "9B47".into(),
+            package: None,
+            id: Some(BuildId::new("3431046004000000", "29")),
+        };
+        let running = |raw: &str| Firmware {
+            reported: Some(raw.into()),
+            ..Firmware::default()
+        };
+        let latest = running("91.3431046004000000.29");
+        assert!(latest.runs(&release));
+        assert_eq!(latest.older_than(&release), Some(false));
+        let earlier = running("91.3431040000000000.12");
+        assert!(!earlier.runs(&release));
+        assert_eq!(earlier.older_than(&release), Some(true), "same 9.1, other build");
+        assert_eq!(running("90.3431000025000000.6807").older_than(&release), Some(true));
+        assert_eq!(running("100.1.2").older_than(&release), Some(false), "a newer major");
+        assert_eq!(BuildId::of_running("91"), None);
+        assert_eq!(BuildId::of_running("91.3431"), None);
     }
 
     #[test]

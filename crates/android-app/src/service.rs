@@ -209,7 +209,12 @@ fn service_main(jvm: JavaVM, events: crossbeam_channel::Receiver<Event>) {
 
         match event {
             None | Some(Event::Playback { .. } | Event::PhoneCall(_)) => {}
-            Some(Event::Catalog(models, release)) => catalog.found(models, release),
+            Some(Event::Catalog(models, release)) => {
+                if let Some(release) = release.clone() {
+                    effects.extend(engine.release_known(release));
+                }
+                catalog.found(models, release);
+            }
             Some(Event::Package(package)) => effects.extend(engine.package(package, now)),
             Some(Event::Nearby(advertisers)) => {
                 let keys = bluetooth::stored_keys()
@@ -257,7 +262,7 @@ fn service_main(jvm: JavaVM, events: crossbeam_channel::Receiver<Event>) {
                         .and_then(|model| catalog.latest(model))
                         .cloned();
                     match engine.prepare_update(
-                        release.as_ref().map(|release| release.version),
+                        release.clone(),
                         crate::proto::update::Goal::Install,
                     ) {
                         Ok(started) => {
