@@ -135,9 +135,12 @@ AirPods only accept Apple-signed, newer firmware, but if something goes
 wrong, only Apple can fix it.
 
 Only the buds are updated. The case's own firmware, in the same package,
-is never offered, and calvados can't see which version the case runs. A
-case still on its 7.x firmware can be updated only by an iPhone or Mac
-that has the AirPods in Find My.
+is never offered. Case firmware before 9.0 (9A348) can be updated only by
+an iPhone or Mac that has the AirPods in Find My; from 9.0 on, it can be
+reached through the buds (not yet done by calvados). To see the case's
+version, plug it into a computer: `lsusb -v -d 05ac:139e | grep bcdDevice`
+shows `5a.00` or higher from 9.0 on, `47.xx` to `51.xx` before (7.1 to
+8.1).
 
 1. Put both buds in the case, plug it in, keep the lid open. Turn off
    Bluetooth on any iPhone or Mac nearby.

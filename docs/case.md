@@ -102,6 +102,29 @@ has none. Inferred: shared RTKit platform code kept for other products.
 | BLE (NERF's UARP service, tid 2) | not denied (config +0xd = 1); needs Find My | not denied (config +8 = 0); needs Find My |
 | USB (tid 3) | routing Disabled by default | routing Disabled by default |
 
+### Which builds tunnel (Nov 14, every A2968 release from 7B21 on; Known)
+
+The switch byte was read from each build's data, not its strings.
+
+| Build | STFC | Trigger code | Switch | USB `bcdDevice` |
+|---|---|---|---|---|
+| 7B21 | 71.8 | "Tunnel Available" | +8 = 0 (const 0x080635fc), off | 0x4708 (observed) |
+| 7E93 | 74.10 | as 7B21 | +8 = 0 (const 0x08063204), off | 0x4a0a |
+| 8A356, 8A358 | 80.111 | 9A348's timer and gate | +0xc = 0 (flash const 0x080642a8), off | 0x506f |
+| 8B21, 8B28, 8B39, 8B41 | 81.4, 81.7, 81.10, 81.11 | as 8A | +0xc = 0, off | 0x5104, 0x5107, 0x510a, 0x510b |
+| **9A348** | **90.390** | "Tunnel avail", "Deny %s(%u) offer" | +0xc = 1, +0xd = 1 (RAM 0x20001790), **on** | 0x5a00 |
+| 9B47 | 91.2 | as 9A348 (fwup code identical but for relocation) | on | 0x5b00 |
+
+8.x already has 9A348's structure (2 s timer 0x200362e0 gated by `ldrb
+[cfg+0xc]; cmp #1`, 8B41 0x080134d0/0x080139de) but neither its separate
+BLE flag nor the protocol > 5 tunnel-offer gate; there is no partly-on
+build. 7A294-7B19 predate 7B21 (not checked; assumed off). `bcdDevice`
+is the version word's major.minor (0x00MMmm00) before 9A348 and `major 00`
+from 9A348 on (0x08035308); only 0x4708 is confirmed on hardware. So a case
+reporting `bcdDevice` ≥ 0x5a00 (`lsusb -v` with the case on USB) tunnels;
+0x47xx-0x51xx doesn't. The 9A348 case package's STFC is byte-identical to
+`firmware/A3048/parts/STFC`.
+
 ### The case's UARP accessory (9A348 STFC; Known code, tid meanings Inferred)
 
 - UARP data sessions are B2P data sessions ("DS"; B2P = the case-bud
