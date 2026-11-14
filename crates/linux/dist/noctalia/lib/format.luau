@@ -176,7 +176,7 @@ format.POD_SETTINGS = {
   {
     name = "conversation-awareness",
     title = "Conversation Awareness",
-    description = "Lowers the volume and lets voices in while you speak.",
+    description = "Lowers the volume while you speak.",
     main = true,
   },
   {
