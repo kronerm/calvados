@@ -6,8 +6,8 @@ id = "kroner/calvados"
 name = "Calvados"
 version = "0.1.0"
 plugin_api = 42
-# 22: require() of ./lib modules; 24: runAsync with an argv table; 42: a
-# panel as tall as its content ("More" expands it).
+# 22: require() of ./lib modules; 24: runAsync with an argv table; the
+# panel was tested on 42 (Noctalia 5.4).
 author = "kroner"
 license = "MIT"
 dependencies = []
@@ -23,9 +23,10 @@ entry = "bar.luau"
 id = "panel"
 entry = "panel.luau"
 width = 400
-height = "content"
-# Scrolls past this (More open is ~1050 px).
-max_height = 700
+# Fits the panel with More closed; More scrolls within it. A scroll keeps
+# the height it was first laid out at, so a content-sized panel couldn't
+# shrink around one.
+height = 600
 placement = "attached"
 position = "auto"
 open_near_click = true

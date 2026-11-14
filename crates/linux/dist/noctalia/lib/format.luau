@@ -185,7 +185,13 @@ format.POD_SETTINGS = {
     description = "Adapts the volume to your surroundings.",
     main = true,
   },
-  { name = "adaptive-level", title = "Adaptive level", kind = "level", low = "More noise", high = "Less noise" },
+  -- A slider would take the scroll wheel while the panel scrolls.
+  {
+    name = "adaptive-level",
+    title = "Adaptive level",
+    kind = "choice",
+    options = { "0", "25", "50", "75", "100" },
+  },
   { name = "mic", title = "Microphone", kind = "choice", options = { "auto", "right", "left" } },
   { name = "charge-limit", title = "Optimized charge limit" },
   { name = "case-sounds", title = "Case sounds" },

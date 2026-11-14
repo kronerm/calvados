@@ -488,9 +488,14 @@ power-on (`LinkChange`). Its length caps at 255, i.e. 15 events.
   checks it, but not `plugin_api` against the installed Noctalia: 5.0.1
   supports 3–30 (its log names the range when it refuses a plugin), while
   the published API definitions run ahead (container tooltips are API 32).
-  The plugin needs 42 (`height = "content"`, so the panel grows when More
-  opens; 24 brought `runAsync` with an argv table): Noctalia 5.4 or later
-  (5.4.1 tested).
+  The plugin declares 42 (24 brought `runAsync` with an argv table):
+  Noctalia 5.4 or later (5.4.1 tested). The panel has a fixed height and
+  scrolls once More is open: a `ui.scroll` keeps the height it was first
+  laid out at, so a `height = "content"` panel can't shrink around one;
+  while nothing overflows a 14 px box keeps the scrollbar's gutter free,
+  so opening More shifts nothing. Plugins can't turn off a slider's
+  wheel, so the panel has no sliders (they caught the wheel while it
+  scrolled).
 - `state.rs` — the state directory, the pods' crash logs, and the two
   remembered settings (`protocol::settings`; files
   `auto_switch`/`auto_connect`, `on`/`off`, default on), the same two as
@@ -577,8 +582,8 @@ texts are written twice. A change to one side needs the other:
 - the pods' settings (`PodSetting::title`; values as `PodSetting::label`
   and the panel's `format.podValueLabel`: `On`, `Automatic`, `50%`): the
   panel's "More" section (collapsible, closed each time the panel opens;
-  a switch per toggle, segments per choice, a slider for the adaptive
-  level sent in tens while it moves, and a rename field)
+  a switch per toggle, segments per choice, the adaptive level as 0, 25,
+  50, 75, 100 %, and a rename field)
   and the notification's "More" page (`Page::Pods`: chips two to a row,
   `notification_pods.xml`/`notification_pod_row.xml`, a switch that's on
   filled like a selected noise tile; buttons More, Back,

@@ -223,43 +223,10 @@ local function choice(entry, value)
   })
 end
 
--- The adaptive level: a slider, sent as it moves (in tens, so a drag sends
--- a few commands, not one per pixel).
-local sentLevel = nil
-
-local function level(entry, value)
-  return ui.column({ gap = 4 }, {
-    ui.row({ align = "center" }, {
-      ui.label({ text = entry.title, flexGrow = 1 }),
-      ui.label({ text = format.podValueLabel(value), color = "on_surface_variant" }),
-    }),
-    ui.slider({
-      min = 0,
-      max = 100,
-      step = 10,
-      value = tonumber(value) or 50,
-      controlSize = "sm",
-      onChange = function(moved)
-        local rounded = tostring(math.floor((tonumber(moved) or 0) / 10 + 0.5) * 10)
-        if rounded ~= sentLevel and rounded ~= value then
-          sentLevel = rounded
-          setPod(entry.name, rounded)
-        end
-      end,
-    }),
-    ui.row({}, {
-      ui.label({ text = entry.low, fontSize = 11, color = "on_surface_variant", flexGrow = 1 }),
-      ui.label({ text = entry.high, fontSize = 11, color = "on_surface_variant" }),
-    }),
-  })
-end
-
 -- A setting under "More", as its kind wants it.
 local function moreRow(entry, value)
   if entry.kind == "choice" then
     return choice(entry, value)
-  elseif entry.kind == "level" then
-    return level(entry, value)
   end
   return setting(entry.title, entry.description, value == "on", true, function(checked)
     setPod(entry.name, checked == "true" and "on" or "off")
@@ -395,21 +362,16 @@ render = function()
   if line then
     table.insert(rows, line)
   end
-  local content = ui.column({ flexGrow = 1, gap = 18, align = "stretch" }, rows)
-  -- With More open the panel is at its cap and scrolls. A scroll fills
-  -- the panel, so the panel can't shrink around one: closed, it's gone,
-  -- and its scrollbar's gutter (6 px bar + 8 px gap, Noctalia's
-  -- `Style::scrollbarWidth`/`scrollbarGap`) is kept free instead, so
-  -- opening More doesn't shift the content.
-  if moreOpen then
-    content = ui.scroll({ key = "scroll", flexGrow = 1 }, { content })
-  else
-    content = ui.row({ key = "plain", flexGrow = 1, align = "start" }, {
-      content,
-      ui.box({ width = SCROLLBAR_GUTTER }),
-    })
-  end
-  panel.render(content)
+  -- A fixed-height panel that scrolls once More is open. The scrollbar
+  -- takes its gutter (6 px bar + 8 px gap, Noctalia's
+  -- `Style::scrollbarWidth`/`scrollbarGap`) only while the content
+  -- overflows; until then a box keeps it free, so nothing shifts.
+  panel.render(ui.scroll({ flexGrow = 1 }, {
+    ui.row({ gap = 0, align = "start" }, {
+      ui.column({ flexGrow = 1, gap = 18, align = "stretch" }, rows),
+      ui.box({ width = moreOpen and 0 or SCROLLBAR_GUTTER }),
+    }),
+  }))
 end
 
 noctalia.state.watch(format.STATE, function(value)
@@ -420,6 +382,5 @@ end)
 function onOpen(_context)
   moreOpen = false
   draftName = nil
-  sentLevel = nil
   render()
 end
