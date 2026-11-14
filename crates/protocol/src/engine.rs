@@ -733,6 +733,8 @@ impl Engine {
             return Vec::new();
         }
         tracing::info!(name, "renaming the pods");
+        // As with a setting, the other hosts hear of it, not we.
+        self.state.name = Some(name.to_owned());
         vec![Effect::Send(protocol::rename(name))]
     }
 
@@ -2136,6 +2138,8 @@ mod tests {
         let mut e = engine();
         assert_eq!(e.set_pod(PodSetting::VolumeSwipeLength, 2).len(), 1);
         assert_eq!(e.state.pods.get(PodSetting::VolumeSwipeLength), Some(2));
+        assert_eq!(e.rename(" Pods ").len(), 1);
+        assert_eq!(e.state.name.as_deref(), Some("Pods"));
     }
 
     #[test]

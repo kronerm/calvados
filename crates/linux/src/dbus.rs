@@ -250,7 +250,7 @@ impl CalvadosService {
         self.snapshot().signal
     }
 
-    /// Rename the AirPods (1-32 bytes); `Name` shows it once they report it.
+    /// Rename the AirPods (1-32 bytes); `Name` shows it at once.
     async fn rename(&self, name: String) -> zbus::fdo::Result<()> {
         let name = name.trim().to_owned();
         if name.is_empty() || name.len() > 32 {
