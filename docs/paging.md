@@ -1,8 +1,9 @@
 # Which host the pods connect to
 
 AirPods Pro 2 (USB-C), build 9A348, image `rkof` (hashes and tools:
-[firmware.md](firmware.md)). Cited `[rkof 0xADDR]`; Known = read from code,
-Observed = our logs, Inferred = marked. Read Nov 9 for the laptop that
+[firmware.md](firmware.md)). Cited `[addr]`, all `rkof` 9A348 (in 9B47 the
+guard is 0x99978, tables 0x1c2a68 and 0x1c2a8c unmoved); Known = read from
+code, Observed = our logs, Inferred = marked. Read Nov 9, after the laptop
 connected first and locked the phone out.
 
 ## The rule
@@ -47,9 +48,9 @@ paging, 3 releases it, 1 **disconnects every host with reason 2**
 [0x8e46e → 0x9a300]. Inferred: the put-away policy. FUN_0008544c drops
 every host the same way when 0xb6514() (an 'AP' query) holds.
 
-So when a host connects mid-wait its slot's event 6 returns the machine
-to 5 and the guard fails; mid-page the event is swallowed, the page runs
-out, and the next attempt's guard fails.
+So a host connecting mid-wait sends the machine back to 5 (its slot's
+event 6) and the guard fails; mid-page the event is swallowed, the page
+runs out, and the next attempt's guard fails.
 
 ## The targets [Known]
 
@@ -123,26 +124,26 @@ capped at 3; bits 0-1 the audio's kind**, bytes 11-26 encrypted. The worn
 capture in `ble.rs` reads 2 hosts. Observed Nov 13 15:11:35, the lid
 opening: 0, then 1 0.2 s later (the phone), then 2 10 s later (the laptop). Nothing stops it while hosts are
 connected. Inferred: 181.25 ms apart, 20 ms for 10 s after the lid opens.
+calvados logs the count (`our pods advertising`).
 A short format (`07 11 06` + 16 encrypted bytes) exists too; its byte 8 is
 ciphertext, so the Android scan's lid filter drops about half of them.
 What selects it is open.
 
-## The reset in the case [Inferred]
+## The reset in the case
 
-A shutdown manager, FUN_0015f804(reason 1-8), runs from the case's
-messages (reasons 2, 3, 5, 6), the main loop (4) and a 1 s poll while
-charging (1). The case puts the buds into ULP after the lid has been
-closed for 30 s (STFC, [update-host.md](update-host.md)). The pods'
-uptime restarted 5-30 s after both buds went into the case (Nov 6, Nov 9)
-and the laptop's link then timed out (0x08) instead of ending: a power
-down with no LMP detach. Whether the retained block survives it is open.
+The case resets docked buds after the lid closes (Known, STFC; the
+Shutdown Manager and its reasons: [firmware.md](firmware.md), "Resets
+that leave no crash log"). Observed Nov 6 and Nov 9: the uptime restarted
+5-30 s after both buds went into the case, and the laptop's link timed
+out (0x08) instead of ending: a power down with no LMP detach. Whether the
+retained block (the warm-reset target above) survives it is open.
 
 ## For calvados
 
-- Linux presence races the pods: when they advertise 0 hosts and the
-  laptop wasn't the last owner, wait for the count to rise (the other host
-  got paged) or for one page to run out (~0.5 s + ~5 s) before connecting.
-  Pending: logs of the count (`our pods advertising`).
+- Linux presence races the pods. Proposed, not implemented (presence
+  only logs the count): when they advertise 0 hosts and the laptop wasn't
+  the last owner, wait for the count to rise (the other host got paged) or
+  for one page to run out (~0.5 s + ~5 s) before connecting.
 - After a lid-close drop or a manual disconnect, the pods won't page that
   host again: it has to connect itself (the redial and presence do).
 - Don't send 0x36, 0x20, 0x14 or 0x44 by default.

@@ -34,7 +34,7 @@ map each model (`deviceMap`, e.g. `AirPodsPro1,2-usbc-case` = A2968) to its
 zip (7B21's case package came from there, docs/case.md), and [uarp-dump]
 lists some. A case that was never updated runs its factory build, not the
 buds' (ours: 7B21, its USB `bcdDevice` 0x4708 = STFC 71.8), so analyze the
-build it runs.
+build it runs ([case.md](case.md)).
 
 ## Builds analyzed
 
@@ -59,12 +59,12 @@ BLAKE3 (`b3sum`):
 | `rkos` | `1db6c5d45a80dd6c476f23c3103ddd6612b522eef815a0bf9b46f2951f6b534a` |
 | `rtpf` | `a7ae5f8da27c59810dc85e55318969deb0496af6dd94080188c620313acdd930` |
 
-The pods tested with calvados (Observed, over GATT Device Information and
-AACP `0x1D`) are older: model A3048 (the primary at the time), hardware
-`3.36.32`, firmware `71.2256000021000000.6663`, i.e. 7.1. Offsets here are
-from 9A348; the formats checked against those pods are marked Observed.
-UARP names that build: running firmware 7.1.21.0, i.e. 7B21
-(`tools/firmware/uarp_probe.py`, read-only).
+The pods tested with calvados (Observed, GATT Device Information and AACP
+`0x1D`): model A3048 (the primary at the time), hardware `3.36.32`. They
+ran 7.1 (`71.2256000021000000.6663`; UARP: 7.1.21.0, i.e. 7B21,
+`tools/firmware/uarp_probe.py`) until Oct 27, then 9A348 (updated over
+GATT); 9B47 was staged over AACP on Nov 14 ([uarp.md](uarp.md)). Offsets
+here are from 9A348 unless a build is named.
 
 ### Version strings
 
@@ -253,11 +253,12 @@ type 0xe; a host *offering* an asset with one of those three tags reaches
 (provider 0x1e: per paired host usage, 300 bytes; provider 1: power and
 usage, 704 bytes), no crash data.
 
-Over AACP 0x17 (Known, from code; the transfer itself untested):
+Over AACP 0x17 (Known from code; the transfer Observed Nov 6: bud 2's
+six 32 KB logs, one per core):
 - The wrapper: `[class] [len u16 LE]` + body, the class a u32 when the
   AAP version is above 1.1 [`0x6cf1a`], else u16. Class 0x200 is a host's
   request to the log module (listener [`0xafa48`] → dispatcher
-  [`0xafecc`], body `[type] [bud mask] [2] [sub] [1]`); class 0x400 its
+  [`0xafecc`], body `[type] [bud mask] [2 bytes] [sub] [1 byte]`); class 0x400 its
   answers; 0x100000 HID; 0x200000 and class-0x400 type 8 ULLA.
 - The store: at boot the `crlg` object [`0x13dd4`] saves each core's RTKit
   crash log (signature `CLHE` or `CLGH`, ≥ 0x20 bytes [`0x194d0`]) to
@@ -269,29 +270,32 @@ Over AACP 0x17 (Known, from code; the transfer itself untested):
   `Cver`, `Ctim`, `Cmbx`, `Crg8`, `Ccst`; then a copy of the header. Asahi
   Linux's RTKit crash log parser reads the same format.
 - The announcement [`0xb36d0`, timer 0x69 in `0xb22e8`]: `06 00 00 [n]` +
-  per core `[name 4] [size u32]` (cores AP AOP RTP BTM DSP1 DSP2), while
-  `CrlgMap` ≠ 0 and no host has asked for an automatic push. Observed: 7
-  times on Oct 27 (the update day, repeated reboots), on the phone 14 s
-  into the first session after the Nov 4 reboot, nowhere else since Oct 1;
-  not in every session (the laptop's after Nov 4 didn't get it).
+  per core `[name 4] [size u32]` (cores AP AOP RTP BTM DSP1 DSP2; `fe`
+  instead of `06` before an automatic push, per `crash_log.rs`), while
+  `CrlgMap` ≠ 0 and no host has asked for an automatic push. Observed:
+  ~10-14 s after a host connects (not only after a boot), to one host,
+  so far always the one holding the audio (5 times); 7 times on Oct 27
+  (the update day, repeated reboots), on the phone in the first session
+  after the Nov 4 reboot, nowhere else since Oct 1; not in every session
+  (the laptop's after Nov 4 didn't get it).
 - The request: type 5 (send logs), mask `ff`, sub 1 (crash logs; 2: the AP
   log ring `aplg.NN`): `05 ff ff 00 01 02`, what the firmware builds itself
   for an automatic push [`0x1c4154`, `0xb24cc`]. No Apple Device ID or
   feature-flag gate on the path. Type 6 sets the push target in NVRAM;
   types 8/9 (log streaming, non-prod only) and 0x10-0x12 (`core_en`) change
-  NVRAM: not for a host.
+  NVRAM: not for a host. Bud mask `00` clears the announcement without
+  sending anything (AGENTS.md): don't.
 - The answer [`0xb3048`]: `01 [n | 0x80 more] [bud 1/2 | 0x80 holding the
   link]` + up to 0x10c bytes, paced by the link's completions; `ff` ends
   [`0xb2d7a`], `fc 01` aborts [`0x156790`]. Afterwards `cr_user`/`cr_inear`
   are reset [`0xb2660`].
 - Coredumps (`coredump`, NVRAM `core_en`) have no path to a host.
 
-calvados asks once per run when announced (`aacp/crash_log.rs`). The
-announcement goes ~10-13 s after any host connects (not only after a boot)
-to one host, so far always the one holding the audio (Observed, 5 times).
-Fetching doesn't clear it: the only clear [`0xb25b8` → `0x19578`] zeroes
-NVRAM `CrlgMap`, while the reader [`0x18854`] returns the RAM copy, so the
-same logs are announced until the pods reboot.
+calvados asks once per run when announced (`aacp/crash_log.rs`).
+Fetching doesn't clear them (Observed Nov 6: the same 192 KB again): the
+only clear [`0xb25b8` → `0x19578`] zeroes NVRAM `CrlgMap`, while the
+reader [`0x18854`] returns the RAM copy, so the same logs are announced
+until the pods reboot.
 
 Reading a record: `Ctim` is µs since the pods' boot (the 0x2B history's
 clock); `Ccst` the current task's call stack; `Crtk` the RTKit task
@@ -328,7 +332,8 @@ in NVRAM `stn_rs`, names from the shell table `0x1d5954`): 1 uvlo,
 2 case_uvp, 3 case_reset, 4 hard_reset, 5 soft_reset, 6 assert (the only
 one with a log), 7 safety_fault. The case asks for most of them over B2P
 [handler `0x158d6c`]: 0x60 → case_reset unless UARP is busy (`0xbe420`),
-0x5c → soft_reset, 0x110 → case_uvp.
+0x5c → soft_reset, 0x110 → case_uvp. Other callers: the main loop (4)
+and a 1 s poll while charging (1).
 
 The case resets docked buds (STFC): 4 s after the lid closes
 [`0x0801f18a`] each bud whose radio is off is reset (state 9, B2P 0x60,
@@ -336,7 +341,9 @@ The case resets docked buds (STFC): 4 s after the lid closes
 holding a host is left until its radio goes off, then reset 1 s later.
 Observed: every put-away on Nov 12-13 was followed by a boot 1-3 s after
 the session ended (the next session's 0x2B uptime), and the secondary
-drops ~4 s after each close. So a short uptime after the buds were in the
+drops ~4 s after each close; Nov 6 and Nov 9 5-30 s after both buds went
+in, the laptop's link timing out (0x08), no LMP detach
+([paging.md](paging.md)). So a short uptime after the buds were in the
 closed case is this, not a crash. A host can't read the reason: it isn't
 in any AACP packet (the case gets it, record 0x188/6, with 3, 5 and 6
 mapped to 0); a crash log's `SHUT` section has it (`0x15f7e0`, 0x48
@@ -356,6 +363,11 @@ feature flags: [session-start.md](session-start.md).
 When they page out, which host, and what the advertisement says about
 it: [paging.md](paging.md).
 
+## Ownership
+
+The `OwnsConnection` arbiter, smart routing, `AudioSource` and the A2DP
+switch: [ownership.md](ownership.md).
+
 ## A host-side updater
 
 What closing the lid does, how several hosts interact, resuming, and the
@@ -364,18 +376,16 @@ case's version: [update-host.md](update-host.md).
 ## Open
 
 - UARP: see the open list in [uarp.md](uarp.md).
-- Crash logs, until a transfer shows: the start on the primary for its
-  own logs (`0xb35dc` is reached only through bud message 0xc5,
-  `0xc73e0`); whether the saver's `crlg.%u` [`0x194a0`] is the transfer's
-  `crlg.%02d` [`0xb04fc`]; what clears `CrlgMap`; who raises event 0x16d
-  (the pods' own push, [`0x84438`]). If nothing comes, try the bud mask
-  `00`, `01`, `02`.
+- Crash logs: how the primary starts on its own logs (`0xb35dc` is
+  reached only through bud message 0xc5, `0xc73e0`); whether the saver's
+  `crlg.%u` [`0x194a0`] is the transfer's `crlg.%02d` [`0xb04fc`]; who
+  calls the `CrlgMap` clear; who raises event 0x16d (the pods' own push,
+  [`0x84438`]).
 - What 0x62/0x63 carry, and the `0x02` record ids.
 - Why the audio clock doesn't anchor after a take (the Nov 4 assert
   above), and whether an AVDTP SUSPEND leaves the wait.
-- The takeover reboots (AGENTS.md "Pod reboots"): [ownership.md](ownership.md)
-  has the ownership arbiter, the AudioSource mask, and the aborts on those
-  paths (a two-host record pool that never checks for duplicates, a
-  connection tracker that aborts on a third host), none yet tied to a
-  takeover; who accepts a second host's AVDTP Start and suspends the first
-  is not found.
+- The takeover reboots (AGENTS.md "Pod reboots"): the aborts on the
+  ownership paths ([ownership.md](ownership.md): a two-record arbiter pool
+  that never checks for duplicates, a connection tracker that aborts on a
+  third host) aren't tied to a takeover yet; the code that defers a second
+  host's AVDTP START, and the caller of the SUSPEND sender, are not found.

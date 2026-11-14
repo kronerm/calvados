@@ -1,704 +1,521 @@
-# How the case's firmware gets updated
+# The case: its firmware, how it's updated, and what a host can reach
 
-AirPods Pro 2 (USB-C), build 9A348: the buds' `rkof`, the case MCU's
-`STFC`/`STFW` and its BLE chip's `NERF` (hashes, tools: [firmware.md](firmware.md);
-the buds and the case's sync: [sibling-and-case.md](sibling-and-case.md)).
-Static, cited `[image 0xADDR]`; Known = read from code or data, Inferred =
-marked. Checked strings: "mismatch fw ver", "Couple", "Deny %s(%u) offer"
-(STFC), "Already paired. Reject request.", "Added App UARP Service" (NERF).
+AirPods Pro 2 (USB-C). The case has two processors: the MCU (`STFC`; `STFW`
+on the other hardware variant, same strings) and its BLE chip (`NERF`, an
+nRF). Hashes, tools and the buds' images: [firmware.md](firmware.md); the
+buds' sync and the case's bud-to-bud decision:
+[sibling-and-case.md](sibling-and-case.md). Static reads are cited
+`[image 0xADDR]`, always with the build: 9A348's and 7B21's STFC differ,
+and so do 9B47's and 7B21's NERF. STFC is analysed at base 0x08001800,
+NERF and `rkof` at 0. Known = read from code or data, Inferred = marked,
+Observed = seen on our pods (dated, local time).
 
-## Q1. Does a bud store case payloads for the case? (rkof)
+Strings checked across images: "mismatch fw ver", "Couple", "Deny %s(%u)
+offer" (STFC), "Already paired. Reject request.", "Added App UARP Service"
+(NERF).
 
-Known:
-- The stored-file table [rkof RAM 0x20002ca8, init file 0x1f2ca8: STFW->"ioe1", IOHM->"iohm",
-  IOHS->"iohs", ESM1->"esm1", PDFW->"pdfw"] is referenced by exactly one literal [rkof 0xbfa4c],
-  in FUN_000bf950, which only OPENS the file read-only (0x1b4272 -> 0x19af4), reads the 0x2c-byte
-  SuperBinary header, caches its version and offers it as controller (0x77adc). No pointer to
-  the file-name strings "ioe1".."pdfw" exists anywhere else (word scan of rkof for 0x1e2be5..,
-  and for any RAM address 0x20002c80..0x20002d40: only 0xbfa4c).
-- File "case" [str rkof 0x1e2b62] is referenced at: 0x7a380 (loop cmd 0x12: open read-only and
-  offer as tag CASE), 0x151942 (open read-only, take its size into a status record), 0x15862
-  (the CLI command group "case" / "Case Commands", not a file). No writer.
-- Asset tags CASE, IOE1, IOHM, IOHS, ESM1, PDFW appear only in FUN_000bccd0 [rkof 0xbcec8-0xbcf0c],
-  the asset-release handler: they are just recognised and go to the common release path
-  (0xbcdda). The accessory-side payload handling (FUN_000bc978 [0xbc9be-0xbc9d2], FUN_000bd0ac
-  [0xbd0b8-0xbd158]) knows only FTAB / LTAB / RTAB / HSML (+ outbound dynamic assets MTIC/LOGS/CRSH,
-  VERS). STFC/STFW/NERF/R1FW never occur as 4cc literals or tag strings in rkof (word scan for
-  'STFC','NERF','R1FW' = none; 'STFW' only in the table at 0x1f2ca8).
-- The bver parser FUN_000a5770 understands fields "csv1:", "ioe1:", "csv2:", "ioe2:", "updv:"
-  [strs rkof 0x1e2730..0x1e2748, lits 0xa5a50/0xa5a54/0xa5a58], but this build's FTAB bver is
-  `90.3431000025000000.6807|date:2026 8 17|updv:348|chip_revision_b0` (no csv/ioe fields).
-Inferred:
-- The store-and-forward machinery (files "case", "ioe1", ... offered on transports 0x1a/0x1b,
-  0x2d-0x30) is shared rkos platform code kept for other products (IOHM/IOHS/ESM1/PDFW are not
-  parts of this set; "ioe" likely an older case/IO-expander scheme). In this firmware nothing
-  writes those files, so the bud never holds case firmware to forward: the offers bail out at
-  the file open (loop cmd 0x12 log 0x15c4ad03 [0x7a38a]; bf950 log DAT_000bfa40+4).
-- Consistent with the live trace: the bud pulls only payload headers up to FTAB, FTAB's
-  metadata and FTAB's data; nothing after FTAB.
+## Short version
 
-## Who consumes which payload (Known: tag strings in the images)
-- Bud (rkof): only FTAB (+HSML) is staged [rkof 0xbcfa8]; every other payload goes through
-  0x76860 -> FUN_00076bd4, which just bumps the payload index and requests the next payload
-  header (0x106ac0) or finishes the asset (0x103e32) [rkof 0x76bd4]: headers pulled, data never.
-- Case MCU (STFC): tag list at [STFC 0x08071f5a..0x08071f9b]: R1FW, IM4M, NERF, STFC, AUFM, AULB,
-  AUPS, AUPC, AUCH, AUER, AUUT, AUFR, AUUF (file offset 0x7075a). STFW (other case hardware
-  variant) has the same list with STFW. Lower-case audio file names aufm..auuf at
-  [STFC 0x080719ac] -> AU* are the case speaker's sounds, stored by the case.
-- CMAP and TMAP are NSKeyedArchiver bplists (keys "sections", "AppleModelNumber", "decoderId"):
-  Inferred host-side decoder maps (logs/crash symbolication). CTAB = compressed FTAB (16 KiB
-  chunk table 0xCCD28113, decompressed size 0xCCD28119 = FTAB size, same SHA-256 as FTAB).
-  None of CMAP/TMAP/CTAB occurs (string or 4cc word) in rkof, rkos, STFC, STFW or NERF.
-  (Inferred: CTAB is for a host/transport that sends compressed; this bud doesn't take it.)
-- NERF version 90.264; STFC/STFW 90.390; R1FW and FTAB 9.0.348 (bver). Case payloads carry
-  0xCCD28107 SHA-256 + 0xCCD28106 256-B signature + 0xCCD28105 = 2; STFC checks those
-  (TLV ids as words at STFC file 0x13910-0x13918; "Attempting Dev Sig Check"/"Sig Check fail!"
-  [STFC 0x08013784]).
+- Our case runs **7B21's case firmware** (STFC 71.8, NERF 70.59); the buds
+  run 9A348, then 9B47. A buds-only update never touches the case.
+- 7B21's case is updated only over its own BLE UARP service, which exists
+  only once the case is Find My paired: only its owner's Apple device can
+  update it. Its lid-close tunnel through a bud is switched off by a flash
+  constant.
+- 9A348's case (STFC 90.390) also opens a UARP tunnel through the primary
+  bud ~2 s after the lid closes; a host holding an offer across the close
+  would see it as downstream 1. Never seen on our 7B21 case, and it can't
+  happen there.
+- No host-to-case path exists through a bud's AACP, ATT or CLI, nor over
+  USB without the case's CLI.
 
-## The case's BLE chip (NERF) exposes the SAME UARP GATT service as the buds (Known)
-NERF is an nRF image based at 0 (MBR/SoftDevice vectors). Its vendor UUID table [NERF 0x51d1e]:
-- 0x51d1e 4715650b-5e9d-4ac2-b898-a4fc0aa5df78 = UARP service (same as the buds, firmware.md)
-- 0x51d2e 94110001-6d9b-4225-a4f1-6a4a7f01b0de = UARP characteristic (same as the buds)
-- 0x51d3e 2ee26cd4-c04e-41ce-905a-b4054f5d1770, 0x51d4e 71062dc4-413a-41ea-af86-8cecfa21d057 (next
-  service/char, literals at NERF 0x3bfa8/0x3bfb4; Inferred ACS) ...
-Strings: "VS UUID UARP Service addition index", "Added App UARP Service", "Added App UARP Chars",
-"UARP Service added", then ACS, DIS, TPS, FindMy (FMNS), POSH, AIS services; "Uarp cp write:
-invalid Conn handle:%u", "uarp, rx:l=%u".
+## Which firmware runs where
 
-### NERF UARP characteristic: permissions and gatekeeping (Known)
-- Registration FUN_0003bd54 [NERF 0x3bd54]: service 0x650b (UUID base at 0x51d1e), then the char
-  through Nordic's characteristic_add (FUN_0002b4be, ends in svc 0xaa = sd_ble_gatts_characteristic_add)
-  with ble_add_char_params_t: uuid 0x0001 (94110001-...), max_len 0xf4, var len, props 0x28 =
-  write + indicate, deferred write = 1, read_access 0 (none), **write_access 2 and cccd_write 2
-  = SEC_JUST_WORKS -> sm 1 lv 2 (encrypted link required)** [NERF 0x3be10-0x3be5c; the
-  security_req -> (sm,lv) map FUN_0002b48c: 1->0x11, 2->0x21, 3->0x31, 4->0x12]. The next
-  service (2ee26cd4-..., uuid16 0x6cd4) and its char 71062dc4-... are set up the same way.
-- Writes arrive as write-authorize requests, FUN_0003b580 [NERF 0x3b580] ("Auth write handle"):
-  the UARP char's value handle (+0x92) goes to FUN_0003dccc, which binds UARP to the first
-  connection that writes ("Uarp cp write: invalid Conn handle" for any other, error 0x11) and
-  queues the bytes (0x41384; Inferred: forwarded to the case MCU over the internal B2P link);
-  the auth reply is "accept" (0x3b10c(1,..)). No Find My ownership check on this path; the
-  encryption requirement is the gate.
-- Pairing: the peer-manager handler FUN_0003bb88, event 5 (CONN_SEC_PARAMS_REQ) [NERF 0x3bc1c..]:
-  if FUN_0003f2cc() (bit 0 of the pairing-state byte) is set, logs "Already paired. Reject
-  request." [str 0x51a48] and replies with NULL params (pairing refused). The other control
-  point (+0x16 handle; Inferred Find My pairing control point) likewise says "Already paired -
-  refusing" [0x3b5e0, str 0x51792]. Advertising is Find My driven: "BTFinding - ADV Connectable",
-  "... NON Connectable!", "advManagerNearOwnerAdvStart", stats case_only_adv / case_l_adv /
-  case_r_adv.
-Inferred: a host can only write the case's UARP characteristic over an encrypted link, i.e.
-as a peer bonded with the case. A case set up with Find My (paired to the owner's iPhone) refuses
-any new pairing, so a non-Apple host cannot reach the case's UARP over BLE; even an un-paired
-case would have to be advertising connectably (Find My modes) and accept a fresh pairing (the
-default security params were not traced).
+- Buds: shipped on 7B21 (7.1.21), updated to 9A348 over GATT (Oct 27) and
+  to 9B47 over AACP (Nov 14) ([uarp.md](uarp.md)).
+- Case: STFC 71.8.0.0 and NERF 70.59, 7B21's. Known: the case's USB
+  descriptor (Observed Nov 13) has bcdDevice 0x4708, which 7B21's STFC
+  fills from its version word [7B21 STFC 0x08032df0]. The package:
+  `…/2024/patches/072-16842/4936FD7D-958B-4BA8-89F0-6891E72ECD89/com_apple_MobileAsset_UARP_A2968/609da25d4fc018fb870d598846665b6c96a95334.zip`
+  (URL from AppleDB's `osFiles/Bluetooth Headset Firmware/7x/7B21.json`;
+  STFC 511 168 bytes).
+- 9A348's package carries NERF 90.264, STFC/STFW 90.390, R1FW and FTAB
+  9.0.348 (`bver`).
+- No host learns the case's version: the pods' 0x1D carries none; the case
+  answers B2P 0x128 with its versions [7B21 STFC 0x0801c000], and nothing
+  relays that to a host.
+- No case-vs-bud version check exists in either STFC or in `rkof` (below),
+  and our set runs mismatched.
 
-## Q2. How the case receives its own firmware (STFC)
+## Payloads and who takes them (Known, tag strings; 9A348 package)
 
-### The case's UARP accessory and its hosts (Known code, tid meaning partly Inferred)
-- The case's UARP data sessions ("DS") are B2P data sessions keyed by **tid 0..3** (B2P = the
-  case<->bud/peripheral protocol, "locust"; both rkof and STFC have it). Per-tid UARP buffers
-  0x20023730 + tid*0xf4 (MTU 0xf4) [STFC 0x08011f32-0x08011f48], rx callback 0x08012129 ->
-  event 0x28057 only for the current UARP host [0x200015d4+0x3c == tid] [STFC 0x0801214c].
-- On event 0x2805e the case opens **sid 3** on tid [msg+0xc] (0x0802a2ac(tid, 3)) [STFC
-  0x08011fc6-0x08011fd4] = its UARP session over that link. The B2B transfer opens sid 1
-  ("Bud server") and sid 2 ("Bud client") on tid = the source/target bud [STFC 0x08037878 ->
-  0x080379dc(dir,1|2), bounds tid <= 3, "Open tid:%d sid:%d"].
-- Offer handler FUN_08015138 (delegate assetOffered, via 0x08058a5c) [STFC 0x08015138]:
-  asset type [+0x3c] 2 (dynamic) -> deny unless case-OTA state; type 1 (SuperBinary): if apply
-  state [0x20034fc8+0x35] & 0xfb (busy) -> "%s state:%s host:%s in assetOffered", deny.
-  Then by host = tid [0x200015d4+0x40]:
-  - tid 0/1: accepted only if [[0x20035244+0x70]+0xc] == 1 (and if +0xd == 1 only when
-    [0x200350c8+0x46] > 5), else **"Deny tunnel(%u) offer"** [0x08015204-0x08015228];
-  - tid 2: if [[..+0x70]+0xd] == 0 **"Deny BLE(2) offer"** [0x0801522e, 0x080152a8-0x080152b4];
-  - tid 3: no version check, event 0x1c00e, returns the third result [0x08015294];
-  - otherwise compares the offered version with the case's active and pending versions
-    (FUN_08036e68, "A:%d.%d.%d.%d O:%d.%d.%d.%d"): accepted only if newer than active and not
-    already pending [0x08015244-0x08015290].
-  Inferred from the deny labels and the B2B use of tid: tid 0/1 = the two buds (the case's UARP
-  tunnelled through a bud: "tunnel"), tid 2 = the case's BLE chip (NERF's GATT UARP forwarded over
-  the internal B2P link), tid 3 = a wired path. (The RAM name table 0x20035a58 holding the tid
-  names is filled at run time; names not recovered.)
-- Accepted payload tags (case MCU): R1FW, IM4M, NERF, STFC (STFW on the other variant), AUFM,
-  AULB, AUPS, AUPC, AUCH, AUER, AUUT, AUFR, AUUF [STFC file 0x7075a-0x70796]. The case stages
-  them itself ("ST pend", "NRF pend", "R1 pend", "Wr to partition %d", "Attempting Dev Sig Check"
-  [STFC 0x08013784] against the payloads' 0xCCD28106 signatures), and applies: "Apply ST",
-  "Apply BLE" / "No pend BLE img to apply" / "nRF apply fail" (the MCU flashes the nRF: "nrfSWD",
-  "!! Upd nRF !! Req: %d.%d.%d", "Min BLE %s not set" [STFC 0x08036c22-0x08036c3e]),
-  "Apply R1 image, pend bank %d" (UWB, A/B banks; R1FW needs its TSS ticket, "Add IM4M to hdr").
-- Case routing (CLI "routing", "Transport -> Type") [STFC 0x08048e8c]: transports UART, USB,
-  TUNNEL [0x20035884+0x60/0x64/0x68], types Disabled/CLI/FWUP/B2P/CLI REMOTE/Internal_CLI
-  [names 0x0806e24c]. Defaults [STFC 0x0803dd18]: **UART = CLI, USB = Disabled, TUNNEL =
-  Disabled**. Code switches USB to FWUP for "Wired bud, tid:%s" [0x08037598-0x080375b2: routing
-  (2,USB) then open sid 2 on that tid], to B2P on pass-through off [0x08035ede], to CLI REMOTE on
-  pass-through on [0x08043018]. Inferred: a wired (USB) host path exists for factory/Apple
-  tooling and wired bud updates; it's off by default.
+- Buds: only `FTAB` (+`HSML`) is staged; the filter (fPayloadReady
+  [rkof 9A348 0xbcfa8]) takes FTAB, LTAB, RTAB, HSML. Every other payload
+  goes through 0x76860 → FUN_00076bd4, which only moves to the next payload
+  header (0x106ac0) or finishes the asset (0x103e32) [rkof 0x76bd4]:
+  headers pulled, data never. Matches the live transfers.
+- Case MCU: tag list [9A348 STFC 0x08071f5a..0x08071f9b, file 0x7075a]:
+  R1FW, IM4M, NERF, STFC (STFW on the other variant), AUFM, AULB, AUPS,
+  AUPC, AUCH, AUER, AUUT, AUFR, AUUF. The AU* are the case speaker's sounds
+  (file names aufm..auuf at [STFC 0x080719ac]).
+- CMAP and TMAP are NSKeyedArchiver bplists ("sections",
+  "AppleModelNumber", "decoderId"); Inferred host-side decoder maps. CTAB is
+  FTAB compressed (16 KiB chunk table 0xCCD28113, decompressed size
+  0xCCD28119 = FTAB's size, same SHA-256). None of the three occurs in
+  `rkof`, `rkos`, STFC, STFW or NERF.
+- Case payloads carry 0xCCD28107 (SHA-256), 0xCCD28106 (256-byte
+  signature) and 0xCCD28105 = 2; STFC checks the signature ("Attempting Dev
+  Sig Check" FUN_08013784, "Sig Check fail!"; TLV ids at STFC file
+  0x13910-0x13918). Signed, not personalized; only R1FW needs a TSS ticket
+  ("Add IM4M to hdr").
+- The case stages and applies them itself: "ST pend", "NRF pend", "R1
+  pend", "Wr to partition %d", "Apply ST", "Apply BLE" [9A348 STFC
+  0x0800349c] / "No pend BLE img to apply" / "nRF apply fail", "Apply R1
+  image, pend bank %d" (UWB, A/B banks). The MCU flashes the nRF over SWD
+  ("nrfSWD", "!! Upd nRF !! Req: %d.%d.%d", "Min BLE %s not set" [9A348
+  STFC 0x08036c22-0x08036c3e], "BLE exp:%d.%d.%d rcvd" [0x08016d3a]) and
+  requires a minimum NERF version.
+- The case's own apply: refused while the lid is open or the case is at
+  ≤ 10 %, which logs "No Apply %u %u" and sets `[0x20034fc8+0x37]` [9A348
+  STFC 0x08012e58]; retried by FUN_08012f34 15 s after the next close,
+  cleared when an apply starts. What starts the first apply after a staging
+  without a host's 0x0A is open.
 
-### The bud side of the tunnel (Known code; meaning Inferred, consistent)
-- rkof transport 0x03 up -> if this bud has an Apple-host UARP session (FUN_000bee88 returns
-  only session types 0xd or 4 [rkof 0xbee88]) -> UARPL3Downstream_addDownstreamAccessory(1, ...)
-  with the generic transport sender 0xbe929, MTU 0xf2 [rkof 0xbe4fa-0xbe526, 0xbe6de-0xbe70a].
-  So the case appears to an AAP (transport 0xd) UARP host as **downstream accessory 1**, the
-  sibling as downstream 2. With only a GATT (0x10) host session nothing is added (as observed:
-  Discover Downstream empty).
-- Transport ids on the bud are set from case messages (0x15bdd0 -> 0x846d4(id, state)); the case
-  opens sid 1/2/3 => Inferred: bud transport 0x01/0x02/0x03 = B2P sid 1 (bud server)/2 (bud
-  client)/3 (case UARP). This matches rkof's fixed roles (0x01 controller pushes FTAB, 0x02
-  accessory, 0x03 downstream).
+## The bud never holds case firmware (Known, rkof 9A348)
 
-## Q3. Reaching the case as a host
-- Over BLE: the case's nRF exposes the same UARP service/char UUIDs as the buds (above), but
-  writes need an encrypted link (SEC_JUST_WORKS) and the case refuses new pairing once it's
-  "paired" (Find My) [NERF 0x3bb88 ev 5]. Known code; Inferred: only the owner's Apple device
-  (already bonded via Find My) can use it. Not established: whether/when it advertises
-  connectably for a bonded owner outside Find My modes, the default SMP params of an unpaired case.
-- Through a bud: only as downstream accessory 1, announced only to an AAP (0xd/4) UARP host
-  session [rkof 0xbee88, 0xbe6de-0xbe70a]; then relayed with UARP 0x1b (Downstream Relay) ->
-  bud transport 0x03 -> case tid 0/1 sid 3. A GATT (0x10) host gets no downstream (Observed).
-  Inferred: an AAP-UARP session is what an Apple host opens; whether a non-Apple host can open
-  one (it rides on AAP, which Calvados already speaks) was not traced (creator 0xbea24 is called
-  from 0x9ca4c in FUN_0009c6dc, reached from 0xcd420 via a pointer at 0xcb43c; not decoded).
-- Wired: case USB routing defaults to Disabled; FWUP on USB is switched on only by the
-  "Wired bud" path or CLI. Not a general host path as far as seen.
+`rkof` has store-and-forward files for other products' SuperBinaries
+("case", "ioe1", …; [sibling-and-case.md](sibling-and-case.md)) but nothing
+writes them: every file write site is firm.00/01, mani.00, 0x19b90's file
+or remotefs. The offers end at the file open. Tags CASE, IOE1, IOHM, IOHS,
+ESM1, PDFW appear only in the asset-release handler FUN_000bccd0 [rkof
+0xbcec8-0xbcf0c]; STFC, NERF and R1FW never occur in `rkof`. The `bver`
+parser FUN_000a5770 knows compatibility fields "csv1:", "ioe1:", "csv2:",
+"ioe2:", "updv:" [strs 0x1e2730..0x1e2748], but 9A348's `bver`
+(`90.3431000025000000.6807|date:2026 8 17|updv:348|chip_revision_b0`)
+has none. Inferred: shared RTKit platform code kept for other products.
 
-## Q4. Version coupling between case and buds
-Known:
-- Bud vs bud: the case's "Couple" check FUN_0801d6cc [STFC 0x0801d6cc] requires both buds
-  present, a 3-byte field equal in both records (0x2002658c+0x12..0x14 vs +0x52..0x54,
-  FUN_0801e19c; meaning not established) and equal ACTIVE versions; otherwise logs
-  "Couple mismatch fw ver" (or "no comms") and posts 0xc001, which runs the B2B decision
-  FUN_0803542c (R2L/L2R/APPLY_*). Cross/pending matches set force-apply (+0x5d).
-- ERR_MANI (FUN_0803542c result 10) is about the BUDS' personalized manifest in B2B
-  ("B2B: Mani invalid:%d, check_side_ok:%d, check_pending:%d" [STFC 0x080372c8]; gate flag
-  [0x20001748+0x57]), not about the case.
-- Case vs nRF: the MCU requires a minimum BLE (nRF) version and flashes the nRF from its staged
-  NERF ("!! Upd nRF !! Req", "Min BLE %s not set", "BLE exp:%d.%d.%d rcvd" [0x08016d3a]).
-- Case vs buds: no check found in STFC that compares the case's own version with the buds',
-  and none in rkof (its bver parser knows "csv1:/ioe1:" compatibility fields, but this build's
-  bver has none). The case's own offer check compares only against its own active/pending
-  [STFC 0x08015244-0x08015290]; "Opportunistic Apply" [0x08003728] compares its own versions.
-- Bud updates via the case are blocked while a case OTA is in progress when tunnelled
-  ("bud fwup cond ... tunnel:%d, caseOTA:%d", 0x08035838).
+## Update routes by case build
 
-## Q5. Bottom line (Known/Inferred as marked)
-- One SuperBinary, three consumers: buds take FTAB (+HSML); the case MCU takes STFC|STFW, NERF,
-  R1FW (+IM4M), AU*; CMAP/TMAP are host-side decoder maps; CTAB (compressed FTAB) is consumed
-  by none of these images. (Known from tag tables.)
-- The buds never store or forward case payloads in this build: their offer filter skips every
-  payload but FTAB/HSML (header only), and the store-and-forward files (case, ioe1, ...) have
-  no writer. (Known; a generic factory/CLI file write was not excluded.)
-- The case gets its firmware by being a UARP accessory itself: over its BLE chip (encrypted,
-  bonded owner only) or tunnelled through a bud as downstream accessory 1 of an AAP UARP host
-  (Inferred: the iPhone/Mac path), or wired. A GATT-only host like ours reaches neither.
-- Complete set update from a host: FTAB to a bud (the case then syncs the other bud via B2B
-  and applies, with both buds in the case under its gates), PLUS a separate offer of the same
-  SuperBinary to the case (as downstream 1 over AAP, or over the case's own BLE UARP when
-  bonded), including R1FW with a live TSS ticket ("Rap"). (Inferred)
-- Buds-only update (FTAB via the primary over GATT): both buds end on the new build once the
-  case runs B2B + apply; the case stays on its old STFC/NERF/R1FW/audio (90.390 / 90.264 /
-  older). No code requiring case and bud versions to match was found, so the set should work
-  mismatched; what new bud firmware expects from an old case (B2P protocol) is not visible.
+| Route | 9A348 STFC (90.390) | 7B21 STFC (71.8, ours) |
+|---|---|---|
+| Tunnel through the primary bud on lid close (host's downstream 1) | on: config +0xc = 1 | off: config +8 = 0 |
+| BLE (NERF's UARP service, tid 2) | not denied (config +0xd = 1); needs Find My | not denied (config +8 = 0); needs Find My |
+| USB (tid 3) | routing Disabled by default | routing Disabled by default |
 
+### The case's UARP accessory (9A348 STFC; Known code, tid meanings Inferred)
 
-## The case's tunnel to a host (how it becomes downstream 1)
-
-Static (STFC, rkof 9A348), cited as above. Summary: the case opens its UARP
-tunnel to the primary bud by itself about 2 s after the lid closes, never
-with the lid open, and only if both buds are present and coupled, the lid
-has moved at least twice since the case booted and the primary's radio is
-active; nothing a host sends triggers it. The bud announces the case as
-downstream 1 only if a host's AACP 0x4F (or GATT) UARP session exists at
-that moment, and the pods drop every host within ~0.2 s of the lid closing
-unless that host's session holds an accepted or deferred offer. So reading
-the case's version, or updating it, needs an offer in progress when the lid
-closes: in practice, during an update of the buds.
-
-Images: STFC (case MCU, base 0x08001800) and rkof (bud). Known = read from code;
-Inferred = meaning guessed. Nothing was run against devices.
-
-## Answer in one paragraph
-
-The case opens its UARP tunnel on its own, **about 2 s after the lid closes**, never
-while the lid is open, and never because a bud or host asks. The bud has no message that
-asks for it: it only answers the case's open request. When the request comes, the bud adds
-the case as downstream 1 only if an AACP-UARP (0xd) or GATT-AAP (4) session exists on
-that bud at that moment. A closed lid normally drops every host within ~0.2 s (observed
-Oct 27), so the session is gone 2 s later. The bud keeps exactly one host across a lid
-close: the one whose 0xd/4 session has an offer record in state 1, 2 or 6 (rkof bf2b0).
-Today's probe ran with the lid open, so no tunnel existed. That fits.
-
-## Q1. STFC: what raises 0x2805e ("Tunnel avail") (Known)
-
-- The only publisher of 0x2805e is [STFC 0x08012cf2-0x08012cf8]: 0x28052+0xc, arg =
-  tid, then the log "Tunnel avail". Its only subscriber, [STFC 0x08011f0a] (in the UARP DS
-  setup 0x08011ee8), is handler 0x08011fc4: `0x0802a2ac(tid, 3)` = "Open tid:%s ds:%d"
-  -> 0x0802a22c sends B2P message 0x10 {ds 3, state 1} to that bud (0x0802a328).
-  A constant-tracking scan of every publish/subscribe call site found no other 0x2805e.
-- The code is case 0x1c006 of the fwup handler FUN_080123b0 (tbh table 0x0801243c:
-  0x1c006 -> 0x080126da). 0x1c006 is the expiry of timer 0x20036188 (callback 0x0801237c,
-  installed [0x0801223e]). Conditions at expiry [0x080126da-0x08012718]:
-  1. lid closed: [0x200350c8+5] == 0 (+5 = lid GPIO, 1 = open; set by 0x0803c7c8, which
-     also logs "Lid Opened/Closed"),
-  2. FUN_0801d8e0: both buds present, coup_st (S1 bits 1-2) == 0 on both, coupling
-     state [0x2003533c+0x4c] not 1..5, and both bud records hold each other's address
-     (Inferred: a coupled pair, no coupling running),
-  3. lid-event counter [0x200350c8+0x44] >= 2 (it is incremented on every lid event
-     0x28030/0x28031 [0x0801258c]; Inferred: at least one open and one close since the
-     case MCU booted),
-  4. FUN_0801e074: tid = the bud whose S0 bit 1 (role, rkof 0xc61a4, Inferred primary)
-     is set,
-  5. that bud's S1 bit 0 "radio" is set ([0x2002658c + tid*0x40 + 0x16] bit 0). The
-     bud side is rkof 0x1589ba: S1 bit 0 = 0xb64b4(), meaning object 0x200ba890 (HSM
-     0x1c8124) is in state 4. Inferred: the bud's radio is active.
-  If 2-5 fail there is one retry 1 s later (0xf4240) while [0x20036188+0x1c] is set. The
-  flag is cleared after the retry and set again on lid open [0x080125b8]. The same retry
-  path also runs after a successful open on tid 1 [0x08012d06-0x08012d1a].
-- What starts the 2 s timer (0x1e8480; Inferred µs):
-  - **0x28030 with arg 0 (lid closed)**, posted by the lid handler 0x0803c804
-    [0x0803c828, 0x0803c870] -> [0x08012adc]. This needs the "No Apply" flag
-    [0x20034fc8+0x37] != 1 (otherwise the case's own apply path runs, 0x08012f34 + 15 s),
-    and it needs the tunnel config [[0x20035244+0x70]+0xc] == 1 [0x08012b9c-0x08012bbc].
-  - 0x28013 with the lid closed and the same config [0x080129ac-0x080129cc]. It is posted
-    once at boot from the boot lid state [0x08007322]. Inferred: the case booted with the
-    lid closed.
-  - Lid open (0x28030 arg 1) stops it [0x080125b2-0x080125ba].
-- Tunnel config: the pointer at 0x20035244+0x70 = 0x20001790 (FUN_080121a8 called with
-  0x20001748+0x48 [0x08008816-0x0800881c]). It lives in initialized data (copied from flash
-  0x0807c8b4 to 0x20000000 by the C runtime [0x08049132-0x0804914c]). Its initial bytes
-  are +0xc = 1 (tunnel, also "tunnel:%d" in "bud fwup cond" via 0x20001748+0x54),
-  +0xd = 1, +0xf = 0 (the manifest-required flag 0x20001748+0x57 is **0**, which corrects
-  the earlier open question), and +0x11 = 1. No code store to +0xc/+0xd was found. So
-  tunnels are enabled in this build.
-- Not inputs: charging, battery, case OTA pending (apart from +0x37), host type, any bud
-  request, bt_prog. The B2B "Bud server/client" tunnels (ds 1/2) are a separate path
-  (0x08037878, case event 0xc001; docs/sibling-and-case.md).
-
-## Q2. rkof: does the bud ask for it? (Known: no)
-
-- rkof has no tunnel or DS strings. Its only B2P sends of a DS type are two 0x11 replies
-  [rkof 0x15be28, 0x15c6c2]. The first answers the case's 0x10: `846d4(id, state)` brings
-  transport 0x03 up, then the reply carries the resulting state (0 if the up callback
-  failed: 846d4 resets state to 0 [rkof 0x84794-0x84798]). The second replies status 5
-  when the transport isn't enabled ([desc+0x42] == 0) [rkof 0x15c6ba].
-- What the bud reports and the case reads here is only S0 role and S1 radio. No host,
-  AACP, 0x4D, Discover Downstream (0x15) or Solicitation event reaches the case. 0x15
-  only re-announces existing downstream slots (below).
-
-## Q3. Ordering and re-triggering
-
-- At tunnel up: 0xbe6de-0xbe70a calls bee88 (any 0xd/4 session, **no offer state
-  needed**). With none, it logs and returns 0x80000000 [rkof 0xbe7d6], 846d4 drops 0x03
-  back to down, and the bud replies state 0 (Known). The case's connect-rsp
-  [STFC 0x08026616-0x08026644, 0x08026bf8] then just marks ds 3 closed. It has no
-  retry of its own (Known), beyond the one 1 s timer retry above.
-- bea24 (creating the 0xd session) never adds downstream 1 (its calls: role, endpoint
-  add/remove, bb4e0, 9e038, sibling cmd 0x14) (Known). So a tunnel that failed stays
-  failed until the next lid close + 2 s.
-- If the tunnel came up while a session existed: addDownstreamAccessory 0x77ef0 needs the
-  host endpoint (0x76e0c), sends 0x17 and marks the slot in use (+0x24), announced
-  (+0x2e) and bound (+0x28) [rkof 0x77fcc-0x78010]. Release callback 0x781c0 (pointer
-  at 0x154768) clears only +0x28/+0x2e. Discover Downstream 0x78134 re-announces every
-  slot that is in use but not announced to the asking host (0x17) [rkof 0x78150-0x7817e].
-  The slot is removed only when transport 0x03 goes down [0xbe7b0-0xbe7d0]. Inferred
-  (when 0x781c0 runs was not traced): once downstream 1 exists, a later 0xd session can
-  get it back with 0x15, as long as the case keeps ds 3 open.
-- Observed Nov 13 (9A348, laptop, `try-probe-case` sending 0x15 every 3 s while holding,
-  two lid closes): every 0x15 got a 0x16 with status 0 within ~0.1 s, and no 0x17 for
-  downstream 1, so the bud holds no case slot at all; only downstream 2 came back, as the
-  secondary rejoined after the first close. Not a bud that added the case and never
-  announced it: the tunnel never got as far as 0x77ef0. The held link survived the first
-  close (26 s); 31 s into the second, the pods ended it (0x13) and rebooted (2m45s up at
-  22:23:30), announcing no crash log at the next session.
-- Re-trigger: close the lid again. A cycle needs the lid open, then closed for at least
-  2 s. Each close is another attempt.
-- The catch is the host link. On lid close, bf2b0(0) [rkof 0xbf2d8-0xbf35c] keeps exactly
-  one host and drops all others (0x9a364, reason 4), takes holds and pages it back
-  (reason 5). It does this only if bee30 (a SuperBinary record of that session in state
-  2 [0xbee60-0xbee6a]) or bef74 (a dynamic record, list +0x398, or a SuperBinary record
-  in state 1 or 6 [0xbefdc-0xbf024]) finds the 0xd/4 session. Otherwise all hosts drop
-  (observed ~0.18 s after close). So a 0xd session survives a lid close only with an
-  accepted (2), deferred (1) or state-6 offer from that host. For a 0xd host, a
-  SuperBinary is accepted or deferred only if it is newer than running (bd938: not newer
-  -> deny 1). With 9A348 running there is none. Which host-offered dynamic assets the bud
-  records in state 1/6 was not established.
-- With the tunnel up, bt_prog (S0 bit 6, rkof 0x15f6e4 via be420 "transport 3 up") keeps
-  the case from putting that bud into ULP (STFC 0x08022482).
-
-## Q4. After downstream 1 exists
-
-- Host 0x1b to id 1 -> rkof 0x78280 -> the slot's send function 0xbe929 on transport 0x03
-  (MTU 0xf2) -> case ds 3 on tid = primary. On the case, rx 0x08012129 posts 0x28057
-  only if the case's current UARP host [0x200015d4+0x3c] == tid [0x0801214c] (Known).
-- The case serves one UARP host at a time ([0x200015d4+0x40]; 4 = none), chosen by
-  priority FUN_08016acc: tid 0/1 base 5, BLE tid 2 base 1, tid 3 base 9 (Known values;
-  Inferred: a tunnel outranks the case's own BLE). "Init Ctrl" 0x080158bc takes a tid
-  only when none is current [0x080158d8-0x080158ec].
-- Tag 5: Init Ctrl builds the accessory info. It contains "AirPods Pro Case " (+ suffix)
-  and 16-byte active and pending versions from FUN_08036e68 (log "A: %d.%d.%d.%d P: ...")
-  [0x08015904-0x08015a3e], the same ctx+0x370/+0x380 layout the bud answers tags 5/6
-  from. Inferred: tag 5 = 4 x u32 BE. The values are combined from component versions
-  (0x08004aac(2/1/4) + 0x0803688e), so the exact number (90.390.x.y?) is not established.
-- Gates: "Deny tunnel(%u)" / "Deny BLE" in 0x08015138 sit in the offer path only. For
-  tid 0/1 they need cfg+0xc == 1 (set) and, because +0xd == 1, [0x200350c8+0x46] > 5
-  (unknown field). No host-identity check was found on the info path (not searched
+- UARP data sessions are B2P data sessions ("DS"; B2P = the case-bud
+  protocol, "locust", in both `rkof` and STFC) keyed by **tid 0..3**. tid =
+  bud index for the buds (0 "R Bud", 1 "L Bud" [0x0806e0ec]); tid 2 the
+  BLE chip, tid 3 a wired path (Inferred from the deny labels and the
+  priorities). Per-tid buffers 0x20023730 + tid·0xf4 (MTU 0xf4)
+  [0x08011f32-0x08011f48].
+- sid 3 = the case's UARP over a bud link (opened on event 0x2805e,
+  `0x0802a2ac(tid, 3)` [0x08011fc6-0x08011fd4]); sid 1/2 = the B2B "Bud
+  server"/"Bud client" [0x08037878 → 0x080379dc].
+- Rx 0x08012129 posts 0x28057 only for the current UARP host
+  (`[0x200015d4+0x3c] == tid` [0x0801214c]). One host at a time
+  (`[0x200015d4+0x40]`, 4 = none), picked by FUN_08016acc: tid 0/1
+  priority 5, tid 2 priority 1, tid 3 priority 9. "Init Ctrl" 0x080158bc
+  takes a tid only when none is current.
+- Protocol version: reply min(proposed, cap), at least 1, cap = init
+  option +0xc (9 when 0) [STFC 0x0804b520-0x0804b52c, 0x0804c3a0; the
+  same library in rkof 0x104a88-0x104a96, 0x106554]; the case sets 6
+  (0x080158bc, passed at 0x08015b1a). The tunnel gate below wants > 5, so
+  **the case accepts an offer only at protocol 6**.
+- Offer handler FUN_08015138 (assetOffered, via 0x08058a5c):
+  - dynamic asset (type 2): denied unless in case-OTA state;
+  - SuperBinary while applying (`[0x20034fc8+0x35] & 0xfb`): "%s state:%s
+    host:%s in assetOffered", denied;
+  - tid 0/1: needs config +0xc == 1, and with +0xd == 1 also
+    `[0x200350c8+0x46] > 5` (set by FUN_08015378, "Prot %d %s"; Inferred
+    the negotiated protocol version), else "Deny tunnel(%u) offer"
+    [0x08015204-0x08015228];
+  - tid 2: "Deny BLE(2) offer" when config +0xd == 0 [0x0801522e,
+    0x080152a8-0x080152b4];
+  - tid 3: no version check (event 0x1c00e) [0x08015294];
+  - otherwise only newer than active and not already pending
+    (FUN_08036e68, "A:%d.%d.%d.%d O:%d.%d.%d.%d") [0x08015244-0x08015290].
+  No Find My or host-identity check on this path (searched, not
   exhaustively).
+- Tag 5 (accessory info, Init Ctrl [0x08015904-0x08015a3e]): "AirPods Pro
+  Case " + suffix, and 16-byte active and pending versions (FUN_08036e68,
+  "A: %d.%d.%d.%d P: …"), combined from component versions (0x08004aac,
+  0x0803688e); Inferred 4 × u32 BE, exact value not established.
+- Config: `[0x20035244+0x70]` = 0x20001790 (= 0x20001748+0x48), init data
+  copied from flash 0x0807c8b4 [0x08049132-0x0804914c], written only at
+  0x080121c6: +0 a function 0x08004c01, **+0xc = 1** (tunnel; also the
+  "tunnel:%d" of "bud fwup cond"), +0xd = 1, +0xf = 0 (the B2B
+  manifest-required flag `0x20001748+0x57`), +0x11 = 1. Same on every case.
+- Routing (CLI "routing", [0x08048e8c]): transports UART, USB, TUNNEL
+  [0x20035884+0x60/0x64/0x68], types Disabled/CLI/FWUP/B2P/CLI
+  REMOTE/Internal_CLI [names 0x0806e24c]. Defaults [0x0803dd18]: **UART =
+  CLI, USB = Disabled, TUNNEL = Disabled**. USB becomes FWUP only for
+  "Wired bud, tid:%s" [0x08037598-0x080375b2], B2P on pass-through off
+  [0x08035ede], CLI REMOTE on pass-through on [0x08043018]. Inferred:
+  factory paths.
+- A case OTA in progress blocks bud updates when tunnelled ("bud fwup cond
+  … tunnel:%d, caseOTA:%d" [0x08035838]).
 
-## Q5. Steps (Inferred) and risks
+### 9A348 STFC: the lid-close tunnel (Known code)
 
-1. Both buds in the case, lid opened at least once since the case booted, buds coupled.
-   Settle on the primary.
-2. Open AACP, send 0x4F Sync and Version Discovery (creates 0xd), then Discover Downstream.
-3. Get a hold: offer the primary a SuperBinary newer than it runs, over 0x4F, and let it be
-   accepted or deferred. Without that the lid close drops us.
-4. Close the lid. After ~2 s, expect 0x17 for id 1 (or send 0x15 again).
-5. Send 0x1b to id 1 with Sync, Version Discovery and Info tag 5. Keep the lid closed.
+The case opens the tunnel by itself; no bud or host message asks for it.
 
-Risks: step 3 means a real staging that the case may B2B-copy and apply. A 0x4F to a
-non-primary aborts (rkof 0xbea70). The hold drops every other host and keeps the buds out
-of ULP. Not established: a hold without a newer image, whether the bud accepts a page
-in the closed case before 2 s, the case's exact tag-5 value, and ds 3's idle timeout.
+- The only publisher of 0x2805e ("Tunnel avail") is [0x08012cf2-0x08012cf8];
+  its only subscriber [0x08011f0a] runs 0x08011fc4: `0x0802a2ac(tid, 3)`
+  ("Open tid:%s ds:%d") → 0x0802a22c → B2P message 0x10 {ds 3, state 1} to
+  that bud via 0x0802a328.
+- It runs at the expiry of a 2 s timer (0x1e8480 µs; timer 0x20036188,
+  event 0x1c006, case 0x080126da of FUN_080123b0's table 0x0801243c). The
+  timer starts on lid close (0x28030 arg 0, from the lid handler 0x0803c804
+  [0x0803c828, 0x0803c870] → [0x08012adc]) or at boot with the lid closed
+  (0x28013 [0x080129ac-0x080129cc], posted from [0x08007322]), both only
+  with config +0xc == 1 [0x08012b9c-0x08012bbc] and the No-Apply flag
+  `[0x20034fc8+0x37]` clear (else the case's own apply runs). Lid open
+  stops it [0x080125b2-0x080125ba].
+- At expiry [0x080126da-0x08012718]:
+  1. lid closed (`[0x200350c8+5]` == 0; set by 0x0803c7c8, "Lid
+     Opened/Closed");
+  2. coupled, FUN_0801d8e0: both buds present and valid (valid = 1 for pid
+     0x2024 [0x08026c84]), coup_st (S1 bits 1-2) 0 on both, coupling state
+     `[0x2003533c+0x4c]` not 1..5 (names 0x0806cd0c; started only by a
+     missing peer, a new case, bud connection events, a B2P command or the
+     CLI, never the lid), each bud's record holding the other's address
+     (+0/+6). The records are polled (B2P 0x6a, ≤ 1 s; reply 0x6b at
+     0x08026924) and cleared only when a bud is removed (FUN_0801fa30);
+  3. lid-event counter `[0x200350c8+0x44]` ≥ 2 (incremented on every lid
+     event [0x0801258c]; Inferred: one open and one close since boot);
+  4. a role claimant, FUN_0801e074: per tid, present and cached S0 bit 1
+     (the stored primary); one claimant → it, both → 2, mapped to tid 0
+     [0x08012708], none → nothing;
+  5. that bud's S1 bit 0 set (`[0x2002658c + tid·0x40 + 0x16]`).
+  On failure: no log, one retry 1 s later while `[0x20036188+0x1c]` is set
+  (cleared by the retry, re-armed on lid open [0x080125b8]); then nothing
+  until the next close. No attempt counter. The same retry also runs after
+  a successful open on tid 1 [0x08012d06-0x08012d1a].
+- Not inputs: charging, battery, a pending case OTA (apart from +0x37), the
+  host type, any bud request, bt_prog, bud versions, the offer.
+- The send helper 0x0802a328 passes 0x10 only to a bud whose case-side
+  state (`[0x200356a0+bud·4+0x50]`, names 0x0806cd2c) is first connect,
+  charging, not charging or disabled; in other states it drops it silently.
+  At close +2..3 s the primary is charging or not charging (a close cancels
+  a running presence check and re-arms it for 15 s [0x0801f190-0x0801f1ac];
+  prepare-ulp takes ~30 s), so this doesn't block it. State table 12×12 at
+  0x0806cd80 (entries 0x0806ce40, exits 0x0806ce10; 30 s presence limit at
+  0x20026710). Queued sends (0x0801c4ec) have a per-bud mode
+  `[0x20026580+bud·4]` (0 send now for charging/not charging, 1 fail only
+  in idle, search, presence; levels FUN_080209c0 [0x0801c6fc]).
+- The DS descriptor (FUN_0802a380: 0x20026e18 + tid·0x2c0 + idx·0x58, +8
+  open) is RAM only, zeroed at boot [0x080490c8-0x08049118]. An open writes
+  a timestamp; +8 = 1 only on the bud's connect response with state 1
+  [0x0802664a]; any other state marks it closed [0x08026616-0x08026644,
+  0x08026bf8]. Also closed by "Close tid", data errors, bud removal
+  (0x08020944) and a 14 s idle timeout (+0x20 = 14000, "tid:%s ds:%d idle
+  TO" [0x08028b5e]). It can't stay stuck open.
+- With the tunnel up: host 0x1b to id 1 → rkof 0x78280 → the slot's sender
+  0xbe929 on transport 0x03 (MTU 0xf2) → case DS 3. bt_prog (S0 bit 6, set
+  at "transport 3 up" [rkof 0x15f6e4 via be420]) keeps the case from putting
+  that bud into ULP [STFC 0x08022482].
 
-## Additions (Nov 13, STFC 9A348 base 0x08001800, rkof 9A348)
+### 7B21 STFC (71.8): the tunnel is switched off (Known)
 
-- The case's offer gate for the tunnel (tid 0/1), FUN_08015138 [Known]: config
-  bytes +0xc and +0xd set, not applying, the offer newer than its active and
-  pending versions, and `[0x200350c8+0x46] > 5`, stored by FUN_08015378
-  (0x0801539c, logs "Prot %d %s"): Inferred the negotiated UARP protocol
-  version, so the case wants 6 or more. calvados proposes 4 to the buds;
-  proposed to the case, it would get "Deny tunnel(%u) offer".
-- The case's maximum is **6** [Known]. Both images carry the same UARP
-  accessory library: the version reply is min(proposed, cap), at least 1
-  (STFC 0x0804b520-0x0804b52c, rkof 0x104a88-0x104a96), the cap being the
-  init options' u16 at +0xc, 9 when left 0 (STFC 0x0804c3a0, rkof
-  0x106554). The case's init (0x080158bc) sets it to 6 (`local_40` = 6,
-  the options at `local_4c`, passed at 0x08015b1a), as the bud does. So
-  the case accepts an offer only at exactly 6.
-- STFC, STFW and NERF are signed (0xCCD28106) and checked ("Attempting Dev
-  Sig Check", FUN_08013784), not personalized; only R1FW needs a ticket. The
-  tunnel path has no Find My or host-identity check that was found.
-- The case MCU flashes the nRF itself from a staged NERF ("Apply BLE"
-  0x0800349c). A refused apply logs "No Apply %u %u" and sets the deferred
-  flag `[0x20034fc8+0x37]`, retried by FUN_08012f34 at a lid close. What
-  starts the first apply after a tunnel staging, without a host's 0x0A, is
-  open.
-- The bud's payload filter (fPayloadReady 0xbcfa8) takes FTAB, LTAB, RTAB
-  and HSML and skips everything else; every rkof file write site is
-  firm.00/01, mani.00, 0x19b90's file or remotefs, so store-and-forward is
-  out. Transports 0x1a/0x1b are registered at 0x1541c6 and set only by the
-  case's B2P message 0x10 or a byte-stream adapter, never by a host.
+- "Tunnel Available" (9A348: "Tunnel avail") is logged by FUN_08011d00 on
+  event 0x170006 [0x08011eec], checking lid closed (`[0x200322a4+0xe]`),
+  coupled (FUN_08023908) and a role claimant (FUN_08023f70); no lid
+  counter, no S1 bit, no retry. It posts 0x1c0052 → 0x08011ad4 → B2P 0x10
+  {3,1}, the same message (DS table 0x08069b44).
+- 0x170006 comes only from timer 0x20033120, started on lid close
+  (0x0801223a) or 0x1c0011 (0x08011de6), both only if
+  `[[0x20032424+0x1c]+8]` != 0. That pointer is written once (0x08011b24)
+  with the flash constant 0x080635fc, whose +8 is **0**. A close starts only
+  the 15 s timer of the case's own apply.
+- The same byte gates "Deny offer from BLE" (offer handler FUN_080141f4,
+  0x080142c0): 0, so BLE (tid 2) offers pass; tid 3 has no version check.
+  "bud fwup cond … tunnel:%d" passes a literal 0 [0x08033492].
+- The case still accepts a bud-initiated DS connect (B2P 0x10 handler
+  0x0801bf78 → DS-3 callback 0x08011989); 9A348 and 9B47 buds never send
+  one (below). "ft tunnel" is a factory CLI test session (0x0804698c).
+- USB routing: UART = CLI, USB = Disabled (0x0803c570); CDC only after
+  `crabapple` (+0xf, 0x08043fb0).
 
-## Observed Nov 13 (9A348, laptop calvados, `try-probe-case`)
+## The bud's side of the tunnel (rkof 9A348; Known unless marked)
 
-- The hold works: with the probe's offer accepted (10 % of `FTAB` pulled,
-  then held), every lid close dropped the phone and kept the laptop's
-  session (advertisement byte 10: 2 hosts, then 1).
-- The case never tunnelled: four closes during a hold (16:49:07 for 40 s,
-  16:50:20 for 77 s, 16:51:57 briefly, 16:52:00 for 26 s, local time), the
-  case on a wireless charger, the lid moved many times since 16:46. The bud
-  announced only downstream 2 (the other bud), each time ~0.05 s or a few
-  seconds after the close; never 1.
-- Around each close the secondary bud reported `Disconnected` (ear
-  detection) for a few seconds, e.g. 16:52:04, 4 s after the close, then
-  came back and was announced again as downstream 2.
-- Re-read (STFC 9A348): a close starts a 2 s timer (0x1e8480 µs, config
-  +0xc) [0x08012adc]; at expiry [0x080126da-0x08012718] the lid must be
-  closed, the buds coupled (FUN_0801d8e0: both coup_st 0, the case's
-  coupling state not 1-5, both buds valid, each one's peer the other), the
-  lid-event counter ≥ 2, a role bud (S0 bit 1) whose S1 bit 0 ("radio") is
-  set; one retry 1 s later, then nothing until the next close. Charging
-  source, bt_prog, fwup bits, the offer and the host type aren't inputs. A
-  close goes to the apply path instead when `[0x20034fc8+0x37]` is set. On
-  the bud, 0x77ef0 can refuse silently (2 downstreams already, a key in
-  use, no host endpoint), none expected here. Suspects (Inferred): the
-  secondary in flux at 2-3 s (the phone dropped at the close), or the
-  primary's radio bit clear in the closed case.
-- Phone off, laptop the only host (17:29-17:32): four closes, the first
-  while the transfer ran (2-4 %, it went on with the lid closed), three
-  while held at 10 %. Same result: only downstream 2, never 1. With no
-  other host to drop, every close went the same way: `PrimaryBud` and the
-  secondary `Disconnected` 4.1 s after the close, for as long as the lid
-  stayed closed; back 2-3 s after it opened, announced again as 2. So the
-  secondary is still there at the case's 2 s and 3 s checks, the phone's
-  drop isn't the cause, and an active transfer doesn't help. Left open:
-  the case's config +0xc (no timer at all without it), the primary's S1
-  radio bit, and the apply flag.
-- Re-read (STFC 9A348, Known unless marked): the tunnel's config is the
-  init-data object 0x20001790 (from flash 0x0807c8b4; +0 a function
-  0x08004c01, +0xc 1, +0xd 1, +0x11 1), written only at 0x080121c6, never
-  changed: 1 on any case. The apply flag is `[0x20034fc8+0x37]` (the fwup
-  context, +0x35 its state), set only at 0x08012e58 by a refused apply and
-  cleared when one starts (Inferred: 0 here). A failed check at the timer
-  logs nothing (0x08012d06; only "Tunnel avail" on success). The bud
-  builds S1 at rkof 0x1589ac-0x158a00: bit 0 from 'AP' methods (0xb64b4,
-  slot +0x10) or when `0xc6244() & 0xaf03a(host ACL)` is 0, so a held host
-  link is a direct input;
-  'AP''s methods (registered near 0x161cbc) and coup_st's sources
-  (0x200c200c+0x74, 0xc56b2/0xc58b4/0xc592c) are unresolved.
+9B47 is identical here (addresses shifted, mostly −0x20).
 
-## USB (Observed Nov 13)
+- Transport 0x03 = the case's DS 3; 0x01/0x02 = DS 1/2 (Inferred from the
+  case's sids and `rkof`'s fixed roles: 0x01 controller pushing FTAB, 0x02
+  accessory, 0x03 downstream). Transport state comes only from the case's
+  B2P 0x10 [0x15bdd0] → 846d4(id, state); transports 0x1a/0x1b (registered
+  0x1541c6) likewise or from a byte-stream adapter, never from a host.
+- The open: B2P 0x10 → 846d4(3,1) → be4ec case 3 → bee88 (a host UARP
+  session of type 0xd (AACP 0x4F) or 4 (GATT-AAP) [rkof 0xbee88]) →
+  addDownstreamAccessory 0x77ef0 (id 1, sender 0xbe929, MTU 0xf2
+  [0xbe4fa-0xbe526, 0xbe6de-0xbe70a]) → 76e0c (host endpoint) → 106f40
+  (UARP 0x17 to the host). The reply to the case is B2P 0x11 with the
+  resulting state [0x15be28]; 0 if the add failed (846d4 resets it
+  [0x84794-0x84798]); status 5 if the transport isn't enabled
+  [0x15c6ba-0x15c6c2]. No offer state is needed.
+- Refusals: transport 3 not enabled (always enabled at boot [0x1541fa]),
+  already up (846d4 returns at once, no add, reply 1), no 0xd/4 session (log,
+  0x80000000 [0xbe7d6]), 2 downstreams already, slot 3 in use, no free slot,
+  no 0xd endpoint, allocation. None reads offer state, role, feature flags
+  or protocol version, and none is reported to a host (only the 0x11 reply
+  and the bud's log ring). Downstream 2 (the other bud) goes through the
+  same bee88 → 77ef0 → 76e0c → 106f40 path.
+- 0x77ef0 marks the slot in use (+0x24), bound (+0x28) and announced (+0x2e)
+  before any ack [0x77fcc-0x78010]; Discover Downstream (0x15, 0x78134)
+  re-announces only unannounced slots [0x78150-0x7817e], so it never
+  repeats a 0x17. The release callback 0x781c0 (pointer 0x154768) clears
+  +0x28/+0x2e; the slot goes when transport 3 goes down [0xbe7b0-0xbe7d0].
+- bea24 (creating the 0xd session) never adds downstream 1: a failed open
+  stays failed until the next close.
+- The bud drops transport 3 by itself after ~25 s idle (0x8395c) or on link
+  loss (0xd644c) without telling the case; the case's 14 s idle timeout
+  covers that.
+- **The hold.** On lid close, bf2b0(0) [0xbf2d8-0xbf35c] keeps exactly one
+  host and drops the others (0x9a364, reason 4), takes holds and pages it
+  back (reason 5), only if bee30 (a SuperBinary record of that session in
+  state 2 [0xbee60-0xbee6a]) or bef74 (a dynamic record, list +0x398, or a
+  SuperBinary record in state 1 or 6 [0xbefdc-0xbf024]) finds a 0xd/4
+  session. Otherwise every host drops (Observed ~0.18 s after the close,
+  Oct 27). So a host survives a close only with an accepted (2), deferred
+  (1) or state-6 offer, and a 0xd host's SuperBinary is accepted only if
+  newer than running (bd938, else deny 1). Which host dynamic assets reach
+  state 1/6 is not established. The release (bf2b0(1), cmd 0xf, or 0xd ≠ 6)
+  has no poster found.
 
-Plugged into the laptop with a data cable, the case enumerates at once
-(lid and buds irrelevant): `05ac:139e` "MagSafe Charging Case (USB-C)",
-Apple Inc., bcdDevice 47.08, full speed, 500 mA, one interface, HID class
-0/0, interrupt endpoints 0x81 in and 0x01 out. Report descriptor
-`06 00 ff 09 01 a1 01 09 01 85 01 15 00 26 ff 00 75 08 95 40 82 22 01 c0`:
-vendor page 0xFF00, report ID 1, 64 bytes. On Linux it's hidraw (root
-only without a udev rule). Nothing was sent to it. The firmware's
-`transport:e<uart|usb|tunnel>` and the UARP host priority table (tid 3,
-priority 9, Inferred USB) point to UARP over this interface.
-- Re-read (STFC 9A348): the HID interface is inert. OUT reports go to a
-  `return 0` handler (0x080352f7, via 0x0800cd88), SET_REPORT data is
-  ignored, nothing is ever sent IN. The report descriptor goes on with a
-  Consumer Control collection (ID 3: next, previous, play/pause).
-  Enumeration starts on any Rp level at CC (0x0803b8c4), regardless of the
-  lid or the buds. A CDC-ACM port (CLI or B2P/FWUP pipe, "usbTxService") is
-  appended only after the case CLI's `crabapple` unlock (0x08042e34,
-  string 0x0806da3c), and the CLI is on UART or tunnelled through a bud.
-  The CLI's `usb side:… eusb:… durant:<app|dfu> reset:…` (0x08041b28)
-  routes the data lines to a bud's pins and can put it into DFU; "Wired
-  bud" (0x08037580) opens a FWUP pipe to a bud. Inferred: factory paths.
-  So over USB a host can neither update the case nor reach the buds
-  without the case CLI.
-- The CLIs aren't reachable from a host (static, Known unless marked).
-  The bud's RTKit shell (read loop rkof 0x1d628) reads only its console,
-  whose serial list gets two UARTs at boot (0x147a6, 0x147b6; added only by
-  0x19c7e4); on a production unit (0x18f2c: `is_prod_override` or the
-  register at chipbase+0x607c) 0x7f62c drops one of them. Every other user
-  of the shell only registers commands. On the case, CLI routing
-  (0x0803dde4: 0 UART, 1 USB, 2 TUNNEL) goes to TUNNEL only through the
-  CLI's own `routing` command (0x08048efc); the six other callers pick USB.
-  B2P sessions 0x1d/0x1e are "b2b auth" (Couple), not a CLI. Inferred: no
-  AACP, UARP or GATT path reaches either CLI.
-- 'AP' decoded (rkof vtable 0x1c4334 at 0x161cbc, HSM 0x1c8124, actions
-  0xde930; Known): S1 holds paging and the 'BS' sleep arbiter, S2 drops
-  every host (reason 2), S3 releases, S4 arms paging; S4 → S5 → S1 when
-  the radio is no longer wanted (in the case: 0x15f60c, unless S0 bit 3 and
-  host ACLs). S1 bit 0 is clear only in 'AP' S1; a held host link sets it.
-  The laptop's session survived a 77 s close, so the primary never went
-  through S1 → S2: bit 0 was set and isn't the blocker (the earlier
-  "Inferred" here was backwards). The bud builds S0/S1 fresh per case
-  request (FUN_001586cc via 0x158d6c); the case reads its cached copy
-  ([0x2002658c + tid·0x40 + 0x15/0x16]). Left: the case's role pick
-  FUN_0801e074 when both buds report S0 bit 1, and its coupling state
-  `[0x2003533c+0x4c]` around the close.
-- Every expiry check reads as passing in the observed state (STFC, Known
-  code): FUN_0801e074 returns the bud with S0 bit 1 (0 or 1; both → 2,
-  mapped to 0 at 0x08012708); FUN_0801d8e0's coupling state
-  (`[0x2003533c+0x4c]`, names at 0x0806cd0c) is started only by a missing
-  peer, a new case, bud connection events, a B2P command or the CLI, never
-  by the lid; the bud records are polled (message 0x6a, every 1 s or
-  faster, reply 0x6b at 0x08026924) and cleared only when a bud is removed
-  (FUN_0801fa30). Remaining suspects, both silent: after "Tunnel avail"
-  0x0802a2ac skips the B2P 0x10 when the (tid, ds 3) descriptor's +8 is
-  already 1 [0x0802a2c8-0x0802a2d2], a stale "open"; or the bud refusing
-  (846d4 → be420 → bee88 → 0x77ef0). `try-probe-case` sends Discover
-  Downstream (0x15) every 3 s while it holds, so a slot added but never
-  announced shows up.
+## Status bytes the bud reports
 
-## NERF 9B47: Find My pairing gates the UARP service itself (Nov 13, static)
+To the case (built fresh per request by FUN_001586cc via 0x158d6c [rkof
+9A348]; the case reads its cached copy `[0x2002658c + tid·0x40 +
+0x15/0x16]`):
+- **S0 bit 1**: the stored pair role, 0xc61a4 = 0xc6449 on object
+  0x200b8778: cfg+0x40 in a CRC'd retained struct (1 primary, 2 secondary;
+  0xa5b44), not the link holder. Writers: the role machine's commit (HSM
+  0x1c90f8 action 8 0xe08fe, toggling action 4's saved value), the case
+  over B2P (0x15a284), boot (0x152f48 → secondary when a peer is stored and
+  r10, unresolved; 0xc2470/0xc2486 → primary; kept unless out of box,
+  0x8dc18, then by the factory SIDE cfg+0x41), 0xd69ee. The case's role
+  command (B2P 0x5a 'P'/'S' [9A348 STFC 0x08021ddc] → bud 0x15a278,
+  0xc61d4) changes nothing while exactly one bud claims; none → Right
+  primary; both → the one with fewer host ACLs (tie: Right).
+- **S0 bit 6**: bt_prog (above). S0 bit 3 is read by 'AP' (below).
+- **S1 bit 0**: `AP.isInState(4)` (S4 and its children S5/S6) [0x1589ba,
+  vtable +0x18 0xb63f6], built at 0x1589ac-0x158a00. 'AP' (vtable 0x1c4334
+  at 0x161cbc, HSM 0x1c8124, actions 0xde930): S1 holds paging and the 'BS'
+  sleep arbiter, S2 drops every host (reason 2), S3 releases, S4 arms
+  paging; S4 → S5 → S1 when the radio is no longer wanted (in the case:
+  0x15f60c, timer 3 via 8cd04(3,10,…), when the bud's location changes,
+  unless S0 bit 3 and host ACLs). Back to S4 only through S2, so **a held
+  host link means the bit is set**. The case's docked reset reads the same
+  bit [9A348 STFC 0x0801ec5c-0x0801ed16].
+- **S1 bits 1-2**: coup_st, from object 0x200bb6e0 (HSM 0x1c8cbc, the bud's
+  side of the case's Couple procedure); 0 in steady state.
 
-9B47 `nerf.bin` (base 0); its addresses differ from the ones above, which may
-be another build's. Known unless marked.
-- Pairing state byte RAM 0x20008ba0: bit 0 "BA paired", bit 1 FMN enabled, bit 2
-  loaded; getter FUN_0003f320. Set only by the loader FUN_0003f2b4 (a stored 0xd0-byte
-  record reads back) and FUN_0003f4e8 at Find My pairing completion; the record is
-  written only by PAIRING_COMPLETE FUN_000381f4, in PAIR_SESSION, after the
-  server-backed INITIATE_PAIRING steps. A plain LE bond doesn't set it (BONDED only
-  moves PAIR -> PAIR_BONDED). The case MCU can only query it (B2P 0x4de), the buds'
-  sync only clear it.
-- Cleared by findMySmUnpair FUN_00038044, then a reset: B2P 0x154 FACTORY_RESET from the
-  MCU (event 0x900e "Clr coupling" -> "Send fact rst" [STFC 0x0801bcaa]; Inferred: the
-  case button's factory reset), bud reconciliation (0x38678), a failed Find My pairing,
-  a failed boot storage check, or the owner's "RX Unpair" (0x3cc54, encrypted owner
-  link only).
-- The UARP and ACS (2ee26cd4) services are added by FUN_0003bda8 only when paired (boot
-  0x3c050, disconnect 0x3a56c). **An unpaired case has no UARP characteristic**; a
-  paired one refuses every new pairing (FUN_0003bbdc event 5). Sec params {bond, no
-  MITM, no LESC, NoInputNoOutput}: legacy Just Works. A bond left in PAIR_BONDED
-  without Find My pairing is deleted and the chip reset at disconnect (0x380f4).
-- Advertising: unpaired, each lid opening moves PAIR_ADV_HALTED -> PAIR, a connectable
-  Find My pairing advert (service data 0xFD44, public address, 30 ms) for 10 minutes
-  (FUN_0003990c). Paired: rotating static random address, Apple 0x12 (near owner,
-  length 2, FUN_00039af0; separated FUN_00039a24, Inferred long form).
-- STFC's offer handler 0x08015138 keys on the transport only; for tid 2 (BLE) it
-  denies if [0x20001748+0x48+0xd] == 0 (setter not traced). No per-host check found.
-- So no non-Apple host reaches the case's UARP over LE: the service appears only
-  after a Find My pairing, which needs Apple's servers.
+To hosts:
+- AACP `PrimaryBud` is `[side] 00 [role machine state in 0x14] [active]`
+  [rkof 9A348 0x873b0-0x873ce]; the third byte read 0 with the secondary
+  gone, 1 with it back (Observed).
+- The proximity advertisement's status byte [rkof 9A348 FUN_0014fe68]:
+  0x40 this bud is stored secondary (0xc61a4 false), 0x20 this bud is Left
+  (SIDE 2), 0x80 out of box, 0x01 = 0xc6214, 0x02/0x04 and 0x08/0x10 the
+  stored primary's and secondary's locations. Observed: 0x35 (Left primary)
+  + 0x55 on the Nov 13 22:18 and 23:05 runs, link on Left; 0x15 (Right
+  primary) + 0x75 on the Nov 14 00:33-00:37 run, link on Right.
 
-## The tunnel's descriptor and sends on the case (Nov 13, STFC 9A348, static)
+## The case's BLE chip (NERF)
 
-Known unless marked.
-- The ds descriptor (FUN_0802a380: 0x20026e18 + tid·0x2c0 + idx·0x58, `+8` open) is RAM
-  only: the C runtime zeroes it at every boot [0x080490c8-0x08049118]. An open
-  (0x0802a2ac, B2P 0x10 {3,1} via 0x0802a22c) writes only a timestamp; `+8` = 1 only
-  on the bud's connect rsp with state 1 [0x0802664a]. Closed by a rsp with another
-  state, "Close tid", data errors, link re-init (bud removal 0x08020944), boot, and an
-  idle timeout (`+0x20` = 14000, "tid:%s ds:%d idle TO" [0x08028b5e]). So no lasting
-  "stuck open" state exists: the earlier hypothesis is out.
-- The send helper 0x0802a328 passes 0x10 only to a bud whose case-side state
-  ([0x200356a0+bud·4+0x50], names at 0x0806cd2c) is first connect (3), charging (4),
-  not charging (5) or disabled (11); in any other state (idle, searching, connecting,
-  presence check, prepare ulp, ulp, reset, give up) it drops it without a log. The
-  leading candidate for the silent failure (Inferred). Ruled out on follow-up: the lid
-  close cancels a running presence check and re-arms it for 15 s (0x0801f190-0x0801f1ac),
-  so at close+2..3 s the primary is charging or not charging, both of which send; prepare
-  ulp needs ~30 s, the docked reset hits only a bud with its radio off. Transition table
-  12×12 at 0x0806cd80, entries 0x0806ce40, exits 0x0806ce10; the 30 s presence limit at
-  0x20026710. The queued send 0x0801c4ec has a per-bud mode [0x20026580+bud·4] (1 fail,
-  2 queue): mode 0 (send now) for a charging or not-charging bud, 1 only in idle,
-  search and presence (FUN_080209c0 levels [0x0801c6fc]). Role pick FUN_0801e074: per tid,
-  present AND cached S0 bit 1 (rkof 0x1586cc, 0xc61a4, Inferred "link owner"); one
-  claimant → it, both → tid 0, neither → nothing. tid = bud index, 0 "R Bud", 1 "L Bud"
-  [0x0806e0ec]. Every other failure on the 0x10 path logs (only on the case's UART). Left:
-  the open went to the other bud (stale or doubled S0 bit 1), or the bud's reply.
-  Test: Right as primary (tid 0, no doubled retry, also the both-claim pick).
-- If both buds report S0 bit 1, the role pick FUN_0801e074 returns 2 → tid 0 [0x08012708],
-  which may be the secondary (no host session; it would answer state 0).
-- No attempt counter; the retry flag [0x20036188+0x1c] is re-armed on lid open.
-- Reboots: IWDG (5 s kicks [0x080353dc]); SYSRESETREQ 0x0802f770 (callers not reachable
-  from a host); none on USB attach or wireless charging found. Button, lid open:
-  Press, Hold 0.48 s, Pairing Hold 1.98 s, "Case Hw Reset" ~10 s, factory reset ~13.5 s
-  (stored, finished at the next boot, FUN_08019698). Running flat: Inferred a power-on
-  reset (coupling and Find My, in flash, survive).
-- Factory reset: "Clr coupling" (event 0x900e) wipes coupling, sends B2P 0x154 to NERF
-  (Find My unpair) [0x0801b5ac, 0x0801bcaa]; re-coupling is automatic (B2P 0x4ae). A
-  foreign bud or invalid NV data triggers "auto fact rst in 2s" [0x08022b00]. Coupling
-  compares bud against bud only (a mismatch starts the bud-to-bud copy); no case-vs-bud
-  version check.
+- nRF image (MBR/SoftDevice; 7B21's identical to 9B47's). It has the buds'
+  UARP service and characteristic: 4715650b-5e9d-4ac2-b898-a4fc0aa5df78
+  (service), 94110001-6d9b-4225-a4f1-6a4a7f01b0de (characteristic), then
+  2ee26cd4-c04e-41ce-905a-b4054f5d1770 / 71062dc4-413a-41ea-af86-8cecfa21d057
+  (Inferred ACS), then DIS, TPS, Find My (FMNS), POSH, AIS.
+- **The UARP and 2ee26cd4 services exist only while the case is Find My
+  paired** (Known): added by FUN_0003bda8 [9B47 NERF] / FUN_00044f04 [7B21
+  NERF] only when paired, at boot (9B47 0x3c050, 7B21 0x4551a) and at
+  disconnect (9B47 0x3a56c, 7B21 0x42e14). An unpaired case has no UARP
+  characteristic.
+- Characteristic: write and CCCD access Just Works, i.e. an encrypted link
+  (9B47 0x3bda8: `0x0202`); write + indicate, max 0xf4 (the Oct 27 read
+  below). A paired case refuses every new pairing
+  ("Already paired. Reject request."; 9B47 FUN_0003bbdc event 5). Security
+  params {bond, no MITM, no LESC, NoInputNoOutput}: legacy Just Works (7B21
+  `31 07 10 03 03` at 0x44e16). An unowned case accepts such a bond but
+  deletes it and resets at disconnect (9B47 0x380f4, 7B21 0x3ffec). Sends
+  are gated on paired and encrypted [9B47 0x3cfdc]. UARP binds to the first
+  connection that writes ("Uarp cp write: invalid Conn handle:%u", error
+  0x11) and is forwarded to the MCU over B2P (Inferred) (Oct 27 read).
+- Pairing state byte (9B47 RAM 0x20008ba0, getter FUN_0003f320; 7B21 RAM
+  0x20008a08, FUN_000486fc): bit 0 "BA paired", bit 1 FMN enabled, bit 2
+  loaded. Set only by the loader FUN_0003f2b4 (a stored 0xd0-byte record)
+  and FUN_0003f4e8 at Find My pairing completion; the record is written
+  only by PAIRING_COMPLETE FUN_000381f4 after the server-backed
+  INITIATE_PAIRING steps (S1-S4 and BAA certificates), so it needs Apple's
+  servers. A plain LE bond doesn't set it (PAIR → PAIR_BONDED only). The MCU
+  can only query it (B2P 0x4de); the buds' sync only clears it. (9B47
+  addresses.)
+- Cleared by findMySmUnpair FUN_00038044, then a reset: B2P 0x154
+  FACTORY_RESET from the MCU (factory reset, below), bud reconciliation
+  (0x38678), a failed Find My pairing, a failed boot storage check, or the
+  owner's "RX Unpair" (0x3cc54, encrypted owner link only). (9B47.)
+- Advertising: unpaired, each lid opening (7B21 LID_OPENED 0x3f504) starts
+  a connectable Find My pairing advertisement (service data 0xFD44, 21
+  bytes, public address, 30 ms) for 10 minutes (9B47 FUN_0003990c, 7B21
+  FUN_00041fc0). Paired: rotating static random address, Apple type 0x12
+  (near owner, length 2, FUN_00039af0; separated FUN_00039a24, Inferred long
+  form) (9B47). Observed Nov 13: lid open, nothing near the laptop
+  advertised 0xFD44, so our case is paired.
+- Unresolved: an Oct 27 read (labelled 9A348, NERF 90.264) gave other
+  addresses: UUID table 0x51d1e, registration FUN_0003bd54 (permissions at
+  0x3be10-0x3be5c, map FUN_0002b48c), write-authorize FUN_0003b580 →
+  FUN_0003dccc (binding), peer manager FUN_0003bb88 event 5, pairing bit
+  FUN_0003f2cc. They don't match 9B47's, though firmware.md calls 9B47's
+  non-`rkof` changes version stamps; which build they belong to is open.
 
-## The bud's side of the tunnel open, all branches (Nov 13, rkof 9A348/9B47, static)
+## USB (Observed Nov 13; code 9A348 STFC unless marked)
 
-Known unless marked. B2P 0x10 [0x15bdd0] → 846d4(3,1) → be4ec case 3 → bee88 (a 0xd/4
-session) → 77ef0 → 76e0c → 106f40 (0x17). Its refusals: transport 3 not enabled
-(always enabled at boot [0x1541fa]), already up (846d4 returns at once, no add, reply
-1), no 0xd/4 session, downstream count 2, slot 3 in use, no free slot, no 0xd endpoint,
-allocation. None reads offer state, role, feature flags or protocol version. Downstream
-2 goes through the same bee88 → 77ef0 → 76e0c → 106f40 path on every close, and the
-held session proves bee88's session exists, so the bud can't be refusing silently
-unless transport 3 were already up; nothing of a refusal reaches a host (only the 0x11
-reply to the case and the bud's log ring). With the case side (above), the open most
-likely never leaves the case. The bud drops transport 3 by itself after ~25 s idle
-(0x8395c) or on link loss (0xd644c) without telling the case; the case's own 14 s idle
-timeout covers that. The hold's release (bf2b0(1), cmd 0xf or 0xd ≠ 6) has no poster
-found; 'AP' 15f60c ("radio no longer wanted", timer 3 via 8cd04(3,10,…)) runs when the
-bud's location changes, e.g. when the case resets the secondary. 9B47: these paths are
-identical (addresses shifted, mostly −0x20), so updating the buds changes nothing here.
+- With a data cable the case enumerates at once (lid and buds irrelevant;
+  any Rp level at CC, 0x0803b8c4): `05ac:139e` "MagSafe Charging Case
+  (USB-C)", bcdDevice 47.08 (= 71.8, above), full speed, 500 mA, one HID
+  interface, interrupt endpoints 0x81 in, 0x01 out. Report descriptor
+  `06 00 ff 09 01 a1 01 09 01 85 01 15 00 26 ff 00 75 08 95 40 82 22 01 c0`
+  (vendor page 0xFF00, report 1, 64 bytes), then a Consumer Control
+  collection (ID 3: next, previous, play/pause). Linux: hidraw, root only
+  without a udev rule. Nothing was sent to it.
+- The HID interface is inert: OUT reports go to a `return 0` handler
+  (0x080352f7 via 0x0800cd88), SET_REPORT data is ignored, nothing goes IN.
+- A CDC-ACM port (CLI or B2P/FWUP pipe, "usbTxService") is added only after
+  the CLI's `crabapple` unlock (0x08042e34, string 0x0806da3c). The CLI's
+  `usb side:… eusb:… durant:<app|dfu> reset:…` (0x08041b28) routes the data
+  lines to a bud and can put it in DFU; "Wired bud" (0x08037580) opens a
+  FWUP pipe to a bud. Inferred: factory paths. So over USB a host can't
+  update the case or reach the buds without the case's CLI.
 
-## Observed Nov 13, 23:05 (9A348, laptop, plain hold, no 0x15 polling)
+## The CLIs aren't reachable from a host (Known unless marked)
 
-Lid open ~1 min before, case charging. Held at 10 % from 23:06:24; lid closed
-~23:06:27 for 2m20s: the link held throughout, the secondary dropped at +4 s, no 0x17
-for downstream 1. The probe's 3-minute limit rescinded at 23:08:52 (lid open since
-23:08:47). Second close ~23:08:55: the primary went silent and ended the link (0x13)
-31 s later, then booted (27 s up at 23:09:54), as in the 22:20 run, so the 31 s
-release on a second close isn't the polling's doing (here the offer was already
-rescinded, though).
+- Bud (rkof 9A348): the RTKit shell (read loop 0x1d628) reads only its
+  console, two UARTs added at boot (0x147a6, 0x147b6; only by 0x19c7e4); on
+  a production unit (0x18f2c: `is_prod_override` or chipbase+0x607c)
+  0x7f62c drops one. Other users only register commands.
+- Case (9A348 STFC): CLI routing (0x0803dde4: 0 UART, 1 USB, 2 TUNNEL) goes
+  to TUNNEL only through the CLI's own `routing` command (0x08048efc); the
+  six other callers pick USB. B2P sessions 0x1d/0x1e are "b2b auth"
+  (Couple), not a CLI.
+- Inferred: no AACP, UARP or GATT path reaches either CLI.
 
-## Observed Nov 13, 23:44 (9A348, laptop, plain hold, Right primary)
+## No host-to-case relay through the bud (rkof 9A348, 7B21 STFC; Known)
 
-Right made primary (left docked first), so the case's pick is tid 0 with no doubled
-retry. Held from 23:45:29; closes ~23:45:32 (opened ~23:46:06) and ~23:46:10 (opened
-~23:46:44), the second within ~5 s of opening. The link held through both (no 31 s
-release this time), the secondary dropped at +4 s each time and was re-announced as
-downstream 2 on opening; no downstream 1. So the side of the primary isn't it either.
-Every condition read statically passes on both sides, yet the case never comes
-through; whatever fails logs only on the case's or the bud's UART.
+- The bud's B2P sends to the case are replies (0x11, 0x13, 0x23), a DS
+  close (0xbe4d2, 0x10 {id,0}), DS data on an open DS (0x12, the UARP
+  downstream relay, 0xbe9ae and 0x84968), fragmented internal messages
+  (0x184/0xe184 from fixed callers, 0x83a38) and fixed internal sends
+  (0x46c, 0x1d0, 0x1d4, 0x0, 0x16, 0x1c). The receive handler forwards node
+  3/5 messages between B2P links (0x158e9a).
+- No AACP opcode (callback table filled at 0xcb170) or ATT write ends in a
+  B2P send with host-chosen bytes. Only the case's 0x10 brings transport 3
+  up (846d4's other callers 839c4, be4da, d647a, 15c81c pass state 0;
+  15be08 is the case's).
+- LibrePods' case-sound command `12 3A …` is an ATT write to the Find My
+  service (handle 0x3A, `4F860005`, handler 0x68fa4), a fixed setting.
+- So no non-Apple host makes a 7B21 case tunnel: it's updated only by its
+  Find My owner's Apple device over BLE.
 
-## Corrections (Nov 14, rkof/STFC 9A348, static)
+## Resets and coupling (9A348 STFC; Known unless marked)
 
-- S1 bit 0 is `AP.isInState(4)` (S4 and its children S5/S6) [rkof 0x1589ba, vt+0x18
-  0xb63f6]; clear in S0-S3. From S1 the way back to S4 runs through S2, which drops every
-  host, so a held link means the bit stayed set; the case's docked reset (which reads the
-  same bit [STFC 0x0801ec5c-0x0801ed16]) never hit the held primary. Radio isn't the gate.
-- 0x77ef0 marks a slot announced (+0x2e) before any ack, so Discover Downstream never
-  repeats a 0x17: the 22:19 "no slot" inference from 0x15 is void. The raw frames of the
-  23:44 run show no 0x17 for id 1, so no add happened there.
-- S0 bit 1 (0xc61a4 = 0xc6449 on object 0x200b8778) is the stored pair role, cfg+0x40 in
-  a CRC'd retained struct (1 primary, 2 secondary; 0xa5b44), not the link holder. Writers:
-  the role machine's commit (HSM 0x1c90f8 action 8 0xe08fe, a toggle of action 4's saved
-  value), the case over B2P (0x15a284), boot normalisation (0x152f48 → secondary when a
-  peer is stored and r10, unresolved; 0xc2470/0xc2486 → primary), 0xd69ee. Inferred: both
-  buds could read secondary after the case's resets, leaving FUN_0801e074 no claimant.
-- AACP PrimaryBud is `[side] 00 [role machine in 0x14] [active]` [rkof 0x873b0-0x873ce];
-  the third byte was 0 with the secondary gone and 1 with it back.
-- The No-Apply flag [0x20034fc8+0x37] is set only when the case's own apply is refused
-  (lid open or case ≤ 10 %) and cleared at the next charged close; a 10 % offer leaves no
-  pending header. The tunnel path reads neither bt_prog nor any bud version.
-- (Nov 14, follow-up) coup_st comes from object 0x200bb6e0 (HSM 0x1c8cbc, the bud's side of
-  the case's Couple procedure), not the role machine: 0 in steady state. The valid flags
-  are 1 for pid 0x2024 [STFC 0x8026c84]. Boot keeps the stored role unless out of box
-  (0x8dc18; then by the factory SIDE, cfg+0x41). The case's role command (B2P 0x5a 'P'/'S'
-  [STFC 0x08021ddc] → bud 0x15a278, 0xc61d4) changes nothing while exactly one bud claims;
-  none → Right primary, both → the one with fewer host ACLs keeps it (tie: Right).
-  Inferred: docking the link holder while the other bud is out moves the link (0x15, the
-  other bud back as link primary) but not the stored role, so every probe so far closed
-  with the role on the bud without our session (22:18:38: Right docked first, Left took
-  the link; 23:44: Left docked first) → the open went there and bee88 found no session.
-  Test: take both buds out together (the stored primary takes the link), dock the other
-  one first, then the link holder, then hold and close.
-- (Nov 14) The proximity advertisement shows the stored role [rkof FUN_0014fe68]: status
-  0x40 = this bud is stored secondary (0xc61a4 false), 0x20 = this bud is Left (SIDE 2),
-  0x80 out of box, 0x01 = 0xc6214; 0x02/0x04 and 0x08/0x10 = the stored primary's and
-  secondary's locations. Live: 22:18-22:20 and 23:05 runs 0x35 (Left primary) + 0x55,
-  link on Left; 00:33-00:37 run 0x15 (Right primary) + 0x75, link on Right. So the stored
-  role was on the link holder in every probe: the role pick isn't the gate either, and
-  the "docking moves the link but not the role" inference above is wrong.
+- Reboots: IWDG (5 s kicks [0x080353dc]); SYSRESETREQ 0x0802f770 (callers
+  not reachable from a host); none on USB attach or wireless charging.
+  Running flat: Inferred a power-on reset (coupling and Find My, in flash,
+  survive).
+- Button, lid open: Press, Hold 0.48 s, Pairing Hold 1.98 s, "Case Hw Reset"
+  ~10 s, factory reset ~13.5 s (stored, finished at the next boot,
+  FUN_08019698).
+- Factory reset: "Clr coupling" (event 0x900e) wipes coupling and sends B2P
+  0x154 to NERF (Find My unpair) [0x0801b5ac, 0x0801bcaa]; re-coupling is
+  automatic (B2P 0x4ae). A foreign bud or invalid NV data triggers "auto
+  fact rst in 2s" [0x08022b00].
+- Coupling compares bud with bud only (FUN_0801d6cc, "Couple mismatch fw
+  ver"; [sibling-and-case.md](sibling-and-case.md)): a mismatch starts the
+  bud-to-bud copy. "Opportunistic Apply" [0x08003728] compares the case's
+  own versions. No case-vs-bud check.
 
-## The case probably doesn't run the STFC analysed above (Nov 14)
+## The probes (Nov 13-14) and what they ruled out
 
-Everything above reads 9A348's STFC (90.390). Our buds shipped on 7B21 and were updated
-to 9A348 over GATT; the case never was, so it most likely still runs 7B21's case firmware
-(package `…/2024/patches/072-16842/4936FD7D-958B-4BA8-89F0-6891E72ECD89/com_apple_MobileAsset_UARP_A2968/609da25d4fc018fb870d598846665b6c96a95334.zip`,
-URL from AppleDB's `osFiles/Bluetooth Headset Firmware/7x/7B21.json`; STFC 511168 bytes).
-Its strings differ exactly at the trigger: "Tunnel Available" (9A348: "Tunnel avail") and
-an extra "ft tunnel". The pods' 0x1D carries no case version. On 9A348's STFC the last
-unverified gate, FUN_0801d8e0 (coupled), passes for this pair (cross-match of the buds'
-own/partner addresses at record +0/+6, coup_st 0, coupling idle, present and valid).
+`calvados firmware try-probe-case` (AGENTS.md) holds the pods across a lid
+close with an offer (at most 10 % of `FTAB` served, never staged, withdrawn
+after 3 minutes) and asks the case's version through downstream 1 if it
+appears. All runs: buds 9A348, laptop, AACP 0x4F. The case never appeared,
+explained by its 7B21 firmware (tunnel off). Observed:
 
-## 7B21's case MCU: the lid-close tunnel is switched off (Nov 14, static)
+- The hold works: every close dropped the phone and kept the laptop
+  (advertisement byte 10: 2 hosts, then 1).
+- 16:49-16:52 (phone connected, case on a wireless charger, lid moved
+  often): four closes (40 s, 77 s, brief, 26 s); only downstream 2 announced,
+  ~0.05 s to a few s after each close. The secondary reported
+  `Disconnected` for a few seconds around each close, then came back as
+  downstream 2.
+- 17:29-17:32 (phone off): four closes, one during the transfer (2-4 %; it
+  went on with the lid closed), three held at 10 %. `PrimaryBud` and the
+  secondary `Disconnected` 4.1 s after each close for as long as it stayed
+  closed, back 2-3 s after opening.
+- 22:18-22:20 (0x15 every 3 s): every 0x15 got 0x16 status 0 within ~0.1 s,
+  no 0x17 for id 1. The held link survived the first close (26 s); 31 s
+  into the second the pods ended it (0x13) and rebooted (2m45s up at
+  22:23:30), announcing no crash log.
+- 23:05 (no 0x15 polling, case charging): held from 23:06:24, closed
+  ~23:06:27 for 2m20s, link held, secondary gone at +4 s, no downstream 1.
+  Rescinded at the 3-minute limit (23:08:52). Second close ~23:08:55: the
+  primary ended the link (0x13) 31 s later and booted (27 s up at 23:09:54).
+  So the 31 s release on a second close isn't the polling's doing.
+- 23:44 (Right primary, Left docked first): two closes, the second within
+  ~5 s of opening; link held, no 31 s release, no 0x17 for id 1 in the raw
+  frames.
+- Nov 14 update (9A348 → 9B47, [uarp.md](uarp.md)): with the image staged
+  the primary held the laptop's link 30 s after the close, then let go
+  (0x13).
 
-STFC 71.8.0.0 (7B21, base 0x08001800). Known unless marked.
-- "Tunnel Available" is logged by the fwup handler FUN_08011d00 on event 0x170006 [log
-  0x08011eec], checking lid closed ([0x200322a4+0xe]), coupled (FUN_08023908) and a role
-  claimant (FUN_08023f70); no lid counter, no radio bit, no retry. It then posts 0x1c0052
-  → 0x08011ad4 → open tid ds 3 (B2P 0x10 {3,1}, the same message the 9A348 bud takes;
-  ds table 0x08069b44).
-- 0x170006 comes only from timer 0x20033120, started on lid close (0x0801223a) or 0x1c0011
-  (0x08011de6), both only if [[0x20032424+0x1c]+8] != 0. That pointer is written once
-  (0x08011b24) with the flash constant 0x080635fc, whose +8 is **0**: a close starts only
-  the 15 s timer for the case's own apply. The same byte gates "Deny offer from BLE"
-  (0x080142c0), so with it 0 the BLE route is open (Inferred: 7B21's update route is the
-  case's own BLE). "bud fwup cond … tunnel:%d" passes a literal 0 [0x08033492].
-- The case still accepts a bud-initiated DS connect (B2P 0x10 cmd 0x0801bf78 → ds-3
-  callback 0x08011989); 9A348 buds never send one. "ft tunnel" is a factory command line
-  test session (0x0804698c). No case-vs-bud version gate. The case answers B2P 0x128 with
-  its versions [0x0801c000]; nothing relays that to a host.
-So a 7B21 case with 9A348 buds never becomes downstream 1: every probe was bound to fail.
-Once the case runs 90.390, the 9A348 trigger above applies.
-- 7B21 NERF (70.59, base 0; MBR/SoftDevice identical to 9B47's): the same gate as 9B47.
-  UARP and 2ee26cd4 services are added by FUN_00044f04 only when Find My paired (boot
-  0x4551a, disconnect 0x42e14; bit 0 of RAM 0x20008a08, FUN_000486fc); unowned it accepts
-  a legacy Just Works bond (sec params `31 07 10 03 03` at 0x44e16) and deletes it at
-  disconnect (0x3ffec); unowned it advertises FD44 service data (21 bytes, 30 ms, public
-  address) for 10 minutes after each lid opening (FUN_00041fc0, LID_OPENED 0x3f504).
-  7B21 STFC's offer handler FUN_080141f4 accepts tid 2 (BLE) offers while [cfg+8] == 0,
-  tid 3 without a version check. USB: routing UART = CLI, USB = Disabled (0x0803c570); CDC
-  only after `crabapple` (+0xf, 0x08043fb0). The Nov 13 USB descriptor's bcdDevice 0x4708
-  is 71.8 (filled from the version word, 0x08032df0): the case does run 7B21's STFC.
+Ruled out (don't retry):
+- The phone's drop or the secondary in flux at the case's 2-3 s checks:
+  same with the phone off; the secondary leaves only at +4 s.
+- An active transfer instead of a held one: no difference.
+- S1 bit 0 ("radio"): a held link means it's set.
+- The role pick: the advertised status byte shows the stored role on the
+  link holder in every run; Right as primary changed nothing.
+- A stale "open" DS descriptor: RAM only, closed by any non-1 response and
+  a 14 s idle timeout.
+- The case's per-bud send state: the primary is charging or not charging
+  at +2..3 s, both send.
+- The bud refusing silently: downstream 2 takes the same path on every
+  close and the held session proves bee88's session exists.
+- "No slot, since 0x15 got no 0x17": void, 0x15 never repeats a 0x17.
+- UARP protocol version: matters only for an offer to the case (needs 6),
+  not for the tunnel opening.
 
-## No host-to-case relay through the bud (Nov 14, rkof 9A348 and 7B21 STFC, static)
+## What a host can and can't do
 
-Known unless marked. The bud's B2P sends to the case are replies (0x11, 0x13, 0x23), a DS
-close (0xbe4d2, 0x10 {id,0}), DS data on an already open DS (0x12, the UARP downstream
-relay, 0xbe9ae and 0x84968), fragmented internal messages (0x184/0xe184 from fixed
-callers, 0x83a38), and fixed internal sends (0x46c, 0x1d0, 0x1d4, 0x0, 0x16, 0x1c); the
-receive handler forwards node 3/5 messages between B2P links (0x158e9a). No AACP opcode
-(callback table filled at 0xcb170) or ATT write ends in a B2P send with host-chosen bytes,
-and only the case's 0x10 brings transport 3 up (846d4 callers 839c4, be4da, d647a,
-15c81c with state 0; 15be08 from the case). LibrePods' `12 3A …` case-sound command is an
-ATT write to the Find My service (handle 0x3A, `4F860005`, handler 0x68fa4), a fixed
-setting. So no non-Apple host can make a 7B21 case tunnel through 9A348 buds: such a case
-is updated only by its Find My owner's Apple device (BLE UARP, not denied while [cfg+8]
-== 0). Once it runs 90.390, its lid-close tunnel (above) is switched on.
-Case B2P messages never to send: the fwup factory reset / Clr coupling (0x900e → 0x154),
-0x184 op 0x82 property sets (class 3 writes NV), 0x352 memory write, 0x32a state reset,
-0x4b6 (NV key 0xd), 0x4b4 tones, any 0x10/0x12 DS traffic outside a tunnel.
+- Can't: update or query a 7B21 case (ours). Its UARP is BLE-only and
+  exists only for its Find My owner; no bud, AACP, ATT, CLI or USB path
+  reaches it.
+- On a 9A348 case (Inferred, never seen): hold an accepted or deferred offer
+  (newer than the buds run) over AACP 0x4F with both buds in the case,
+  coupled, lid opened once since the case booted; close the lid; ~2 s later
+  expect 0x17 for id 1; then 0x1b to id 1 with Sync, Version Discovery at
+  protocol 6 and Info tag 5, lid kept closed. Risks: the hold is a real
+  staging the case may copy to the other bud and apply; a 0x4F to a
+  non-primary aborts [rkof 0xbea70]; the hold drops every other host and
+  keeps the buds out of ULP. Not established: a hold without a newer image,
+  the exact tag-5 value, whether the bud accepts a page in the closed case
+  before 2 s.
+- A complete set update like Apple's (Inferred): FTAB to the primary (the
+  case copies and applies on the buds, [sibling-and-case.md](sibling-and-case.md)),
+  plus a separate offer of the same SuperBinary to the case (downstream 1
+  or its own BLE UARP), R1FW with a live TSS ticket.
+- A buds-only update leaves the case as it is; no check requires matching
+  versions (and ours works mismatched). What new buds expect of an old
+  case's B2P is not visible.
+
+## Case B2P messages never to send
+
+The fwup factory reset / Clr coupling (0x900e → 0x154), 0x184 op 0x82
+property sets (class 3 writes NV), 0x352 memory write, 0x32a state reset,
+0x4b6 (NV key 0xd), 0x4b4 tones, and any 0x10/0x12 DS traffic outside a
+tunnel.

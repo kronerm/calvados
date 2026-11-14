@@ -23,7 +23,7 @@ are a tap away.
 | | Minimum | Tested with |
 |---|---|---|
 | AirPods | AirPods Pro 2 (other AACP AirPods may work) | AirPods Pro 2 (USB-C) |
-| Android | 12, with an Xposed framework on libxposed API 101 ([Vector] 2.1+) | 16 (Pixel 9) |
+| Android | 12, with an Xposed framework on libxposed API 101 ([Vector] 2.1+) | 16 and 17 (Pixel 9) |
 | BlueZ | 5.60 | 5.87 |
 | PipeWire | 0.3 | 1.6.8 |
 | Noctalia (optional) | plugin API 24 | 5.0.1 |
@@ -129,27 +129,32 @@ calvados firmware status|update|cancel
 ## Updating the AirPods' firmware (experimental)
 
 When Apple has newer firmware, the panel and the notification say so and
-offer **Update**. It has worked once (7.1.21 to 9.0.348, both buds, with
-the research tools in [`tools/firmware`](tools/firmware)). Only the buds
-are updated: the case's own firmware, in the same package, is never
-offered, and calvados can't see which version the case runs. The AirPods
-only accept Apple-signed, newer firmware, but if something goes wrong,
-only Apple can fix it.
+offer **Update**. It has worked from the Linux daemon (9.0.348 to 9.1.47,
+Nov 14), and before that with the research tools (7.1.21 to 9.0.348). The
+AirPods only accept Apple-signed, newer firmware, but if something goes
+wrong, only Apple can fix it.
+
+Only the buds are updated. The case's own firmware, in the same package,
+is never offered, and calvados can't see which version the case runs. A
+case still on its 7.x firmware can be updated only by an iPhone or Mac
+that has the AirPods in Find My.
 
 1. Put both buds in the case, plug it in, keep the lid open. Turn off
    Bluetooth on any iPhone or Mac nearby.
 2. Tap **Update** (or `calvados firmware update`). It downloads the
-   firmware from Apple and sends it: about 8 minutes, until it says
+   firmware from Apple and sends it: about 5 minutes, until it says
    "Staged: close the lid".
 3. Close the lid and leave the case plugged in for about 30 minutes: the
    case installs it on both buds.
 4. Open the lid; the new version shows once they're connected.
 
 If it fails, the line says why; close and reopen the case and try again.
-Your other calvados device shows the progress meanwhile.
+The AirPods talk updates with one device at a time: if they don't answer,
+disconnect your other device and retry. Your other calvados device shows
+the progress meanwhile (not tried yet).
 
-**The proven way, without calvados** (the daemon stopped; needs curl,
-unzip, b3sum and Python with dbus-python and PyGObject):
+**The old way, without calvados** (may be removed; the daemon stopped;
+needs curl, unzip, b3sum and Python with dbus-python and PyGObject):
 
 ```sh
 tools/firmware/fetch.sh A3048                       # the right bud's model
@@ -158,7 +163,7 @@ python3 tools/firmware/uarp_offer.py <address> \
     firmware/A3048/asset/AssetData/Firmware.acsw/firmware.uarp full 2700
 ```
 
-The last command is step 2; then steps 3 and 4.
+The last command is step 2 (about 8 minutes); then steps 3 and 4.
 
 ## Logs
 

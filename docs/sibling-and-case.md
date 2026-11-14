@@ -5,15 +5,25 @@ the protocol: [uarp.md](uarp.md); a bud's own update: [update.md](update.md)).
 Static analysis of `rkof` and the case's `STFC`, cited `[image 0xADDR]`;
 Known = read from code or data, Inferred = marked. The case decision names
 (`R2L`, `L2R`, `APPLY_L/R/BOTH`, `ERR_MANI`, "Bud server/client") are in
-`STFC`'s strings.
+`STFC`'s strings. STFC addresses are 9A348's (90.390); our case runs 7B21's
+STFC (71.8, [case.md](case.md)), which did the bud-to-bud copy and apply
+after both host-staged updates (Oct 27, Nov 14; [uarp.md](uarp.md)). The
+case's own firmware and routes: [case.md](case.md).
 
 ## Memory map note (Known)
 rkof's .data image: file 0x1f0000.. is copied to RAM 0x20000000 (checked: the table
 RAM 0x20002ca8 [literal rkof 0xbfa4c] holds at file 0x1f2ca8 the tags/filename pointers below).
 
-## The bud keeps SuperBinaries for others in its own flash (Known)
+## Stored SuperBinaries for others: offered, never written (Known)
 Table RAM 0x20002ca8 (init at file 0x1f2ca8), 5 entries x 0x1c {u32 4cc, char *file, 16 B version, u8 loaded}:
 STFW -> file "ioe1", IOHM -> "iohm", IOHS -> "iohs", ESM1 -> "esm1", PDFW -> "pdfw".
+Its only reference is the literal at [rkof 0xbfa4c] (word scans for the file-name strings
+0x1e2be5.. and for RAM 0x20002c80..0x20002d40 find nothing else). File "case" [str 0x1e2b62] is
+used at 0x7a380 (cmd 0x12, open read-only, offer as CASE) and 0x151942 (open read-only, size into
+a status record); 0x15862 is the CLI group "case". Nothing writes any of these files (every rkof
+file write site is firm.00/01, mani.00, 0x19b90's file or remotefs), so the offers below end at
+the file open (cmd 0x12 log 0x15c4ad03 [0x7a38a]; bf950 log DAT_000bfa40+4). Inferred: shared
+platform code for other products; this bud never holds case firmware.
 FUN_000bf950(index, ep) [rkof 0xbf950]: opens the file, reads 0x2c bytes (a SuperBinary header),
 takes its version (BE words), caches it, then offers it through the CONTROLLER role:
 FUN_00077adc ("UARPL3Controller_offerSBFile" [str 0x1e18fb]) -> 0x106c38 (msg 0x05).
@@ -79,7 +89,9 @@ STFC is an ARM Cortex-M image loaded at **0x08001800** (2061 of 2134 strings res
 that base; a separate Ghidra project, imported with `tools/firmware/ghidra/import.sh` after setting the base address to 0x08001800). Addresses below `[STFC 0x0801....]`.
 - FUN_0801d6cc [STFC 0x0801d6cc]: reads 4 versions from the two bud records (+0x4c,+0x4f / +0xc,+0xf,
   3 bytes each; Inferred: each bud's active and pending/staged version) via 0x0801e148, only when
-  both buds are present (0x0801e19c: +0x54/+0x55 flags). If one bud's active equals the other's
+  both buds are present (0x0801e19c: +0x54/+0x55 flags, and a 3-byte field equal in both records,
+  0x2002658c+0x12..0x14 vs +0x52..0x54, meaning not established; an earlier read: the versions'
+  first two bytes equal). If one bud's active equals the other's
   pending ("cross") or both pendings match and are non-zero ("pend") -> logs "Force apply for %s
   match" and sets flag [0x20034fc8+0x5d]=1. If both actives are equal -> apply-state handling
   (0x0801d628(1|7)), return 1. Otherwise -> "mismatch fw ver" path: 0x0801e05c(), log, posts event 0xc001.
@@ -121,9 +133,9 @@ Return codes index the name table at STFC 0x0806d29c: 0 "R2L", 1 "L2R", 2 APPLY_
   the sender as **downstream id 2** with send function 0xc00d5 (msg 0x75), provided it has a 0xd/4
   host session [0xc001a-0xc0066]. The relay: 0x1b from host -> 0x78280 -> 0x75 to the sibling.
 - So a host on GATT (transport 0x10) never triggers the handshake (bee88 finds no 0xd/4 session):
-  0x15 gets 0x16 status 0 and no 0x17, as observed. (Inferred: 4/0xd are the AAP-tunnelled UARP
-  sessions an Apple host opens [created by 0xbea24, called from 0x9ca4c]; the secondary is then
-  exposed to that host as downstream 2.)
+  0x15 gets 0x16 status 0 and no 0x17 (Observed). Over AACP 0x4F (session 0xd, created by 0xbea24,
+  called from 0x9ca4c) the pods announce the secondary as downstream 2 unsolicited (Observed Oct 27,
+  [uarp.md](uarp.md)). Downstream 1 is the case's tunnel ([case.md](case.md)).
 
 ## Bud side of the case-driven update (Inferred links, Known pieces)
 - The case opens a "Bud server" (type 1) on the source side and a "Bud client" (type 2) on the
@@ -144,30 +156,13 @@ Return codes index the name table at STFC 0x0806d29c: 0 "R2L", 1 "L2R", 2 APPLY_
   e.g. [rkof 0x15a1c6] in the case dispatcher gated by 0xc58a0, next to a 29-byte length check
   [0x1595d0] and an id-0x7e handler that calls the pre-reboot save 0x86b1c [0x1595b8].
 
-## Case firmware (Known strings/data, Inferred flow)
-- Case payloads: STFC/STFW (case MCU, two hardware variants, version 90.390, rkosftab inside),
-  NERF (case BLE chip, "Added App UARP Service", "VS UUID UARP Service addition index"),
-  R1FW (UWB, the only payload marked Personalization Required). Each case payload carries
-  0xCCD28107 (SHA-256) + 0xCCD28106 (256-byte signature) + 0xCCD28105 = 2; FTAB has no 0xCCD28106.
-- The case stages them itself: "ST pend", "NRF pend", "R1 pend", "Apply R1 image, pend bank %d",
-  "!! Upd nRF !! Req", "Apply BLE"; transports "uart|usb|tunnel", "Tunnel CLI: Kick USB/UART".
-  Inferred: a host updates the case directly over the case's own BLE UARP service (NERF), not
-  through a bud; caseOTA in progress blocks bud updates through the tunnel ("bud fwup cond" caseOTA).
-- rkof can offer stored files "case" (tag CASE) to transports 0x1a/0x1b and STFW("ioe1")/IOHM/IOHS/
-  ESM1/PDFW to 0x2d-0x30 [be4ec table, bf950], each only if the file exists; no writer of these
-  files was found, so whether this model ever relays case firmware through a bud is not established.
-- No bud-side check that the case is on a matching version was found.
-- **A host can't reach the case's UARP** (9B47 NERF, loaded at 0, Known code;
-  event meanings from Nordic's peer manager, Inferred). Its UARP
-  characteristics need an encrypted link (0x3bda8: write and CCCD access
-  `0x0202`, Just Works). The case grants LE security only during a Find My
-  owner pairing: its security-parameters request (0x3bbdc, case 5) rejects
-  when already Find My paired ("Already paired. Reject request.") and
-  otherwise only while a pairing session flag is set. Its sends are also
-  gated on Find My paired and encrypted (0x3cfdc). Find My pairing needs
-  Apple's servers (the S1-S4 and BAA certificates in its strings), so only
-  an Apple host updates the case. Observed Nov 13: with the lid open,
-  nothing near the laptop advertised the Find My pairing service (0xFD44).
+## Case firmware
+See [case.md](case.md): the case takes its own payloads (STFC/STFW, NERF, R1FW, AU*), stages and
+applies them itself, and is reached only over its BLE UARP service by its Find My owner (7B21) or,
+on 9A348's STFC, also through a lid-close tunnel via the primary bud. The bud never stores or
+forwards case firmware (above). No bud- or case-side check that the case's version matches the
+buds' was found. A case OTA in progress blocks bud updates through the tunnel ("bud fwup cond"
+caseOTA).
 
 ## Bottom line: a host stages / applies FTAB on the primary only
 Known:
@@ -178,11 +173,11 @@ Known:
   pending version matches the other bud's active or both pendings match.
 - Gates for that (case event 0xc001): both buds in the case and reporting versions, not already in
   B2B, and unless forced: lid flag and (level > 10 or charging), and no case OTA when tunnelled.
+Observed (Oct 27 over GATT, Nov 14 over AACP; [uarp.md](uarp.md)):
+1. Stage only (no 0x0A): with both buds in the closed case for ~30 minutes, the case copied the
+   staged image to the other bud and applied both (Inferred path: L_pend=new, R_act=old -> L2R ->
+   both pending equal -> APPLY_BOTH). **Staging is not inert.**
 Inferred:
-1. Stage only (no 0x0A): with both buds in the case under those gates, the case sees
-   L_pend=new, R_act=old -> L2R pushes the staged image to R -> both pending equal -> APPLY_BOTH:
-   **the case can install a host-staged image on both buds without any apply from the host.**
-   Staging is not inert.
 2. Stage + 0x0A on the primary: the primary reboots into the new image alone (A/B, 3 tries).
    The pair is mismatched until both buds are in the case under the gates; then L2R from the
    running image, APPLY_R. No code was found that refuses audio/pairing on a mismatch; how a
@@ -190,13 +185,15 @@ Inferred:
 3. Unusable pair: no path found that bricks the secondary; every B2B step uses the same
    newer-only, digest-checked FTAB staging and A/B commit. A risk remains if the new image
    can't do B2B with the old one, or if a reboot during B2B goes wrong; not visible statically.
-4. Case: not touched by a bud update; it updates itself from its own payloads (NERF/STFC/STFW/R1FW).
-   R1FW needs a TSS ticket. No requirement that the case's version matches was found.
+4. Case: not touched by a bud update (ours stayed on 7B21's STFC 71.8 through both updates); see
+   case.md.
 What a host should do to update the set like Apple does (Inferred): put both buds in the case on
-the charger with the lid as the case wants, stage FTAB on the primary and let the case run
+the charger, lid closed (as observed), stage FTAB on the primary and let the case run
 B2B + apply (or apply the primary and let the case catch up the other one). Or offer to each bud
-separately. A host on transport 0xd (Apple AAP) also sees the sibling as downstream 2 via 0x74/0x75.
+separately. A host on transport 0xd (AACP 0x4F, Apple's and calvados') also sees the sibling as downstream 2 via 0x74/0x75.
 GATT hosts don't.
-Not established: the physical link behind each transport id; who opens 0x18/0x19; whether the
-lid flag means open or closed; the exact bud message for the case's apply (0xd0) and for
-opening a tid; whether the manifest-required flag (+0x57, ERR_MANI) is set for this model.
+Not established: the physical link behind each transport id; who opens 0x18/0x19; what the lid
+flag [+0x4f] means (the observed copies ran with the lid closed); the exact bud message for the
+case's apply (0xd0) and for opening the B2B tids (the case's UARP tunnel opens with B2P 0x10
+{3, 1}, case.md).
+The manifest-required flag (+0x57, ERR_MANI) is 0 in 9A348's STFC (its init data, case.md).
