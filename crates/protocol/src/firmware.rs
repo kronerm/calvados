@@ -268,9 +268,20 @@ mod tests {
         assert_eq!(latest.older_than(&release), Some(false));
         let earlier = running("91.3431040000000000.12");
         assert!(!earlier.runs(&release));
-        assert_eq!(earlier.older_than(&release), Some(true), "same 9.1, other build");
-        assert_eq!(running("90.3431000025000000.6807").older_than(&release), Some(true));
-        assert_eq!(running("100.1.2").older_than(&release), Some(false), "a newer major");
+        assert_eq!(
+            earlier.older_than(&release),
+            Some(true),
+            "same 9.1, other build"
+        );
+        assert_eq!(
+            running("90.3431000025000000.6807").older_than(&release),
+            Some(true)
+        );
+        assert_eq!(
+            running("100.1.2").older_than(&release),
+            Some(false),
+            "a newer major"
+        );
         assert_eq!(BuildId::of_running("91"), None);
         assert_eq!(BuildId::of_running("91.3431"), None);
     }

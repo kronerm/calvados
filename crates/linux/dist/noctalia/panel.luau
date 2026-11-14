@@ -1,11 +1,13 @@
 --!nonstrict
 -- The Android notification's controls, laid out for a panel: the batteries,
--- the noise mode as a choice, the two switching settings with what they do,
--- and the firmware (or its update).
+-- the noise mode as a choice, the two switching settings and the AirPods'
+-- main ones with what they do, "More" (the AirPods' other settings and the
+-- rename), and the firmware (or its update).
 
 local format = require("./lib/format.luau")
 
 local state = noctalia.state.get(format.STATE) or { running = false }
+local render
 
 -- The daemon applies it; the next `watch` line re-renders.
 local function set(setting, value)
@@ -153,20 +155,109 @@ local function noiseControl()
   return ui.column({ gap = 8 }, { heading(title), ui.row({ gap = 8 }, tiles) })
 end
 
-local function setting(title, description, checked, key)
+local function setting(title, description, checked, enabled, onChange)
   return ui.row({ gap = 12, align = "center" }, {
     ui.column({ gap = 2, flexGrow = 1 }, {
       ui.label({ text = title }),
       ui.label({ text = description, fontSize = 12, color = "on_surface_variant", maxLines = 2 }),
     }),
-    ui.toggle({
-      checked = checked == true,
-      enabled = state.running == true,
-      onChange = function(value)
-        set(key, value == "true" and "on" or "off")
+    ui.toggle({ checked = checked == true, enabled = enabled, onChange = onChange }),
+  })
+end
+
+-- A calvados setting, stored by the daemon.
+local function hostSetting(title, description, checked, key)
+  return setting(title, description, checked, state.running == true, function(value)
+    set(key, value == "true" and "on" or "off")
+  end)
+end
+
+-- One of the AirPods' own settings with a row of its own; nil until they
+-- report it.
+local function podSetting(entry)
+  local value = format.podValue(state, entry.name)
+  if value == nil then
+    return nil
+  end
+  return setting(entry.title, entry.description, value == "on", true, function(checked)
+    noctalia.runAsync({ "calvados", "set", "pod", entry.name, checked == "true" and "on" or "off" })
+  end)
+end
+
+-- "More": the AirPods' other settings, title and value, a click stepping to
+-- the next value, and the rename field. Collapsed on every open.
+local moreOpen = false
+local draftName = nil
+
+local function rename()
+  local name = draftName
+  if name and #name >= 1 and #name <= 32 then
+    noctalia.runAsync({ "calvados", "rename", name })
+  end
+end
+
+local function more()
+  local children = {
+    ui.row({
+      key = `more:{moreOpen}`,
+      gap = 6,
+      align = "center",
+      onClick = function()
+        moreOpen = not moreOpen
+        render()
+      end,
+    }, {
+      ui.label({ text = "More", fontWeight = "medium", color = "on_surface_variant", flexGrow = 1 }),
+      ui.glyph({ name = moreOpen and "chevron-up" or "chevron-down", size = 16, color = "on_surface_variant" }),
+    }),
+  }
+  if not moreOpen then
+    return ui.column({ gap = 8 }, children)
+  end
+  local rows = {}
+  for _, entry in ipairs(format.POD_SETTINGS) do
+    local value = not entry.main and format.podValue(state, entry.name)
+    if value then
+      table.insert(rows, ui.row({
+        key = `pod:{entry.name}`,
+        gap = 12,
+        align = "center",
+        paddingV = 3,
+        onClick = function()
+          noctalia.runAsync({ "calvados", "set", "pod", entry.name, "toggle" })
+        end,
+      }, {
+        ui.label({ text = entry.title, flexGrow = 1, maxLines = 1 }),
+        ui.label({ text = format.podValueLabel(value), color = "primary", maxLines = 1 }),
+      }))
+    end
+  end
+  table.insert(rows, ui.row({ gap = 8, align = "center" }, {
+    ui.input({
+      key = "rename",
+      value = state.name or "",
+      placeholder = "Name",
+      controlSize = "sm",
+      flexGrow = 1,
+      onChange = function(text)
+        draftName = text
+      end,
+      onSubmit = function(text)
+        draftName = text
+        rename()
       end,
     }),
-  })
+    ui.row({
+      paddingH = 10,
+      paddingV = 4,
+      radius = 8,
+      border = "outline",
+      borderWidth = 1,
+      onClick = rename,
+    }, { ui.label({ text = "Rename", fontSize = 12, maxLines = 1 }) }),
+  }))
+  table.insert(children, ui.column({ gap = 6 }, rows))
+  return ui.column({ gap = 8 }, children)
 end
 
 -- One small line: a firmware update while there is one, else the firmware
@@ -196,26 +287,36 @@ local function firmware()
   return ui.row({ gap = 12, align = "center" }, { line, button })
 end
 
-local function render()
+render = function()
+  local settings = {
+    hostSetting(
+      "Automatic switching",
+      "Take the AirPods when something starts playing on this computer.",
+      state.auto_switch,
+      "auto-switch"
+    ),
+    hostSetting(
+      "Automatic connection",
+      "Connect when the AirPods come out of the case nearby, even if another device had them last.",
+      state.auto_connect,
+      "auto-connect"
+    ),
+  }
+  for _, entry in ipairs(format.POD_SETTINGS) do
+    local row = entry.main and podSetting(entry)
+    if row then
+      table.insert(settings, row)
+    end
+  end
   local rows = {
     header(),
     batteries(),
     noiseControl(),
-    ui.column({ gap = 12 }, {
-      setting(
-        "Automatic switching",
-        "Take the AirPods when something starts playing on this computer.",
-        state.auto_switch,
-        "auto-switch"
-      ),
-      setting(
-        "Automatic connection",
-        "Connect when the AirPods come out of the case nearby, even if another device had them last.",
-        state.auto_connect,
-        "auto-connect"
-      ),
-    }),
+    ui.column({ gap = 12 }, settings),
   }
+  if format.connected(state) then
+    table.insert(rows, more())
+  end
   local line = firmware()
   if line then
     table.insert(rows, line)
@@ -229,5 +330,7 @@ noctalia.state.watch(format.STATE, function(value)
 end)
 
 function onOpen(_context)
+  moreOpen = false
+  draftName = nil
   render()
 end

@@ -47,7 +47,11 @@ impl<'object_scope, 'env_scope, R: Reference + AsRef<JObject<'object_scope>>> Au
             &self.0,
             jni_str!("setStreamVolume"),
             jni_sig!("(III)V"),
-            &[JValue::Int(STREAM_MUSIC), JValue::Int(index), JValue::Int(0)],
+            &[
+                JValue::Int(STREAM_MUSIC),
+                JValue::Int(index),
+                JValue::Int(0),
+            ],
         )?;
         Ok(())
     }

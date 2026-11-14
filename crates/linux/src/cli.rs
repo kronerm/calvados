@@ -342,8 +342,16 @@ async fn snapshot(proxy: &CalvadosProxy<'_>) -> Value {
             ),
         ))
     };
-    let Ok((connected, name, phase, buds, (noise, cycle), (auto_switch, pods), auto_connect, firmware)) =
-        read.await
+    let Ok((
+        connected,
+        name,
+        phase,
+        buds,
+        (noise, cycle),
+        (auto_switch, pods),
+        auto_connect,
+        firmware,
+    )) = read.await
     else {
         return json!({ "running": false });
     };

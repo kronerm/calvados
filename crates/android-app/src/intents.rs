@@ -5,12 +5,15 @@ use jni::Env;
 use jni::objects::JObject;
 
 use crate::jni::android::app::pending_intent::{Flags, PendingIntent};
+use crate::jni::android::app::remote_input::RemoteInput;
 use crate::jni::android::bluetooth::device::BluetoothDevice;
 use crate::jni::android::content::context::Context;
 use crate::jni::android::content::intent::Intent;
+use crate::notification::Page;
 use crate::proto::aacp::NoiseControlMode;
 use crate::proto::connection::is_airpods_name;
 use crate::proto::display;
+use crate::proto::pod_settings::PodSetting;
 use crate::proto::settings::Setting;
 use crate::service::Event;
 
@@ -20,6 +23,21 @@ const ACTION_NOISE_PREFIX: &str = "NOISE:";
 
 /// [`Request::Cycle`]: `CYCLE:` and the mode's name.
 const ACTION_CYCLE_PREFIX: &str = "CYCLE:";
+
+/// [`Request::Pod`]: `POD:` and the setting's name ([`PodSetting::name`]).
+const ACTION_POD_PREFIX: &str = "POD:";
+
+/// [`Request::Page`] of [`Page::Main`].
+const ACTION_PAGE_MAIN: &str = "PAGE:main";
+
+/// [`Request::Page`] of [`Page::Pods`].
+const ACTION_PAGE_PODS: &str = "PAGE:pods";
+
+/// [`Request::Rename`], with the name as the [`RENAME_KEY`] remote input.
+const ACTION_RENAME: &str = "RENAME";
+
+/// The rename action's `RemoteInput` key.
+pub(crate) const RENAME_KEY: &str = "name";
 
 /// [`Request::Toggle`] of [`Setting::AutoSwitch`].
 const ACTION_AUTO_SWITCH: &str = "AUTO_SWITCH";
@@ -70,6 +88,13 @@ pub(crate) enum Request {
     StartUpdate,
     /// Withdraw this phone's firmware update.
     CancelUpdate,
+    /// Step one of the pods' settings to its next value.
+    Pod(PodSetting),
+    /// Show a page of the expanded notification.
+    Page(Page),
+    /// Rename the pods; the name comes as a remote input, so it arrives as
+    /// [`Event::Rename`].
+    Rename,
 }
 
 impl Request {
@@ -81,11 +106,16 @@ impl Request {
             Self::Toggle(Setting::AutoConnect) => ACTION_AUTO_CONNECT.to_owned(),
             Self::StartUpdate => ACTION_UPDATE_FIRMWARE.to_owned(),
             Self::CancelUpdate => ACTION_CANCEL_UPDATE.to_owned(),
+            Self::Pod(setting) => format!("{ACTION_POD_PREFIX}{}", setting.name()),
+            Self::Page(Page::Main) => ACTION_PAGE_MAIN.to_owned(),
+            Self::Page(Page::Pods) => ACTION_PAGE_PODS.to_owned(),
+            Self::Rename => ACTION_RENAME.to_owned(),
         }
     }
 
-    /// An immutable `PendingIntent` sending this to the service, one per
-    /// `request_code`.
+    /// A `PendingIntent` sending this to the service, one per
+    /// `request_code`; immutable but for [`Self::Rename`]'s, which the
+    /// system adds the typed name to.
     pub(crate) fn pending_intent<'local>(
         self,
         env: &mut Env<'local>,
@@ -93,7 +123,10 @@ impl Request {
         request_code: i32,
     ) -> anyhow::Result<PendingIntent<JObject<'local>>> {
         let intent = service_intent(env, context, &self.action())?;
-        let flags = Flags::IMMUTABLE | Flags::UPDATE_CURRENT;
+        let flags = match self {
+            Self::Rename => Flags::MUTABLE,
+            _ => Flags::IMMUTABLE,
+        } | Flags::UPDATE_CURRENT;
         PendingIntent::get_foreground_service(env, context, request_code, &intent, flags)
     }
 
@@ -104,8 +137,17 @@ impl Request {
             ACTION_AUTO_CONNECT => Some(Self::Toggle(Setting::AutoConnect)),
             ACTION_UPDATE_FIRMWARE => Some(Self::StartUpdate),
             ACTION_CANCEL_UPDATE => Some(Self::CancelUpdate),
+            ACTION_PAGE_MAIN => Some(Self::Page(Page::Main)),
+            ACTION_PAGE_PODS => Some(Self::Page(Page::Pods)),
+            ACTION_RENAME => Some(Self::Rename),
             _ => (mode(ACTION_NOISE_PREFIX).map(Self::Noise))
-                .or_else(|| mode(ACTION_CYCLE_PREFIX).map(Self::Cycle)),
+                .or_else(|| mode(ACTION_CYCLE_PREFIX).map(Self::Cycle))
+                .or_else(|| {
+                    action
+                        .strip_prefix(ACTION_POD_PREFIX)
+                        .and_then(PodSetting::from_name)
+                        .map(Self::Pod)
+                }),
         }
     }
 }
@@ -171,6 +213,15 @@ pub(crate) fn parse<'local>(
             });
         }
         _ => match Request::parse(&action) {
+            // Empty without text; the notification is posted again either
+            // way, ending the reply's spinner.
+            Some(Request::Rename) => {
+                let name = match RemoteInput::get_results_from_intent(env, &intent)? {
+                    Some(results) => results.get_char_sequence(env, RENAME_KEY)?,
+                    None => None,
+                };
+                Event::Rename(name.unwrap_or_default())
+            }
             Some(request) => Event::Request(request),
             None => {
                 tracing::warn!(action, "unknown action");
@@ -195,6 +246,11 @@ mod tests {
             Request::Toggle(Setting::AutoConnect),
             Request::StartUpdate,
             Request::CancelUpdate,
+            Request::Pod(PodSetting::ConversationAwareness),
+            Request::Pod(PodSetting::VolumeSwipeLength),
+            Request::Page(Page::Main),
+            Request::Page(Page::Pods),
+            Request::Rename,
         ];
         for request in requests {
             let action = request.action();
@@ -206,6 +262,11 @@ mod tests {
             "NOISE:anc"
         );
         assert!(Request::parse("NOISE:loud").is_none());
+        assert!(matches!(
+            Request::parse("POD:personalized-volume"),
+            Some(Request::Pod(PodSetting::PersonalizedVolume))
+        ));
+        assert!(Request::parse("POD:loudness").is_none());
         assert!(matches!(
             Request::parse("CYCLE:adaptive"),
             Some(Request::Cycle(NoiseControlMode::Adaptive))

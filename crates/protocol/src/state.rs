@@ -1,6 +1,5 @@
 //! Device state accumulated from received packets, for display.
 
-use crate::pod_settings::PodSettings;
 use crate::MacAddress;
 use crate::aacp::{
     AudioSource, BatteryComponent, BatteryInfo, Bud, ChargingStatus, ControlCommand, ControlId,
@@ -9,6 +8,7 @@ use crate::aacp::{
 };
 use crate::firmware::Firmware;
 use crate::news::News;
+use crate::pod_settings::PodSettings;
 use crate::update::UpdateStatus;
 
 #[derive(Debug, Clone, Default)]

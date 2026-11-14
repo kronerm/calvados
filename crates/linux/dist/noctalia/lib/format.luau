@@ -166,6 +166,58 @@ function format.update(state)
   return line and `{line} · {peer.host}` or nil
 end
 
+-- The AirPods' own settings (protocol's `PodSetting`), in its order: the
+-- name `calvados set pod` takes and the title. `main` ones are rows of their
+-- own in the panel, with what they do; the rest are under "More".
+format.POD_SETTINGS = {
+  {
+    name = "conversation-awareness",
+    title = "Conversation Awareness",
+    description = "Lowers this computer's volume while you speak.",
+    main = true,
+  },
+  {
+    name = "personalized-volume",
+    title = "Personalized Volume",
+    description = "Adapts the volume to your surroundings.",
+    main = true,
+  },
+  { name = "adaptive-level", title = "Adaptive level" },
+  { name = "mic", title = "Microphone" },
+  { name = "charge-limit", title = "Optimized charge limit" },
+  { name = "case-sounds", title = "Case sounds" },
+  { name = "one-bud-anc", title = "Noise control with one bud" },
+  { name = "volume-swipe", title = "Volume swipe" },
+  { name = "volume-swipe-length", title = "Swipe length" },
+  { name = "press-speed", title = "Press speed" },
+  { name = "hold-duration", title = "Hold duration" },
+  { name = "sleep-detection", title = "Sleep detection" },
+}
+
+local POD_VALUES = {
+  on = "On",
+  off = "Off",
+  auto = "Automatic",
+  right = "Right",
+  left = "Left",
+  default = "Default",
+  longer = "Longer",
+  longest = "Longest",
+  slower = "Slower",
+  slowest = "Slowest",
+}
+
+-- A pod setting's reported value ("on", "auto", "50"), nil until reported.
+function format.podValue(state, name)
+  local value = format.connected(state) and state.pods and state.pods[name]
+  return (value ~= nil and value ~= "") and value or nil
+end
+
+-- A reported value as shown: "On", "Automatic", "Longer", "50%".
+function format.podValueLabel(value)
+  return POD_VALUES[value] or (string.match(value, "^%d+$") and `{value}%`) or value
+end
+
 -- The daemon runs and the AirPods are connected.
 function format.connected(state)
   return state.running == true and state.connected == true

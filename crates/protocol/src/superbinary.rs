@@ -344,7 +344,11 @@ pub(crate) mod tests {
         };
         assert_eq!(version[..], bumped.bytes()[12..28]);
         let reparsed = Package::parse(bumped.bytes().to_vec()).unwrap();
-        assert_eq!(reparsed.version(), bumped.version(), "FTAB's digest still holds");
+        assert_eq!(
+            reparsed.version(),
+            bumped.version(),
+            "FTAB's digest still holds"
+        );
         let ftab_version = bumped.ftab_header as usize + 8;
         assert_eq!(
             be32(bumped.bytes(), ftab_version as u32 + 12),

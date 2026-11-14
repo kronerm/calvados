@@ -12,6 +12,8 @@ use crate::jni::android::app::pending_intent::PendingIntent;
 #[repr(i32)]
 pub enum Visibility {
     Visible = 0,
+    /// Hidden, keeping its space.
+    Invisible = 4,
     Gone = 8,
 }
 
@@ -134,6 +136,22 @@ impl<'object_scope, 'env_scope, R: Reference + AsRef<JObject<'object_scope>>> Re
                 JValue::Object(&method),
                 JValue::Float(value),
             ],
+        )?;
+        Ok(())
+    }
+
+    /// `addView(id, nested)`: another layout appended to a view group.
+    pub fn add_view<'n>(
+        &self,
+        env: &mut Env<'env_scope>,
+        id: i32,
+        nested: &RemoteViews<impl Reference + AsRef<JObject<'n>>>,
+    ) -> anyhow::Result<()> {
+        env.call_method(
+            &self.0,
+            jni_str!("addView"),
+            jni_sig!("(ILandroid/widget/RemoteViews;)V"),
+            &[JValue::Int(id), JValue::Object(nested.as_obj())],
         )?;
         Ok(())
     }

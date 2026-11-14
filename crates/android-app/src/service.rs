@@ -11,7 +11,7 @@ use jni::JavaVM;
 
 use crate::intents::Request;
 use crate::link::{self, BluetoothEvent};
-use crate::notification::Content;
+use crate::notification::{Content, Page};
 use crate::proto::MacAddress;
 use crate::proto::aacp::{NoiseControlMode, crash_log};
 use crate::proto::display;
@@ -39,6 +39,8 @@ pub(crate) enum Event {
     BluetoothOn,
     /// A notification button.
     Request(Request),
+    /// The rename action's reply: the new name, empty for none.
+    Rename(String),
     Bluetooth(BluetoothEvent),
     /// Active playbacks changed: whether media or a VoIP call is among them.
     Playback {
@@ -158,6 +160,8 @@ fn service_main(jvm: JavaVM, events: crossbeam_channel::Receiver<Event>) {
     // Shown notification content, and when it was last posted.
     let mut shown: Option<(Content, Instant)> = None;
     let mut playing = Playing::default();
+    // The expanded notification's page, shown while connected.
+    let mut page = Page::Main;
     // When to (re)post the notification: now, to replace the "Starting…"
     // placeholder, and later for a change held back by NOTIFY_MIN_INTERVAL.
     let mut notify_at = Some(Instant::now());
@@ -261,10 +265,9 @@ fn service_main(jvm: JavaVM, events: crossbeam_channel::Receiver<Event>) {
                         .as_deref()
                         .and_then(|model| catalog.latest(model))
                         .cloned();
-                    match engine.prepare_update(
-                        release.clone(),
-                        crate::proto::update::Goal::Install,
-                    ) {
+                    match engine
+                        .prepare_update(release.clone(), crate::proto::update::Goal::Install)
+                    {
                         Ok(started) => {
                             effects.extend(started);
                             if let Some(release) = release {
@@ -276,7 +279,19 @@ fn service_main(jvm: JavaVM, events: crossbeam_channel::Receiver<Event>) {
                     }
                 }
                 Request::CancelUpdate => effects.extend(engine.cancel_update()),
+                Request::Pod(setting) => match engine.state().pods.get(setting) {
+                    Some(raw) => effects.extend(engine.set_pod(setting, setting.next(raw))),
+                    None => tracing::info!(?setting, "not reported by the pods yet"),
+                },
+                Request::Page(next) => page = next,
+                // Parsed as `Event::Rename`.
+                Request::Rename => {}
             },
+            Some(Event::Rename(name)) => {
+                effects.extend(engine.rename(&name));
+                // Android shows a spinner until the notification is posted.
+                shown = None;
+            }
             Some(Event::Bluetooth(event)) => match event {
                 BluetoothEvent::Connected => match conn {
                     Conn::Disconnected { .. } => {
@@ -353,7 +368,7 @@ fn service_main(jvm: JavaVM, events: crossbeam_channel::Receiver<Event>) {
         // Post only changes, throttled; a change during the pause is posted
         // when it ends, so the latest state always lands.
         let latest = model.and_then(|model| catalog.latest(model));
-        let content = Content::of(&engine, &conn, latest);
+        let content = Content::of(&engine, &conn, latest, page);
         match &shown {
             Some((current, _)) if *current == content => notify_at = None,
             Some((_, posted)) if now < *posted + NOTIFY_MIN_INTERVAL => {

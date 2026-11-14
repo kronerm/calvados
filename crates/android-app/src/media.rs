@@ -85,7 +85,9 @@ fn fade(down: bool) -> anyhow::Result<()> {
         })
     };
     let current = volume(None)?;
-    let mut from = DUCKED_FROM.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+    let mut from = DUCKED_FROM
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
     let target = match (down, *from) {
         (true, None) => {
             *from = Some(current);

@@ -223,7 +223,9 @@ impl CalvadosService {
             "toggle" => {
                 let current = shown(&self.snapshot())
                     .and_then(|text| setting.parse(&text))
-                    .ok_or_else(|| zbus::fdo::Error::Failed(format!("{name} isn't reported yet")))?;
+                    .ok_or_else(|| {
+                        zbus::fdo::Error::Failed(format!("{name} isn't reported yet"))
+                    })?;
                 setting.next(current)
             }
             text => setting.parse(text).ok_or_else(|| {

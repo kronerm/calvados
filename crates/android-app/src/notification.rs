@@ -3,11 +3,12 @@
 use jni::JavaVM;
 use jni::objects::JObject;
 
-use crate::intents::Request;
+use crate::intents::{RENAME_KEY, Request};
 use crate::jni::android::app::activity_thread::ActivityThread;
 use crate::jni::android::app::notification::{
-    Action, DecoratedCustomViewStyle, Importance, Notification, NotificationChannel,
+    Action, Builder, DecoratedCustomViewStyle, Importance, Notification, NotificationChannel,
 };
+use crate::jni::android::app::remote_input::RemoteInput;
 use crate::jni::android::app::service::Service;
 use crate::jni::android::content::context::Context;
 use crate::jni::android::content::res::Resources;
@@ -17,6 +18,7 @@ use crate::proto::aacp::{Cycle, NoiseControlMode};
 use crate::proto::display::{self, Buds, Component, CycleMark, Place};
 use crate::proto::engine::Engine;
 use crate::proto::firmware::Release;
+use crate::proto::pod_settings::PodSetting;
 use crate::proto::settings::Setting;
 use crate::proto::state::PeerUpdate;
 use crate::proto::update::UpdateStatus;
@@ -68,6 +70,19 @@ pub(crate) struct Content {
     update_action: Option<UpdateAction>,
     auto_switch: bool,
     auto_connect: bool,
+    /// The expanded view's page; always the main one while not connected.
+    page: Page,
+    /// The pods' settings as reported, title order, with their values' text.
+    pods: Vec<(PodSetting, String)>,
+}
+
+/// The expanded view's pages, switched by an action under it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Page {
+    /// Batteries, noise control and this phone's settings.
+    Main,
+    /// The pods' own settings, and renaming them.
+    Pods,
 }
 
 /// The tiles: mode, view id (its cycle dot's is `<id>_cycle`).
@@ -140,7 +155,8 @@ fn header(
 
 impl Content {
     /// `latest`: the catalog's release for the pods, once checked.
-    pub(crate) fn of(engine: &Engine, conn: &Conn, latest: Option<&Release>) -> Self {
+    /// `page`: the one asked for, shown while connected.
+    pub(crate) fn of(engine: &Engine, conn: &Conn, latest: Option<&Release>, page: Page) -> Self {
         let state = engine.state();
         let settings = engine.settings();
         let name = state.name.as_deref().unwrap_or("AirPods");
@@ -178,6 +194,15 @@ impl Content {
             ),
             auto_switch: settings.auto_switch,
             auto_connect: settings.auto_connect,
+            page: if connected { page } else { Page::Main },
+            pods: PodSetting::ALL
+                .into_iter()
+                .filter(|_| connected)
+                .filter_map(|setting| {
+                    let text = setting.label(state.pods.get(setting)?)?;
+                    Some((setting, text))
+                })
+                .collect(),
         }
     }
 
@@ -193,6 +218,8 @@ impl Content {
             update_action: None,
             auto_switch: true,
             auto_connect: true,
+            page: Page::Main,
+            pods: Vec::new(),
         }
     }
 
@@ -229,7 +256,10 @@ impl Content {
             resources: context.get_resources(env)?,
         };
         let collapsed = self.collapsed(env, &res)?;
-        let expanded = self.expanded(env, context, &res)?;
+        let expanded = match self.page {
+            Page::Main => self.expanded(env, context, &res)?,
+            Page::Pods => self.pods_page(env, context, &res)?,
+        };
         let style = DecoratedCustomViewStyle::new(env)?;
         let icon = res.get(env, "ic_stat_airpods", "drawable")?;
         // Title and text also serve the lock screen's and accessibility's
@@ -251,6 +281,7 @@ impl Content {
             }
             None => builder,
         };
+        let builder = self.page_actions(env, context, builder)?;
         builder
             .set_small_icon(env, icon)?
             .set_show_when(env, false)?
@@ -260,6 +291,76 @@ impl Content {
             .set_custom_content_view(env, &collapsed)?
             .set_custom_big_content_view(env, &expanded)?
             .build(env)
+    }
+
+    /// Under the expanded view, while connected: the way to the other page,
+    /// and on the pods' page renaming them (a remote input).
+    fn page_actions<'local>(
+        &self,
+        env: &mut jni::Env<'local>,
+        context: &Context<impl jni::refs::Reference + AsRef<JObject<'local>>>,
+        builder: Builder<JObject<'local>>,
+    ) -> anyhow::Result<Builder<JObject<'local>>> {
+        if self.buds.is_none() {
+            return Ok(builder);
+        }
+        let (label, other) = match self.page {
+            Page::Main => ("More", Page::Pods),
+            Page::Pods => ("Back", Page::Main),
+        };
+        let pending = Request::Page(other).pending_intent(env, context, 50)?;
+        let action = Action::new(env, label, &pending)?;
+        let builder = builder.add_action(env, &action)?;
+        match self.page {
+            Page::Main => Ok(builder),
+            Page::Pods => {
+                let pending = Request::Rename.pending_intent(env, context, 51)?;
+                let input = RemoteInput::new(env, RENAME_KEY, "Rename AirPods")?;
+                let action = Action::with_remote_input(env, "Rename", &pending, &input)?;
+                builder.add_action(env, &action)
+            }
+        }
+    }
+
+    /// The pods' settings as chips, two to a row, each stepping its setting
+    /// on when tapped.
+    fn pods_page<'local>(
+        &self,
+        env: &mut jni::Env<'local>,
+        context: &Context<impl jni::refs::Reference + AsRef<JObject<'local>>>,
+        res: &Res<'local>,
+    ) -> anyhow::Result<RemoteViews<JObject<'local>>> {
+        let layout = res.get(env, "notification_pods", "layout")?;
+        let views = RemoteViews::new(env, &res.package, layout)?;
+        let ui = Ui { res, views: &views };
+        ui.text(env, "title", &self.title)?;
+        ui.show(env, "pods_empty", self.pods.is_empty())?;
+        let container = ui.id(env, "pods")?;
+        let row_layout = res.get(env, "notification_pod_row", "layout")?;
+        for pair in self.pods.chunks(2) {
+            let row = RemoteViews::new(env, &res.package, row_layout)?;
+            let cells = Ui { res, views: &row };
+            for (chip, entry) in ["pod_a", "pod_b"]
+                .into_iter()
+                .zip(pair.iter().map(Some).chain(std::iter::repeat(None)))
+            {
+                let Some((setting, value)) = entry else {
+                    // Keeps the lone chip half wide.
+                    let id = cells.id(env, chip)?;
+                    row.set_view_visibility(env, id, Visibility::Invisible)?;
+                    continue;
+                };
+                cells.text(env, &format!("{chip}_title"), setting.title())?;
+                cells.text(env, &format!("{chip}_value"), value)?;
+                let request_code = (40..)
+                    .zip(PodSetting::ALL)
+                    .find(|(_, each)| each == setting)
+                    .map_or(40, |(code, _)| code);
+                cells.on_click(env, context, chip, request_code, Request::Pod(*setting))?;
+            }
+            views.add_view(env, container, &row)?;
+        }
+        Ok(views)
     }
 
     /// Name and status, then the levels like the Linux bar: the buds left

@@ -147,6 +147,23 @@ impl PodSetting {
         }
     }
 
+    /// A reported byte as both UIs show it: `On`, `Automatic`, `50%`
+    /// (the Noctalia panel's `format.podValueLabel` matches).
+    pub fn label(self, raw: u8) -> Option<String> {
+        let text = self.text(raw)?;
+        Some(match (self.kind(), text.as_str()) {
+            (Kind::Level, _) => format!("{text}%"),
+            (_, "auto") => "Automatic".to_owned(),
+            _ => {
+                let mut chars = text.chars();
+                chars
+                    .next()
+                    .map(|first| first.to_uppercase().chain(chars).collect())
+                    .unwrap_or_default()
+            }
+        })
+    }
+
     /// Text as the byte to send: the inverse of [`Self::text`].
     pub fn parse(self, text: &str) -> Option<u8> {
         match self.kind() {
@@ -230,6 +247,10 @@ mod tests {
             }
         }
         assert_eq!(PodSetting::Mic.text(2).as_deref(), Some("left"));
+        assert_eq!(PodSetting::Mic.label(0).as_deref(), Some("Automatic"));
+        assert_eq!(PodSetting::AdaptiveLevel.label(50).as_deref(), Some("50%"));
+        assert_eq!(PodSetting::PressSpeed.label(2).as_deref(), Some("Slowest"));
+        assert_eq!(PodSetting::SleepDetection.label(1).as_deref(), Some("On"));
         assert_eq!(PodSetting::Mic.text(3), None);
         assert_eq!(PodSetting::ConversationAwareness.parse("on"), Some(1));
         assert_eq!(PodSetting::AdaptiveLevel.parse("101"), None);
@@ -250,7 +271,10 @@ mod tests {
         assert!(settings.reported(ControlId::AdaptiveVolume, 1));
         assert!(settings.is_on(PodSetting::PersonalizedVolume));
         assert!(!settings.reported(ControlId::ListeningMode, 2));
-        assert!(!settings.reported(ControlId::SleepDetection, 7), "not a toggle value");
+        assert!(
+            !settings.reported(ControlId::SleepDetection, 7),
+            "not a toggle value"
+        );
         assert_eq!(settings.get(PodSetting::SleepDetection), None);
     }
 }

@@ -5,8 +5,9 @@
 id = "kroner/calvados"
 name = "Calvados"
 version = "0.1.0"
-plugin_api = 24
-# 22: require() of ./lib modules; 24: runAsync with an argv table.
+plugin_api = 42
+# 22: require() of ./lib modules; 24: runAsync with an argv table; 42: a
+# panel as tall as its content ("More" expands it).
 author = "kroner"
 license = "MIT"
 dependencies = []
@@ -22,7 +23,8 @@ entry = "bar.luau"
 id = "panel"
 entry = "panel.luau"
 width = 400
-height = 385
+height = "content"
+max_height = 900
 placement = "attached"
 position = "auto"
 open_near_click = true

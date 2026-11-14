@@ -474,7 +474,9 @@ power-on (`LinkChange`). Its length caps at 255, i.e. 15 events.
   checks it, but not `plugin_api` against the installed Noctalia: 5.0.1
   supports 3–30 (its log names the range when it refuses a plugin), while
   the published API definitions run ahead (container tooltips are API 32).
-  The plugin needs 24 (`runAsync` with an argv table).
+  The plugin needs 42 (`height = "content"`, so the panel grows when More
+  opens; 24 brought `runAsync` with an argv table): Noctalia 5.4 or later
+  (5.4.1 tested).
 - `state.rs` — the state directory, the pods' crash logs, and the two
   remembered settings (`protocol::settings`; files
   `auto_switch`/`auto_connect`, `on`/`off`, default on), the same two as
@@ -558,6 +560,17 @@ texts are written twice. A change to one side needs the other:
   `notification.rs` `battery_glyph`);
 - the icons: Noctalia names Tabler glyphs, Android has them converted in
   `res/drawable` (SVG paths, stroke 2, round caps and joins).
+- the pods' settings (`PodSetting::title`; values as `PodSetting::label`
+  and the panel's `format.podValueLabel`: `On`, `Automatic`, `50%`): the
+  panel's "More" section (collapsible, closed each time the panel opens;
+  rows of title and value, a click sets the next value, and a rename field)
+  and the notification's "More" page (`Page::Pods`: chips two to a row,
+  `notification_pods.xml`/`notification_pod_row.xml`; buttons More, Back,
+  Rename with a `RemoteInput`). One deliberate difference: the panel shows
+  Conversation Awareness and Personalized Volume as main rows with
+  descriptions under Switch and Connect and leaves them out of More; the
+  notification has no height for them (its expanded content is at
+  Android's ~256 dp cap), so they're its first two chips.
 
 ## Ownership model
 

@@ -7,6 +7,7 @@ use jni::{
 use num_enum::IntoPrimitive;
 
 use crate::jni::android::app::pending_intent::PendingIntent;
+use crate::jni::android::app::remote_input::RemoteInput;
 use crate::jni::android::widget::remote_views::RemoteViews;
 
 pub struct Notification<R>(pub(crate) R);
@@ -180,6 +181,26 @@ impl<'env_scope> Action<JObject<'env_scope>> {
         title: &str,
         intent: &PendingIntent<impl Reference + AsRef<JObject<'p>>>,
     ) -> anyhow::Result<Self> {
+        Self::build(env, title, intent, None::<&RemoteInput<JObject>>)
+    }
+
+    /// An action asking for text first (`addRemoteInput`); `intent` must be
+    /// mutable, the system adds the text to it.
+    pub fn with_remote_input<'p, 'i>(
+        env: &mut Env<'env_scope>,
+        title: &str,
+        intent: &PendingIntent<impl Reference + AsRef<JObject<'p>>>,
+        input: &RemoteInput<impl Reference + AsRef<JObject<'i>>>,
+    ) -> anyhow::Result<Self> {
+        Self::build(env, title, intent, Some(input))
+    }
+
+    fn build<'p, 'i>(
+        env: &mut Env<'env_scope>,
+        title: &str,
+        intent: &PendingIntent<impl Reference + AsRef<JObject<'p>>>,
+        input: Option<&RemoteInput<impl Reference + AsRef<JObject<'i>>>>,
+    ) -> anyhow::Result<Self> {
         let title = JString::new(env, title)?;
         let class = env.find_class(jni_str!("android/app/Notification$Action$Builder"))?;
         let builder = env.new_object(
@@ -193,6 +214,14 @@ impl<'env_scope> Action<JObject<'env_scope>> {
                 JValue::Object(intent.as_obj()),
             ],
         )?;
+        if let Some(input) = input {
+            env.call_method(
+                &builder,
+                jni_str!("addRemoteInput"),
+                jni_sig!("(Landroid/app/RemoteInput;)Landroid/app/Notification$Action$Builder;"),
+                &[JValue::Object(input.as_obj())],
+            )?;
+        }
         let action = env
             .call_method(
                 &builder,

@@ -14,8 +14,8 @@ use crate::aacp::{
 };
 use crate::ble;
 use crate::firmware::{ExactVersion, Firmware, Release};
-use crate::pod_settings::PodSetting;
 use crate::news::News;
+use crate::pod_settings::PodSetting;
 use crate::protocol::{
     self, handshake, hijack_sequence, request_notifications, session_setup_frames, set_cycle,
     set_noise_control, set_ownership,
@@ -695,9 +695,12 @@ impl Engine {
         }
         tracing::info!(?setting, raw, "setting the pods' setting");
         let off = setting == PodSetting::ConversationAwareness && raw != 1;
-        std::iter::once(Effect::Send(protocol::control(setting.id(), [raw, 0, 0, 0])))
-            .chain(off.then(|| self.unduck()).flatten())
-            .collect()
+        std::iter::once(Effect::Send(protocol::control(
+            setting.id(),
+            [raw, 0, 0, 0],
+        )))
+        .chain(off.then(|| self.unduck()).flatten())
+        .collect()
     }
 
     /// Rename the pods (at most 32 bytes); they report the new name.
@@ -1717,7 +1720,9 @@ impl Engine {
     /// release's: no UARP needed (the pods serve it to one host only).
     fn identify(&mut self) -> Vec<Effect> {
         match &self.latest {
-            Some(release) if self.state.firmware.exact.is_none() && self.state.firmware.runs(release) => {
+            Some(release)
+                if self.state.firmware.exact.is_none() && self.state.firmware.runs(release) =>
+            {
                 let exact = release.version;
                 tracing::info!(%exact, "the reported build is the latest release");
                 self.running_firmware(exact)
