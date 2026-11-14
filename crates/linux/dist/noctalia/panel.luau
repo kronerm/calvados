@@ -217,9 +217,9 @@ local function choice(entry, value)
       }),
     }))
   end
-  return ui.column({ gap = 6 }, {
-    ui.label({ text = entry.title }),
-    ui.row({ gap = 6 }, segments),
+  return ui.row({ gap = 12, align = "center" }, {
+    ui.label({ text = entry.title, flexGrow = 1, maxLines = 1 }),
+    ui.row({ gap = 4, width = 210 }, segments),
   })
 end
 
@@ -327,7 +327,7 @@ local function more()
       onClick = rename,
     }, { ui.label({ text = "Rename", fontSize = 12, maxLines = 1 }) }),
   }))
-  table.insert(children, ui.column({ gap = 14 }, rows))
+  table.insert(children, ui.column({ gap = 10 }, rows))
   return ui.column({ gap = 8 }, children)
 end
 
@@ -392,7 +392,10 @@ render = function()
   if line then
     table.insert(rows, line)
   end
-  panel.render(ui.column({ flexGrow = 1, gap = 18, align = "stretch" }, rows))
+  -- Scrolls once More makes it taller than the panel's cap.
+  panel.render(ui.scroll({ flexGrow = 1 }, {
+    ui.column({ gap = 18, align = "stretch" }, rows),
+  }))
 end
 
 noctalia.state.watch(format.STATE, function(value)
