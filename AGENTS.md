@@ -21,7 +21,7 @@ The root is a virtual manifest over host and Android crates: always name
 the crate with `-p`. Host is the default target.
 
 ```sh
-cargo build -p linux --release              # the daemon (or `makepkg -si`)
+cargo build -p linux                        # the daemon (or `makepkg -si`)
 cargo app-build                             # app + module -> target/debug/apk/calvados.apk
 cargo app-run                               # build, install, run on a device
 cargo app-build --release                   # needs the signing env below
@@ -534,7 +534,9 @@ power-on (`LinkChange`). Its length caps at 255, i.e. 15 events.
   starts again at once.
 - `PKGBUILD` (repo root) — Arch package built from the checkout (binary,
   the unit with `ExecStart` rewritten to `/usr/bin`, the Noctalia plugin);
-  no `check()` (run the tests below yourself); `!lto`, since makepkg's LTO
+  a debug build unless `CALVADOS_PROFILE` names another profile (CI:
+  `release`, the workspace's LTO one), since local rebuilds should be
+  quick; no `check()` (run the tests below yourself); `!lto`, since makepkg's LTO
   turns libspa's C shim into bitcode rust-lld can't link. The install
   script sets `cap_net_raw+ep` on the binary (user units can't grant
   capabilities; the unit must not set `NoNewPrivileges=`).

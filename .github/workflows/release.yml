@@ -129,7 +129,7 @@ jobs:
           useradd -m builder
           chown -R builder: . /home/builder
           sudo -u builder git config --global --add safe.directory "$PWD"
-          sudo -u builder makepkg --noconfirm
+          sudo -u builder CALVADOS_PROFILE=release makepkg --noconfirm
           mkdir out && cp ./*.pkg.tar.zst out/
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
