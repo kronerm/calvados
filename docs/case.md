@@ -674,3 +674,13 @@ STFC 71.8.0.0 (7B21, base 0x08001800). Known unless marked.
   its versions [0x0801c000]; nothing relays that to a host.
 So a 7B21 case with 9A348 buds never becomes downstream 1: every probe was bound to fail.
 Once the case runs 90.390, the 9A348 trigger above applies.
+- 7B21 NERF (70.59, base 0; MBR/SoftDevice identical to 9B47's): the same gate as 9B47.
+  UARP and 2ee26cd4 services are added by FUN_00044f04 only when Find My paired (boot
+  0x4551a, disconnect 0x42e14; bit 0 of RAM 0x20008a08, FUN_000486fc); unowned it accepts
+  a legacy Just Works bond (sec params `31 07 10 03 03` at 0x44e16) and deletes it at
+  disconnect (0x3ffec); unowned it advertises FD44 service data (21 bytes, 30 ms, public
+  address) for 10 minutes after each lid opening (FUN_00041fc0, LID_OPENED 0x3f504).
+  7B21 STFC's offer handler FUN_080141f4 accepts tid 2 (BLE) offers while [cfg+8] == 0,
+  tid 3 without a version check. USB: routing UART = CLI, USB = Disabled (0x0803c570); CDC
+  only after `crabapple` (+0xf, 0x08043fb0). The Nov 13 USB descriptor's bcdDevice 0x4708
+  is 71.8 (filled from the version word, 0x08032df0): the case does run 7B21's STFC.
