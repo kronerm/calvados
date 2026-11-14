@@ -71,7 +71,7 @@ impl Library<'_> {
     fn find_or_log(&self, name: Name<'_>) -> Option<usize> {
         let address = self.find(name);
         if address.is_none() {
-            tracing::error!(symbol = name.as_str(), "symbol not found");
+            tracing::warn!(symbol = name.as_str(), "symbol not found");
         }
         address
     }
