@@ -167,13 +167,16 @@ function format.update(state)
 end
 
 -- The AirPods' own settings (protocol's `PodSetting`), in its order: the
--- name `calvados set pod` takes and the title. `main` ones are rows of their
--- own in the panel, with what they do; the rest are under "More".
+-- name `calvados set pod` takes, the title, and the kind (a switch unless
+-- said). `main` ones are rows of their own in the panel, with what they do;
+-- the rest are under "More".
+local SPEEDS = { "default", "slower", "slowest" }
+
 format.POD_SETTINGS = {
   {
     name = "conversation-awareness",
     title = "Conversation Awareness",
-    description = "Lowers this computer's volume while you speak.",
+    description = "Lowers the volume and lets voices in while you speak.",
     main = true,
   },
   {
@@ -182,15 +185,20 @@ format.POD_SETTINGS = {
     description = "Adapts the volume to your surroundings.",
     main = true,
   },
-  { name = "adaptive-level", title = "Adaptive level" },
-  { name = "mic", title = "Microphone" },
+  { name = "adaptive-level", title = "Adaptive level", kind = "level", low = "More noise", high = "Less noise" },
+  { name = "mic", title = "Microphone", kind = "choice", options = { "auto", "right", "left" } },
   { name = "charge-limit", title = "Optimized charge limit" },
   { name = "case-sounds", title = "Case sounds" },
   { name = "one-bud-anc", title = "Noise control with one bud" },
   { name = "volume-swipe", title = "Volume swipe" },
-  { name = "volume-swipe-length", title = "Swipe length" },
-  { name = "press-speed", title = "Press speed" },
-  { name = "hold-duration", title = "Hold duration" },
+  {
+    name = "volume-swipe-length",
+    title = "Swipe length",
+    kind = "choice",
+    options = { "default", "longer", "longest" },
+  },
+  { name = "press-speed", title = "Press speed", kind = "choice", options = SPEEDS },
+  { name = "hold-duration", title = "Hold duration", kind = "choice", options = SPEEDS },
   { name = "sleep-detection", title = "Sleep detection" },
 }
 

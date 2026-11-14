@@ -155,14 +155,20 @@ local function noiseControl()
   return ui.column({ gap = 8 }, { heading(title), ui.row({ gap = 8 }, tiles) })
 end
 
+-- A title, what it does (optional) and a switch.
 local function setting(title, description, checked, enabled, onChange)
+  local text = { ui.label({ text = title }) }
+  if description then
+    table.insert(text, ui.label({ text = description, fontSize = 12, color = "on_surface_variant", maxLines = 2 }))
+  end
   return ui.row({ gap = 12, align = "center" }, {
-    ui.column({ gap = 2, flexGrow = 1 }, {
-      ui.label({ text = title }),
-      ui.label({ text = description, fontSize = 12, color = "on_surface_variant", maxLines = 2 }),
-    }),
+    ui.column({ gap = 2, flexGrow = 1 }, text),
     ui.toggle({ checked = checked == true, enabled = enabled, onChange = onChange }),
   })
+end
+
+local function setPod(name, value)
+  noctalia.runAsync({ "calvados", "set", "pod", name, value })
 end
 
 -- A calvados setting, stored by the daemon.
@@ -180,7 +186,83 @@ local function podSetting(entry)
     return nil
   end
   return setting(entry.title, entry.description, value == "on", true, function(checked)
-    noctalia.runAsync({ "calvados", "set", "pod", entry.name, checked == "true" and "on" or "off" })
+    setPod(entry.name, checked == "true" and "on" or "off")
+  end)
+end
+
+-- A choice as segments, the current one filled (keyed by it, as the noise
+-- tiles are).
+local function choice(entry, value)
+  local segments = {}
+  for _, option in ipairs(entry.options) do
+    local selected = option == value
+    table.insert(segments, ui.row({
+      key = `{entry.name}:{option}:{selected}`,
+      flexGrow = 1,
+      justify = "center",
+      paddingV = 5,
+      radius = 8,
+      fill = selected and "primary" or nil,
+      border = selected and nil or "outline",
+      borderWidth = 1,
+      onClick = not selected and function()
+        setPod(entry.name, option)
+      end or nil,
+    }, {
+      ui.label({
+        text = format.podValueLabel(option),
+        fontSize = 12,
+        maxLines = 1,
+        color = selected and "on_primary" or "on_surface",
+      }),
+    }))
+  end
+  return ui.column({ gap = 6 }, {
+    ui.label({ text = entry.title }),
+    ui.row({ gap = 6 }, segments),
+  })
+end
+
+-- The adaptive level: a slider, sent as it moves (in tens, so a drag sends
+-- a few commands, not one per pixel).
+local sentLevel = nil
+
+local function level(entry, value)
+  return ui.column({ gap = 4 }, {
+    ui.row({ align = "center" }, {
+      ui.label({ text = entry.title, flexGrow = 1 }),
+      ui.label({ text = format.podValueLabel(value), color = "on_surface_variant" }),
+    }),
+    ui.slider({
+      min = 0,
+      max = 100,
+      step = 10,
+      value = tonumber(value) or 50,
+      controlSize = "sm",
+      onChange = function(moved)
+        local rounded = tostring(math.floor((tonumber(moved) or 0) / 10 + 0.5) * 10)
+        if rounded ~= sentLevel and rounded ~= value then
+          sentLevel = rounded
+          setPod(entry.name, rounded)
+        end
+      end,
+    }),
+    ui.row({}, {
+      ui.label({ text = entry.low, fontSize = 11, color = "on_surface_variant", flexGrow = 1 }),
+      ui.label({ text = entry.high, fontSize = 11, color = "on_surface_variant" }),
+    }),
+  })
+end
+
+-- A setting under "More", as its kind wants it.
+local function moreRow(entry, value)
+  if entry.kind == "choice" then
+    return choice(entry, value)
+  elseif entry.kind == "level" then
+    return level(entry, value)
+  end
+  return setting(entry.title, entry.description, value == "on", true, function(checked)
+    setPod(entry.name, checked == "true" and "on" or "off")
   end)
 end
 
@@ -218,18 +300,7 @@ local function more()
   for _, entry in ipairs(format.POD_SETTINGS) do
     local value = not entry.main and format.podValue(state, entry.name)
     if value then
-      table.insert(rows, ui.row({
-        key = `pod:{entry.name}`,
-        gap = 12,
-        align = "center",
-        paddingV = 3,
-        onClick = function()
-          noctalia.runAsync({ "calvados", "set", "pod", entry.name, "toggle" })
-        end,
-      }, {
-        ui.label({ text = entry.title, flexGrow = 1, maxLines = 1 }),
-        ui.label({ text = format.podValueLabel(value), color = "primary", maxLines = 1 }),
-      }))
+      table.insert(rows, moreRow(entry, value))
     end
   end
   table.insert(rows, ui.row({ gap = 8, align = "center" }, {
@@ -256,7 +327,7 @@ local function more()
       onClick = rename,
     }, { ui.label({ text = "Rename", fontSize = 12, maxLines = 1 }) }),
   }))
-  table.insert(children, ui.column({ gap = 6 }, rows))
+  table.insert(children, ui.column({ gap = 14 }, rows))
   return ui.column({ gap = 8 }, children)
 end
 
@@ -332,5 +403,6 @@ end)
 function onOpen(_context)
   moreOpen = false
   draftName = nil
+  sentLevel = nil
   render()
 end

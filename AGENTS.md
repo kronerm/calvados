@@ -575,7 +575,8 @@ texts are written twice. A change to one side needs the other:
 - the pods' settings (`PodSetting::title`; values as `PodSetting::label`
   and the panel's `format.podValueLabel`: `On`, `Automatic`, `50%`): the
   panel's "More" section (collapsible, closed each time the panel opens;
-  rows of title and value, a click sets the next value, and a rename field)
+  a switch per toggle, segments per choice, a slider for the adaptive
+  level sent in tens while it moves, and a rename field)
   and the notification's "More" page (`Page::Pods`: chips two to a row,
   `notification_pods.xml`/`notification_pod_row.xml`; buttons More, Back,
   Rename with a `RemoteInput`). One deliberate difference: the panel shows
