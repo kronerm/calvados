@@ -76,6 +76,30 @@ Built: on Linux, `calvados find`, the signal as you move.
   while the AirPods are in an Apple ID's Find My and separated from its
   devices (R, DULT draft; 9B47 NERF logs `non-owner command cannot be
   issued, near_owner`, C).
+- The case's sound from a non-Apple host (Nov 14, static analysis of
+  9B47 NERF and its UWB chip's `R1FW`, C unless marked):
+  - NERF's state machine (transitions at 0x503f8) plays sound only from
+    `CONNECTED`, reached only from the paired states (`WILD`,
+    `NEAR_OWNER`); unpaired states handle no sound event. The owner's
+    control point (0x3ca5c, Sound Start 0x200) answers unpaired with
+    "not paired"; the non-owner one (0x3d040, 0x300) is refused near the
+    owner and acted on only paired.
+  - Pairing can't be done from Linux or Android: the pairing crypto runs
+    on the UWB chip (`crypto_set_s3`, `crypto_val_s3_cert`), which checks
+    S3 and a "BAA" certificate chain against Apple roots in its firmware
+    (P-384 key at `R1FW` 0x3fb24). Whether Apple's servers or the owner
+    device's Secure Enclave signs it is open; no open-source project
+    pairs a genuine accessory.
+  - Possible only after a one-time pairing with an Apple device: the
+    non-owner sound from Linux once the owner device has been away past
+    the separated timeout (no keys needed), or the owner's Sound Start
+    with keys exported from a Mac and the link-key derivation
+    reverse-engineered in `R1FW` (KDF labels at 0x42e69; G).
+  - Removing the AirPods from an account may not unpair the case if the
+    removal never reached it over BLE; a factory reset (case button,
+    ~13.5 s, B2P 0x154 → `findMySmUnpair`) does. An unpaired case should
+    advertise service data 0xFD44 when the lid opens (G; none seen
+    Nov 13).
 - Hot/cold: the buds' proximity advertisement resolves with the IRK
   calvados keeps, with its RSSI; it covers the case only while a bud is in
   it. An empty case advertises only Find My frames from the owner's
