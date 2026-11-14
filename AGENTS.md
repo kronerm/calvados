@@ -132,7 +132,8 @@ Cargo's downloads, `target` and cargo-apk2 are cached per job, keyed on
   0-100, choice), the name used on D-Bus, the CLI and Android intents, the
   title both UIs show, `text`/`parse`/`next` (a tap's next value).
   `DeviceState::pods` keeps what the pods report (most come in the startup
-  burst); shown only once reported, never stored. `Engine::set_pod`,
+  burst; a change only to the other hosts, so `set_pod` records its own
+  value); never stored. `Engine::set_pod`,
   `Engine::rename` (0x1A). Conversation Awareness: the pods' 0x4B level
   1-2 while media plays here emits `Effect::Duck` once; 6, 8, 9, losing
   the audio, or the setting going off `Effect::Unduck`. Encodings and the

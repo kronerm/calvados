@@ -726,6 +726,8 @@ impl Engine {
             return Vec::new();
         }
         tracing::info!(?setting, raw, "setting the pods' setting");
+        // The pods report a change to the other hosts only.
+        self.state.pods.reported(setting.id(), raw);
         let off = setting == PodSetting::ConversationAwareness && raw != 1;
         std::iter::once(Effect::Send(protocol::control(
             setting.id(),
@@ -2188,6 +2190,13 @@ mod tests {
         assert_eq!(e.chime(), Ok(vec![Effect::Chime { release: true }]));
         e.handle(source(mac(LOCAL), Activity::MEDIA), now());
         assert_eq!(e.chime(), Ok(vec![Effect::Chime { release: false }]));
+    }
+
+    #[test]
+    fn a_pod_setting_set_here_shows_at_once() {
+        let mut e = engine();
+        assert_eq!(e.set_pod(PodSetting::VolumeSwipeLength, 2).len(), 1);
+        assert_eq!(e.state.pods.get(PodSetting::VolumeSwipeLength), Some(2));
     }
 
     #[test]

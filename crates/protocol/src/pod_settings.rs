@@ -1,6 +1,7 @@
 //! The pods' own settings: one control command each (opcode 0x09), sent by
-//! a host and reported back by the pods in the startup burst and on every
-//! change. The pods are the store: a value shows only once reported.
+//! a host and reported by the pods in the startup burst and on a change to
+//! the other hosts (not the one that set it). The pods are the store: a
+//! value shows once reported or set here.
 //! Encodings from LibrePods (`AAP Definitions.md`, 7A305) and our 9A348
 //! captures; docs/features.md.
 
