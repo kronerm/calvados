@@ -642,3 +642,14 @@ through; whatever fails logs only on the case's or the bud's UART.
   link on Left; 00:33-00:37 run 0x15 (Right primary) + 0x75, link on Right. So the stored
   role was on the link holder in every probe: the role pick isn't the gate either, and
   the "docking moves the link but not the role" inference above is wrong.
+
+## The case probably doesn't run the STFC analysed above (Nov 14)
+
+Everything above reads 9A348's STFC (90.390). Our buds shipped on 7B21 and were updated
+to 9A348 over GATT; the case never was, so it most likely still runs 7B21's case firmware
+(package `…/2024/patches/072-16842/4936FD7D-958B-4BA8-89F0-6891E72ECD89/com_apple_MobileAsset_UARP_A2968/609da25d4fc018fb870d598846665b6c96a95334.zip`,
+URL from AppleDB's `osFiles/Bluetooth Headset Firmware/7x/7B21.json`; STFC 511168 bytes).
+Its strings differ exactly at the trigger: "Tunnel Available" (9A348: "Tunnel avail") and
+an extra "ft tunnel". The pods' 0x1D carries no case version. On 9A348's STFC the last
+unverified gate, FUN_0801d8e0 (coupled), passes for this pair (cross-match of the buds'
+own/partner addresses at record +0/+6, coup_st 0, coupling idle, present and valid).
