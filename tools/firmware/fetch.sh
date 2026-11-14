@@ -1,6 +1,7 @@
 #!/bin/sh
 # Fetch the current firmware of one AirPods model from Apple's asset catalog,
-# unpack it and extract its images. Apple serves only the current build.
+# unpack it and extract its images. Apple's catalog lists only the current
+# build; older packages' URLs are in AppleDB (docs/firmware.md).
 #
 #   tools/firmware/fetch.sh MODEL [OUT]    e.g. A3048 (AirPods Pro 2 USB-C)
 #

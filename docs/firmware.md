@@ -13,6 +13,7 @@ framing, the AACP dispatch table; same build), [uarp-dump] / [ftab-dump]
 
 [openulla]: https://github.com/mstampfli/openulla
 [uarp-dump]: https://github.com/19h/uarp-dump
+[AppleDB]: https://github.com/littlebyteorg/appledb
 [ftab-dump]: https://github.com/19h/ftab-dump
 [linden/uarp]: https://github.com/linden/uarp
 
@@ -25,8 +26,15 @@ tools/firmware/ghidra/run.sh dec 0x6cf48       # decompile; modes in Dump.java
 ```
 
 Apple's catalog (`mesu.apple.com/assets/com_apple_MobileAsset_UARP_<model>/`)
-serves only the current build, so compare the hashes below before trusting
-an offset. Older builds' URLs are listed by [uarp-dump] for some models.
+lists only the current build, so compare the hashes below before trusting
+an offset. Older packages stay on `updates.cdn-apple.com`; their URLs are
+community-archived: [AppleDB] keeps one JSON per build,
+`osFiles/Bluetooth Headset Firmware/<major>x/<build>.json`, whose `sources`
+map each model (`deviceMap`, e.g. `AirPodsPro1,2-usbc-case` = A2968) to its
+zip (7B21's case package came from there, docs/case.md), and [uarp-dump]
+lists some. A case that was never updated runs its factory build, not the
+buds' (ours: 7B21, its USB `bcdDevice` 0x4708 = STFC 71.8), so analyze the
+build it runs.
 
 ## Builds analyzed
 
