@@ -258,8 +258,11 @@ Cargo's downloads, `target` and cargo-apk2 are cached per job, keyed on
   (`Engine::release_known`, `identify`; see `firmware.rs`), and a settled
   session asks it over UARP (`VersionQuery`) only when no 0x1D came and
   it's unknown (`Engine::firmware_known`, in memory), or when its staged
-  update waits for the new version; the answer goes through
-  `running_firmware`.
+  update waits for the new version, and only while it's the sole host
+  connected (`DeviceState::sole_host`; re-checked on every packet, so once
+  the other leaves); the answer goes through `running_firmware`. A host
+  that identified the version tells its peers (`News::Firmware`), since a
+  host joining second often gets no 0x1D.
 - The pods announce the other bud as downstream (0x17, acked with 0x18),
   and the case as downstream 1 while it tunnels through the primary (only
   across a lid close with an offer held, and only from a case on 90.x;

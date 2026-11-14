@@ -142,8 +142,9 @@ version, plug it into a computer: `lsusb -v -d 05ac:139e | grep bcdDevice`
 shows `5a.00` or higher from 9.0 on, `47.xx` to `51.xx` before (7.1 to
 8.1).
 
-1. Put both buds in the case, plug it in, keep the lid open. Turn off
-   Bluetooth on any iPhone or Mac nearby.
+1. Put both buds in the case, plug it in, keep the lid open. Your other
+   calvados devices can stay connected; turn off Bluetooth on any iPhone
+   or Mac nearby.
 2. Tap **Update** (or `calvados firmware update`). It downloads the
    firmware from Apple and sends it: about 5 minutes, until it says
    "Staged: close the lid".
@@ -152,9 +153,10 @@ shows `5a.00` or higher from 9.0 on, `47.xx` to `51.xx` before (7.1 to
 4. Open the lid; the new version shows once they're connected.
 
 If it fails, the line says why; close and reopen the case and try again.
-The AirPods talk updates with one device at a time: if they don't answer,
-disconnect your other device and retry. Your other calvados device shows
-the progress meanwhile.
+The AirPods talk updates with one device at a time: calvados leaves that
+alone while another device is connected, but an Apple device may not. If
+they don't answer, disconnect it and retry. Your other calvados device
+shows the progress meanwhile.
 
 ## Logs
 

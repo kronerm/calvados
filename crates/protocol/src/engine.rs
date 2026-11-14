@@ -1555,8 +1555,9 @@ impl Engine {
 
     /// Something to send once UARP may be, in this session: the update to
     /// offer, or the version query, only when nothing else tells it (no
-    /// `0x1D`) or a staged update waits for the new version. The pods serve
-    /// UARP to the first host that sends any, until its link drops.
+    /// `0x1D`) or a staged update waits for the new version, and only while
+    /// no other host is connected. The pods serve UARP to the first host
+    /// that sends any, until its link drops.
     fn uarp_waits(&self) -> bool {
         let (offer, staged) = match &self.update {
             Some(Update::Running(updater)) => (
@@ -1566,7 +1567,9 @@ impl Engine {
             _ => (false, false),
         };
         let firmware = &self.state.firmware;
-        let ask = firmware.exact.is_none() && (staged || firmware.reported.is_none());
+        let ask = firmware.exact.is_none()
+            && (staged || firmware.reported.is_none())
+            && self.state.sole_host().is_some();
         offer
             || self
                 .session()
@@ -1788,6 +1791,9 @@ impl Engine {
                 let exact = release.version;
                 tracing::info!(%exact, "the reported build is the latest release");
                 self.running_firmware(exact)
+                    .into_iter()
+                    .chain(self.tell(News::Firmware(exact)))
+                    .collect()
             }
             _ => Vec::new(),
         }
@@ -1828,7 +1834,7 @@ impl Engine {
         self.tell(News::Update(status))
     }
 
-    /// What a host joining should know: the exact firmware we queried, our
+    /// What a host joining should know: the exact firmware we know, our
     /// update, and the cycle if known.
     fn share(&self) -> Vec<Effect> {
         let queried = self.session().and_then(|session| match session.uarp.query {
@@ -1873,6 +1879,12 @@ mod tests {
     const CONNECTED_DEVICES: &[u8] = &[
         0x04, 0x00, 0x04, 0x00, 0x2e, 0x00, 0x01, 0x00, 0x02, 0x02, 0x66, 0x77, 0x88, 0x99, 0xaa,
         0x02, 0x04, 0x02, 0x11, 0x22, 0x33, 0x44, 0x55, 0x02, 0x06,
+    ];
+
+    /// `ConnectedDevices` listing LOCAL alone.
+    const LOCAL_ALONE: &[u8] = &[
+        0x04, 0x00, 0x04, 0x00, 0x2e, 0x00, 0x01, 0x00, 0x01, 0x02, 0x11, 0x22, 0x33, 0x44, 0x55,
+        0x02, 0x06,
     ];
 
     fn mac(s: &str) -> MacAddress {
@@ -3134,15 +3146,16 @@ mod tests {
         }
 
         /// A settled session: acked, the burst in, both buds in the charging
-        /// case, with PEER connected too. No `0x1D` came, so its version
-        /// query is out; then the pods report 7.1.
+        /// case. No `0x1D` came and no other host was connected, so its
+        /// version query is out; then PEER connects and the pods report 7.1.
         fn ready() -> Engine {
             let mut e = engine();
             e.handle(Packet::HandshakeAck(HandshakeStatus::Accepted), now());
-            feed(&mut e, CONNECTED_DEVICES);
+            feed(&mut e, LOCAL_ALONE);
             settle(&mut e, now());
             let fx = e.tick(later());
             assert_eq!(kinds(&fx), [0x00, 0x01, 0x03], "the version query");
+            feed(&mut e, CONNECTED_DEVICES);
             e.state.firmware.reported = Some("71.2256000021000000.6663".into());
             e
         }
@@ -3250,8 +3263,10 @@ mod tests {
             assert_eq!(kinds(&settle(&mut e, now())), [], "a connect is fresh");
             assert_eq!(e.next_wake(), Some(now() + STARTUP_WAIT));
             e.tick(now() + STARTUP_WAIT);
-            assert_eq!(e.next_wake(), Some(later()));
-            assert_eq!(kinds(&e.tick(later())), [0x00, 0x01, 0x03]);
+            // Not while another host is connected: it would keep UARP from it.
+            assert_eq!(e.next_wake(), None);
+            assert_eq!(kinds(&e.tick(later())), []);
+            assert_eq!(kinds(&feed(&mut e, LOCAL_ALONE)), [0x00, 0x01, 0x03]);
             assert_eq!(e.next_wake(), None, "asked once a session");
             // The pods' own offer goes unanswered; a downstream endpoint is
             // acknowledged.
@@ -3486,16 +3501,11 @@ mod tests {
             e.handle(Packet::HandshakeAck(HandshakeStatus::Accepted), back);
             feed(&mut e, CONNECTED_DEVICES);
             settle(&mut e, back);
-            assert_eq!(kinds(&e.tick(back + UARP_SETTLE)), [0x00, 0x01, 0x03]);
+            assert_eq!(kinds(&e.tick(back + UARP_SETTLE)), [], "PEER is connected");
+            assert_eq!(kinds(&feed(&mut e, LOCAL_ALONE)), [0x00, 0x01, 0x03]);
             let fx = running_version(&mut e, [9, 0, 348]);
             let done = UpdateStatus::Done("9.0.348".parse().unwrap());
-            assert_eq!(
-                told(&fx),
-                [
-                    News::Update(done),
-                    News::Firmware("9.0.348".parse().unwrap())
-                ]
-            );
+            assert_eq!(told(&fx), [], "no other host to tell");
             assert_eq!(e.update_status(), Some(done));
         }
 
