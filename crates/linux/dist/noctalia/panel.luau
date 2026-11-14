@@ -392,10 +392,7 @@ render = function()
   if line then
     table.insert(rows, line)
   end
-  -- Scrolls once More makes it taller than the panel's cap.
-  panel.render(ui.scroll({ flexGrow = 1 }, {
-    ui.column({ gap = 18, align = "stretch" }, rows),
-  }))
+  panel.render(ui.column({ flexGrow = 1, gap = 18, align = "stretch" }, rows))
 end
 
 noctalia.state.watch(format.STATE, function(value)
