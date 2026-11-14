@@ -273,7 +273,9 @@ impl Content {
             true => builder,
             false => builder.set_sub_text(env, &self.header)?,
         };
-        let builder = match self.update_action {
+        // The update's button on the main page only: three buttons at most.
+        let update_action = self.update_action.filter(|_| self.page == Page::Main);
+        let builder = match update_action {
             Some(action) => {
                 let pending = action.request().pending_intent(env, context, 20)?;
                 let action = Action::new(env, action.label(), &pending)?;
@@ -317,6 +319,9 @@ impl Content {
                 let pending = Request::Rename.pending_intent(env, context, 51)?;
                 let input = RemoteInput::new(env, RENAME_KEY, "Rename AirPods")?;
                 let action = Action::with_remote_input(env, "Rename", &pending, &input)?;
+                let builder = builder.add_action(env, &action)?;
+                let pending = Request::Chime.pending_intent(env, context, 52)?;
+                let action = Action::new(env, "Find", &pending)?;
                 builder.add_action(env, &action)
             }
         }

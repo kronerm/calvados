@@ -226,7 +226,7 @@ fn service_main(jvm: JavaVM, events: crossbeam_channel::Receiver<Event>) {
                     .ok()
                     .flatten();
                 effects.extend(advertisers.iter().flat_map(|(address, data)| {
-                    engine.nearby(address.to_array(), data, keys, now)
+                    engine.nearby(address.to_array(), data, None, keys, now)
                 }));
             }
             Some(Event::Stop) => {
@@ -286,6 +286,10 @@ fn service_main(jvm: JavaVM, events: crossbeam_channel::Receiver<Event>) {
                 Request::Page(next) => page = next,
                 // Parsed as `Event::Rename`.
                 Request::Rename => {}
+                Request::Chime => match engine.chime() {
+                    Ok(chime) => effects.extend(chime),
+                    Err(refusal) => tracing::info!(%refusal, "no chime"),
+                },
             },
             Some(Event::Rename(name)) => {
                 effects.extend(engine.rename(&name));
@@ -489,6 +493,18 @@ fn execute_effect(conn: &Conn, effect: Effect, in_call: bool) -> bool {
         }
         Effect::Pause => log_media("pause", media::pause()),
         Effect::Resume => log_media("resume", media::resume()),
+        // The tone plays where media goes; the pods switch to a streaming
+        // host. Nothing to give back: Android follows the pods.
+        Effect::Chime { .. } => {
+            if let Conn::Connecting { mac } | Conn::Connected { mac } = *conn {
+                thread::spawn(move || {
+                    if let Err(e) = bluetooth::connect_a2dp(mac) {
+                        tracing::warn!("A2DP connect for the chime: {e:#}");
+                    }
+                    media::chime();
+                });
+            }
+        }
         Effect::Duck => media::duck(true),
         Effect::Unduck => media::duck(false),
         Effect::CrashLog { pods, bud, data } => save_crash_log(pods, bud, &data),

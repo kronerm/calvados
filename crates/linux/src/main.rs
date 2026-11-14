@@ -36,6 +36,9 @@ use crate::bluez::Link;
 use crate::dbus::Status;
 use crate::pipewire::Profile;
 
+/// How long the profile stays on for a chime: the node appearing, then
+/// 3 s of beeps.
+const CHIME_HOLD: Duration = Duration::from_secs(10);
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(5);
 /// Pause before re-attaching, so a flapping channel can't spin.
 const RECONNECT_DELAY: Duration = Duration::from_secs(3);
@@ -69,7 +72,7 @@ enum Input {
     Cycle(Cycle),
     /// An Apple device advertising nearby, with its manufacturer data (from
     /// the type byte).
-    Nearby(bluer::Address, Vec<u8>),
+    Nearby(bluer::Address, Vec<u8>, Option<i16>),
     /// A firmware catalog check for these models (a product's): its
     /// current release, `None` when it failed.
     Catalog(Vec<String>, Option<Release>),
@@ -79,6 +82,10 @@ enum Input {
     /// One of the pods' settings, as the byte to send.
     Pod(PodSetting, u8),
     Rename(String),
+    /// Chime on the pods to find them; refused with a reason.
+    Chime(oneshot::Sender<Result<(), String>>),
+    /// The chime is over: give the audio back unless we hold it now.
+    Chimed(bluer::Address),
     /// The release's package for the update, `None` when it couldn't be had.
     Package(Option<Package>),
 }
@@ -280,9 +287,10 @@ async fn run(daemon: &Daemon, mut engine: Engine, inputs: &mut mpsc::UnboundedRe
                 }
                 Input::Noise(mode) => engine.set_noise_mode(mode),
                 Input::Cycle(cycle) => engine.set_cycle(cycle),
-                Input::Nearby(address, advertisement) => engine.nearby(
+                Input::Nearby(address, advertisement, rssi) => engine.nearby(
                     address.0,
                     &advertisement,
+                    rssi,
                     presence::stored_keys(),
                     Instant::now(),
                 ),
@@ -318,6 +326,17 @@ async fn run(daemon: &Daemon, mut engine: Engine, inputs: &mut mpsc::UnboundedRe
                 Input::CancelUpdate => engine.cancel_update(),
                 Input::Pod(setting, raw) => engine.set_pod(setting, raw),
                 Input::Rename(name) => engine.rename(&name),
+                Input::Chimed(pods) => {
+                    if !engine.ownership().is_held() {
+                        daemon.audio.set(pods, Profile::Off);
+                    }
+                    Vec::new()
+                }
+                Input::Chime(reply) => {
+                    let chimed = engine.chime();
+                    let _ = reply.send(chimed.as_ref().map(|_| ()).map_err(ToString::to_string));
+                    chimed.unwrap_or_default()
+                }
                 Input::Package(package) => engine.package(package, Instant::now()),
             },
             Some(playing) = playback_change(&mut playback) => {
@@ -397,6 +416,21 @@ async fn perform(daemon: &Daemon, session: Option<&Session>, effect: Effect) -> 
         Effect::Pause => daemon.media.iter().for_each(mpris::Media::pause),
         Effect::Resume => daemon.media.iter().for_each(mpris::Media::resume),
         Effect::CrashLog { pods, bud, data } => state::save_crash_log(pods, bud, &data),
+        Effect::Chime { release } => {
+            if let Some(session) = session {
+                let pods = session.device.address();
+                bluez::activate_a2dp(&session.device);
+                daemon.audio.set(pods, Profile::A2dp);
+                daemon.audio.chime(pods);
+                if release {
+                    let inputs = daemon.inputs.clone();
+                    tokio::spawn(async move {
+                        tokio::time::sleep(CHIME_HOLD).await;
+                        let _ = inputs.send(Input::Chimed(pods));
+                    });
+                }
+            }
+        }
         Effect::Duck | Effect::Unduck => pods
             .into_iter()
             .for_each(|pods| daemon.audio.duck(pods, matches!(effect, Effect::Duck))),

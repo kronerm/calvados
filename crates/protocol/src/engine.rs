@@ -196,6 +196,9 @@ pub enum Effect {
     Duck,
     /// Restore the volume [`Effect::Duck`] lowered.
     Unduck,
+    /// Play a loud chime on the pods, to find them ([`Engine::chime`]):
+    /// route the audio here for it, then, if `release`, give it up again.
+    Chime { release: bool },
     /// One bud's saved crash logs, as sent ([`crash_log::records`]): keep
     /// them, as `pods`' and `bud`'s (1 or 2).
     CrashLog {
@@ -246,6 +249,29 @@ pub struct Engine {
     /// The catalog's latest release for the pods: their `0x1D` build
     /// matching it tells the exact version without UARP.
     latest: Option<Release>,
+    /// Our pods' last advertisement's signal strength (dBm), and when.
+    signal: Option<(i16, Instant)>,
+}
+
+/// How long a signal reading stays current: the pods advertise a few times
+/// a second.
+const SIGNAL_FRESH: Duration = Duration::from_secs(10);
+
+/// Why [`Engine::chime`] won't.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ChimeRefusal {
+    NotConnected,
+    /// Too loud for an ear.
+    InEar,
+}
+
+impl fmt::Display for ChimeRefusal {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(match self {
+            Self::NotConnected => "the AirPods aren't connected",
+            Self::InEar => "not while an AirPod is in an ear",
+        })
+    }
 }
 
 /// The AACP session.
@@ -538,12 +564,18 @@ impl Engine {
         &mut self,
         address: [u8; 6],
         advertisement: &[u8],
+        rssi: Option<i16>,
         keys: impl IntoIterator<Item = (MacAddress, ble::PodsKeys)>,
         now: Instant,
     ) -> Vec<Effect> {
         let Some((pods, keys)) = ble::identify(address, keys) else {
             return Vec::new();
         };
+        if let Some(rssi) = rssi
+            && self.pods().is_none_or(|ours| ours == pods)
+        {
+            self.signal = Some((rssi, now));
+        }
         tracing::debug!(
             %pods,
             hosts = ?ble::Proximity::parse(advertisement).and_then(ble::Proximity::hosts),
@@ -701,6 +733,36 @@ impl Engine {
         )))
         .chain(off.then(|| self.unduck()).flatten())
         .collect()
+    }
+
+    /// Play a chime on the pods to find them: not while a bud is in an
+    /// ear. Routes the audio here for it, and gives it back after unless
+    /// we held it.
+    pub fn chime(&mut self) -> Result<Vec<Effect>, ChimeRefusal> {
+        if !self.is_connected() {
+            return Err(ChimeRefusal::NotConnected);
+        }
+        let in_ear = self.state.ears().is_some_and(|(left, right)| {
+            [left, right]
+                .iter()
+                .any(|ear| matches!(ear, crate::aacp::EarStatus::InEar))
+        });
+        if in_ear {
+            return Err(ChimeRefusal::InEar);
+        }
+        tracing::info!("chiming to find the pods");
+        Ok(vec![Effect::Chime {
+            release: !self.ownership().is_held(),
+        }])
+    }
+
+    /// Our pods' signal strength in dBm, from their latest advertisement
+    /// within [`SIGNAL_FRESH`]: higher is closer (about -40 next to them,
+    /// -90 at the edge).
+    pub fn signal(&self, now: Instant) -> Option<i16> {
+        self.signal
+            .filter(|&(_, at)| now.saturating_duration_since(at) < SIGNAL_FRESH)
+            .map(|(rssi, _)| rssi)
     }
 
     /// Rename the pods (at most 32 bytes); they report the new name.
@@ -2097,6 +2159,26 @@ mod tests {
     }
 
     #[test]
+    fn a_chime_waits_for_the_ears_and_gives_the_audio_back() {
+        let mut e = engine();
+        let ears = |primary, secondary| Packet::EarDetection(EarDetection { primary, secondary });
+        e.handle(
+            Packet::PrimaryBud(crate::aacp::PrimaryBud {
+                bud: Bud::Left,
+                active: true,
+                peer: true,
+            }),
+            now(),
+        );
+        e.handle(ears(EarStatus::InEar, EarStatus::NotInEar), now());
+        assert_eq!(e.chime(), Err(ChimeRefusal::InEar));
+        e.handle(ears(EarStatus::NotInEar, EarStatus::InCase), now());
+        assert_eq!(e.chime(), Ok(vec![Effect::Chime { release: true }]));
+        e.handle(source(mac(LOCAL), Activity::MEDIA), now());
+        assert_eq!(e.chime(), Ok(vec![Effect::Chime { release: false }]));
+    }
+
+    #[test]
     fn conversation_awareness_ducks_our_media_while_speaking() {
         use crate::aacp::ControlCommand;
         let mut e = engine();
@@ -2312,7 +2394,8 @@ mod tests {
             now(),
         );
         assert!(
-            e.nearby(address, &advertisement, keys(), now()).is_empty(),
+            e.nearby(address, &advertisement, None, keys(), now())
+                .is_empty(),
             "connected"
         );
         let case = e.state().battery.case.unwrap();
@@ -2465,33 +2548,33 @@ mod tests {
         };
         let mut e = Engine::new(None, Settings::default());
         assert!(
-            e.nearby([0x40, 1, 2, 3, 4, 5], &[], keys(), now())
+            e.nearby([0x40, 1, 2, 3, 4, 5], &[], None, keys(), now())
                 .is_empty(),
             "a stranger"
         );
         assert_eq!(
-            e.nearby(address, &[], keys(), now()),
+            e.nearby(address, &[], None, keys(), now()),
             [Effect::ConnectPods(mac(PODS))]
         );
         assert!(
-            e.nearby(address, &[], keys(), now()).is_empty(),
+            e.nearby(address, &[], None, keys(), now()).is_empty(),
             "the other bud"
         );
         let later = now() + REDIAL_GAP;
         assert_eq!(
-            e.nearby(address, &[], keys(), later),
+            e.nearby(address, &[], None, keys(), later),
             [Effect::ConnectPods(mac(PODS))]
         );
         e.connected(mac(PODS), later);
         assert!(
-            e.nearby(address, &[], keys(), later + REDIAL_GAP)
+            e.nearby(address, &[], None, keys(), later + REDIAL_GAP)
                 .is_empty(),
             "connected"
         );
         e.disconnected(later);
         e.set(Setting::AutoConnect, false);
         assert!(
-            e.nearby(address, &[], keys(), later + REDIAL_GAP)
+            e.nearby(address, &[], None, keys(), later + REDIAL_GAP)
                 .is_empty()
         );
     }

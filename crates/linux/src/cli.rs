@@ -29,6 +29,9 @@ usage: calvados                      run the daemon
                                     press-speed, hold-duration  default|slower|slowest
                                     volume-swipe-length  default|longer|longest
        calvados rename NAME         rename the AirPods
+       calvados chime               a loud chime on the AirPods, to find them
+       calvados find [chime]        their signal as you move (Ctrl-C ends);
+                                    chime: a loud chime on them first
        calvados firmware status     the firmware, the latest release, an update
        calvados firmware update     update the AirPods to the latest release
        calvados firmware cancel     stop an update
@@ -75,6 +78,9 @@ trait Calvados {
     fn pods(&self) -> zbus::Result<std::collections::HashMap<String, String>>;
     fn set_pod(&self, name: &str, value: &str) -> zbus::Result<()>;
     fn rename(&self, name: &str) -> zbus::Result<()>;
+    #[zbus(property)]
+    fn signal(&self) -> zbus::Result<i16>;
+    fn chime(&self) -> zbus::Result<()>;
     #[zbus(property)]
     fn auto_switch(&self) -> zbus::Result<bool>;
     #[zbus(property)]
@@ -126,6 +132,12 @@ pub async fn run(args: &[String]) -> anyhow::Result<()> {
         }
         ["set", "pod", name, value] => proxy.set_pod(name, value).await.map_err(failure),
         ["rename", name] => proxy.rename(name).await.map_err(failure),
+        ["chime"] => proxy.chime().await.map_err(failure),
+        ["find"] => find(&proxy).await,
+        ["find", "chime"] => {
+            proxy.chime().await.map_err(failure)?;
+            find(&proxy).await
+        }
         ["firmware", "status"] => firmware_status(&proxy).await,
         ["firmware", "update"] => firmware_update(&bus, &proxy).await,
         ["firmware", "cancel"] => proxy.cancel_update().await.map_err(failure),
@@ -319,6 +331,33 @@ async fn watch(bus: &zbus::Connection, proxy: &CalvadosProxy<'_>) -> anyhow::Res
         if events.next().await.is_none() {
             return Ok(());
         }
+    }
+}
+
+/// Their signal, a line per change: a bar and warmer/colder.
+async fn find(proxy: &CalvadosProxy<'_>) -> anyhow::Result<()> {
+    let mut poll = tokio::time::interval(std::time::Duration::from_millis(500));
+    println!("Move around; stronger is closer. Ctrl-C ends.");
+    let mut last: Option<i16> = None;
+    loop {
+        let signal = proxy.signal().await.map_err(failure)?;
+        if Some(signal) != last {
+            match signal {
+                0 => println!("not heard (out of range, or Bluetooth off?)"),
+                dbm => {
+                    // -95 dBm (gone) to -35 (on top of them), 30 steps.
+                    let strength = ((i32::from(dbm) + 95) / 2).clamp(0, 30) as usize;
+                    let trend = match last.filter(|&last| last != 0) {
+                        Some(last) if dbm > last + 2 => "warmer",
+                        Some(last) if dbm < last - 2 => "colder",
+                        _ => "",
+                    };
+                    println!("{dbm:>4} dBm {:<30} {trend}", "█".repeat(strength));
+                }
+            }
+            last = Some(signal);
+        }
+        poll.tick().await;
     }
 }
 

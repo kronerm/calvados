@@ -33,6 +33,9 @@ const ACTION_PAGE_MAIN: &str = "PAGE:main";
 /// [`Request::Page`] of [`Page::Pods`].
 const ACTION_PAGE_PODS: &str = "PAGE:pods";
 
+/// [`Request::Chime`].
+const ACTION_CHIME: &str = "CHIME";
+
 /// [`Request::Rename`], with the name as the [`RENAME_KEY`] remote input.
 const ACTION_RENAME: &str = "RENAME";
 
@@ -95,6 +98,8 @@ pub(crate) enum Request {
     /// Rename the pods; the name comes as a remote input, so it arrives as
     /// [`Event::Rename`].
     Rename,
+    /// Chime on the pods to find them.
+    Chime,
 }
 
 impl Request {
@@ -110,6 +115,7 @@ impl Request {
             Self::Page(Page::Main) => ACTION_PAGE_MAIN.to_owned(),
             Self::Page(Page::Pods) => ACTION_PAGE_PODS.to_owned(),
             Self::Rename => ACTION_RENAME.to_owned(),
+            Self::Chime => ACTION_CHIME.to_owned(),
         }
     }
 
@@ -140,6 +146,7 @@ impl Request {
             ACTION_PAGE_MAIN => Some(Self::Page(Page::Main)),
             ACTION_PAGE_PODS => Some(Self::Page(Page::Pods)),
             ACTION_RENAME => Some(Self::Rename),
+            ACTION_CHIME => Some(Self::Chime),
             _ => (mode(ACTION_NOISE_PREFIX).map(Self::Noise))
                 .or_else(|| mode(ACTION_CYCLE_PREFIX).map(Self::Cycle))
                 .or_else(|| {
@@ -251,6 +258,7 @@ mod tests {
             Request::Page(Page::Main),
             Request::Page(Page::Pods),
             Request::Rename,
+            Request::Chime,
         ];
         for request in requests {
             let action = request.action();

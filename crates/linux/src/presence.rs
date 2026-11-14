@@ -121,23 +121,34 @@ async fn watch(daemon: &Daemon) -> bluer::Result<()> {
 /// forgets the device (its address rotates).
 async fn follow(device: Device, inputs: mpsc::UnboundedSender<Input>) {
     let address = device.address();
-    let report = |data: Option<std::collections::HashMap<u16, Vec<u8>>>| {
-        let data = data.and_then(|mut data| data.remove(&APPLE_COMPANY_ID));
+    let mut last = Vec::new();
+    let mut rssi = device.rssi().await.ok().flatten();
+    let mut report = |data: Option<std::collections::HashMap<u16, Vec<u8>>>, rssi: Option<i16>| {
+        if let Some(data) = data.and_then(|mut data| data.remove(&APPLE_COMPANY_ID)) {
+            last = data;
+        }
         inputs
-            .send(Input::Nearby(address, data.unwrap_or_default()))
+            .send(Input::Nearby(address, last.clone(), rssi))
             .is_ok()
     };
     // Subscribe first, so a change in between isn't missed.
     let Ok(mut events) = device.events().await else {
         return;
     };
-    if !report(device.manufacturer_data().await.ok().flatten()) {
+    if !report(device.manufacturer_data().await.ok().flatten(), rssi) {
         return;
     }
+    // The signal too: a reading per advertisement, for finding the pods.
     while let Some(DeviceEvent::PropertyChanged(property)) = events.next().await {
-        if let DeviceProperty::ManufacturerData(data) = property
-            && !report(Some(data))
-        {
+        let sent = match property {
+            DeviceProperty::ManufacturerData(data) => report(Some(data), rssi),
+            DeviceProperty::Rssi(new) => {
+                rssi = Some(new);
+                report(None, rssi)
+            }
+            _ => true,
+        };
+        if !sent {
             return;
         }
     }
