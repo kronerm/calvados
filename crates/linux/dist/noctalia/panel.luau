@@ -266,8 +266,10 @@ local function more()
   if not moreOpen then
     return ui.column({ gap = 8 }, children)
   end
-  -- This computer's settings first, as the notification's chips.
+  -- This computer's own settings, then the AirPods' (theirs, the same on
+  -- every device), each under a heading, as the notification's More page.
   local rows = {
+    heading("This computer"),
     hostSetting(
       "Automatic switching",
       "Take the AirPods when something starts playing on this computer.",
@@ -280,12 +282,23 @@ local function more()
       state.auto_connect,
       "auto-connect"
     ),
+    ui.row({ paddingV = 2 }),
+    heading("AirPods"),
   }
+  local reported = false
   for _, entry in ipairs(format.POD_SETTINGS) do
     local value = not entry.main and format.podValue(state, entry.name)
     if value then
+      reported = true
       table.insert(rows, moreRow(entry, value))
     end
+  end
+  if not reported then
+    table.insert(rows, ui.label({
+      text = "Shown once the AirPods are connected and report them.",
+      fontSize = 12,
+      color = "on_surface_variant",
+    }))
   end
   -- Renaming, only while connected (the pods take it).
   local renameRow = format.connected(state) and ui.row({ gap = 8, align = "center" }, {

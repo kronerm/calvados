@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- A group's heading on the More page: "This phone", "AirPods". -->
+<TextView xmlns:android="http://schemas.android.com/apk/res/android"
+    android:id="@+id/heading"
+    android:layout_width="match_parent"
+    android:layout_height="wrap_content"
+    android:layout_marginTop="8dp"
+    android:singleLine="true"
+    android:textAppearance="@android:style/TextAppearance.Material.Notification.Info"
+    android:textColor="@color/notification_text_secondary" />

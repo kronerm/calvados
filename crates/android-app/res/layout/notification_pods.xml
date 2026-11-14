@@ -1,7 +1,8 @@
 <?xml version="1.0" encoding="utf-8"?>
-<!-- The expanded notification's second page: the pods' own settings, as
-     reported, two chips to a row (notification_pod_row, added by
-     notification.rs). Kept short: Android cuts custom views off. -->
+<!-- The expanded notification's second page: this phone's settings, then
+     the AirPods' own, each under a heading (notification_heading) as chips
+     two to a row (notification_pod_row), added by notification.rs. Kept
+     short: Android cuts custom views off. -->
 <LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
     android:layout_width="match_parent"
     android:layout_height="wrap_content"
@@ -16,19 +17,19 @@
         android:textAppearance="@android:style/TextAppearance.Material.Notification.Title"
         android:textColor="@color/notification_text" />
 
-    <TextView
-        android:id="@+id/pods_empty"
-        android:layout_width="match_parent"
-        android:layout_height="wrap_content"
-        android:layout_marginTop="6dp"
-        android:text="The AirPods haven't reported their settings yet."
-        android:textAppearance="@android:style/TextAppearance.Material.Notification.Info"
-        android:textColor="@color/notification_text_secondary"
-        android:visibility="gone" />
-
     <LinearLayout
         android:id="@+id/pods"
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
         android:orientation="vertical" />
+
+    <TextView
+        android:id="@+id/pods_empty"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="6dp"
+        android:text="Shown once the AirPods are connected and report them."
+        android:textAppearance="@android:style/TextAppearance.Material.Notification.Info"
+        android:textColor="@color/notification_text_secondary"
+        android:visibility="gone" />
 </LinearLayout>

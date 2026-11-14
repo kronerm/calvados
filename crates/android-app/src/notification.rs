@@ -73,9 +73,10 @@ pub(crate) struct Content {
     main: [(PodSetting, Option<bool>); 2],
     /// The expanded view's page.
     page: Page,
-    /// The More page's chips: this phone's two settings, then the pods'
-    /// other reported ones.
-    chips: Vec<Chip>,
+    /// The More page's chips: this phone's own two settings, then the
+    /// pods' other reported ones (theirs, the same on every host).
+    host_chips: Vec<Chip>,
+    pod_chips: Vec<Chip>,
 }
 
 /// A chip on the More page: title, value, filled while a switch is on, and
@@ -227,7 +228,7 @@ impl Content {
                 (setting, raw.map(|raw| raw == 1))
             }),
             page,
-            chips: [
+            host_chips: [
                 (
                     "Automatic switching",
                     settings.auto_switch,
@@ -249,24 +250,23 @@ impl Content {
                 request: Request::Toggle(setting),
                 request_code,
             })
-            .chain(
-                (40..)
-                    .zip(PodSetting::ALL)
-                    .filter_map(|(request_code, setting)| {
-                        let raw = state
-                            .pods
-                            .get(setting)
-                            .filter(|_| connected && !MAIN.contains(&setting))?;
-                        Some(Chip {
-                            title: setting.title(),
-                            value: setting.label(raw)?,
-                            on: matches!(setting.kind(), Kind::Toggle) && raw == 1,
-                            request: Request::Pod(setting),
-                            request_code,
-                        })
-                    }),
-            )
             .collect(),
+            pod_chips: (40..)
+                .zip(PodSetting::ALL)
+                .filter_map(|(request_code, setting)| {
+                    let raw = state
+                        .pods
+                        .get(setting)
+                        .filter(|_| connected && !MAIN.contains(&setting))?;
+                    Some(Chip {
+                        title: setting.title(),
+                        value: setting.label(raw)?,
+                        on: matches!(setting.kind(), Kind::Toggle) && raw == 1,
+                        request: Request::Pod(setting),
+                        request_code,
+                    })
+                })
+                .collect(),
         }
     }
 
@@ -282,7 +282,8 @@ impl Content {
             update_action: None,
             main: MAIN.map(|setting| (setting, None)),
             page: Page::Main,
-            chips: Vec::new(),
+            host_chips: Vec::new(),
+            pod_chips: Vec::new(),
         }
     }
 
@@ -385,8 +386,8 @@ impl Content {
         }
     }
 
-    /// The pods' settings as chips, two to a row, each stepping its setting
-    /// on when tapped.
+    /// More: this phone's settings, then the pods', each under a heading,
+    /// as chips two to a row, a tap stepping one on.
     fn pods_page<'local>(
         &self,
         env: &mut jni::Env<'local>,
@@ -397,34 +398,20 @@ impl Content {
         let views = RemoteViews::new(env, &res.package, layout)?;
         let ui = Ui { res, views: &views };
         ui.text(env, "title", &self.title)?;
-        ui.show(env, "pods_empty", self.chips.is_empty())?;
+        ui.show(env, "pods_empty", self.pod_chips.is_empty())?;
         let container = ui.id(env, "pods")?;
-        let row_layout = res.get(env, "notification_pod_row", "layout")?;
-        for pair in self.chips.chunks(2) {
-            let row = RemoteViews::new(env, &res.package, row_layout)?;
-            let cells = Ui { res, views: &row };
-            for (view, chip) in ["pod_a", "pod_b"]
-                .into_iter()
-                .zip(pair.iter().map(Some).chain(std::iter::repeat(None)))
-            {
-                let Some(chip) = chip else {
-                    // Keeps the lone chip half wide.
-                    let id = cells.id(env, view)?;
-                    row.set_view_visibility(env, id, Visibility::Invisible)?;
-                    continue;
-                };
-                cells.text(env, &format!("{view}_title"), chip.title)?;
-                cells.text(env, &format!("{view}_value"), &chip.value)?;
-                let background = res.get(
-                    env,
-                    if chip.on { "tile_selected" } else { "tile" },
-                    "drawable",
-                )?;
-                let id = cells.id(env, view)?;
-                row.set_int(env, id, "setBackgroundResource", background)?;
-                cells.on_click(env, context, view, chip.request_code, chip.request)?;
-            }
+        let heading_layout = res.get(env, "notification_heading", "layout")?;
+        for (heading, chips) in [
+            ("This phone", &self.host_chips),
+            ("AirPods", &self.pod_chips),
+        ] {
+            let row = RemoteViews::new(env, &res.package, heading_layout)?;
+            Ui { res, views: &row }.text(env, "heading", heading)?;
             views.add_view(env, container, &row)?;
+            for pair in chips.chunks(2) {
+                let row = chip_row(env, context, res, pair)?;
+                views.add_view(env, container, &row)?;
+            }
         }
         Ok(views)
     }
@@ -534,6 +521,35 @@ impl Content {
         }
         Ok(views)
     }
+}
+
+/// A row of the More page: one or two chips, a lone one half wide.
+fn chip_row<'local>(
+    env: &mut jni::Env<'local>,
+    context: &Context<impl jni::refs::Reference + AsRef<JObject<'local>>>,
+    res: &Res<'local>,
+    pair: &[Chip],
+) -> anyhow::Result<RemoteViews<JObject<'local>>> {
+    let layout = res.get(env, "notification_pod_row", "layout")?;
+    let row = RemoteViews::new(env, &res.package, layout)?;
+    let cells = Ui { res, views: &row };
+    for (view, chip) in ["pod_a", "pod_b"]
+        .into_iter()
+        .zip(pair.iter().map(Some).chain(std::iter::repeat(None)))
+    {
+        let id = cells.id(env, view)?;
+        let Some(chip) = chip else {
+            row.set_view_visibility(env, id, Visibility::Invisible)?;
+            continue;
+        };
+        cells.text(env, &format!("{view}_title"), chip.title)?;
+        cells.text(env, &format!("{view}_value"), &chip.value)?;
+        let background = if chip.on { "tile_selected" } else { "tile" };
+        let background = res.get(env, background, "drawable")?;
+        row.set_int(env, id, "setBackgroundResource", background)?;
+        cells.on_click(env, context, view, chip.request_code, chip.request)?;
+    }
+    Ok(row)
 }
 
 /// The app's resources by name: there's no generated `R` class.

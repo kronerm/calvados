@@ -584,8 +584,9 @@ texts are written twice. A change to one side needs the other:
   Awareness and Personalized Volume, shown once reported (the panel's
   `main` entries, the notification's `MAIN`); everything else under
   "More", which is there while not connected too: this host's Automatic
-  switching and connection first ("this computer" / "this phone"), then
-  the pods' other settings (`PodSetting::title`; values as
+  switching and connection first under the heading "This computer" /
+  "This phone" (stored per host), then under "AirPods" the pods' other
+  settings (held by the pods, the same on every host) (`PodSetting::title`; values as
   `PodSetting::label` and the panel's `format.podValueLabel`: `On`,
   `Automatic`, `50%`), then renaming while connected. The panel's More is
   a collapsible section (closed each time the panel opens; a switch per
