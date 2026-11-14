@@ -684,3 +684,21 @@ Once the case runs 90.390, the 9A348 trigger above applies.
   tid 3 without a version check. USB: routing UART = CLI, USB = Disabled (0x0803c570); CDC
   only after `crabapple` (+0xf, 0x08043fb0). The Nov 13 USB descriptor's bcdDevice 0x4708
   is 71.8 (filled from the version word, 0x08032df0): the case does run 7B21's STFC.
+
+## No host-to-case relay through the bud (Nov 14, rkof 9A348 and 7B21 STFC, static)
+
+Known unless marked. The bud's B2P sends to the case are replies (0x11, 0x13, 0x23), a DS
+close (0xbe4d2, 0x10 {id,0}), DS data on an already open DS (0x12, the UARP downstream
+relay, 0xbe9ae and 0x84968), fragmented internal messages (0x184/0xe184 from fixed
+callers, 0x83a38), and fixed internal sends (0x46c, 0x1d0, 0x1d4, 0x0, 0x16, 0x1c); the
+receive handler forwards node 3/5 messages between B2P links (0x158e9a). No AACP opcode
+(callback table filled at 0xcb170) or ATT write ends in a B2P send with host-chosen bytes,
+and only the case's 0x10 brings transport 3 up (846d4 callers 839c4, be4da, d647a,
+15c81c with state 0; 15be08 from the case). LibrePods' `12 3A …` case-sound command is an
+ATT write to the Find My service (handle 0x3A, `4F860005`, handler 0x68fa4), a fixed
+setting. So no non-Apple host can make a 7B21 case tunnel through 9A348 buds: such a case
+is updated only by its Find My owner's Apple device (BLE UARP, not denied while [cfg+8]
+== 0). Once it runs 90.390, its lid-close tunnel (above) is switched on.
+Case B2P messages never to send: the fwup factory reset / Clr coupling (0x900e → 0x154),
+0x184 op 0x82 property sets (class 3 writes NV), 0x352 memory write, 0x32a state reset,
+0x4b6 (NV key 0xd), 0x4b4 tones, any 0x10/0x12 DS traffic outside a tunnel.

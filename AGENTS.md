@@ -287,8 +287,11 @@ From captures; meanings beyond the structure are guesses.
 - `0x52`: `03 00 02 01 [00|01]`, from 0xd16ec through an interface table.
   `01` next to `AudioSource` changes; `00` next to ear changes, before them
   11 times and after 26: no warning of a bud leaving an ear.
-- Case charging sounds are a *command* with a non-AACP header,
-  `12 3A 00 01 00 08 [00 on / 01 off]` (LibrePods), not a packet.
+- Case charging sounds (LibrePods: `12 3A 00 01 00 08 [00 on / 01 off]`) are
+  an ATT Write Request on PSM 0x1F, not AACP: handle 0x003A, value
+  `01 00 08 [x]`, the Find My service's characteristic `4F860005` (handles
+  inferred from rkof's GATT definitions; handler 0x68fa4). A fixed setting,
+  not a relay to the case.
 
 `0x2B` (connection history), used to infer the local MAC and as a source of
 handoff peers (hosts whose latest event is a connect): `01 [len 2]
