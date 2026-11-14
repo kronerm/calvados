@@ -360,7 +360,7 @@
     </LinearLayout>
 
     <LinearLayout
-        android:id="@+id/setting_switch"
+        android:id="@+id/main_conversation"
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
         android:layout_marginTop="10dp"
@@ -376,7 +376,7 @@
             <TextView
                 android:layout_width="wrap_content"
                 android:layout_height="wrap_content"
-                android:text="Automatic switching"
+                android:text="Conversation Awareness"
                 android:textAppearance="@android:style/TextAppearance.Material.Notification"
                 android:textColor="@color/notification_text" />
 
@@ -384,13 +384,13 @@
                 android:layout_width="wrap_content"
                 android:layout_height="wrap_content"
                 android:maxLines="2"
-                android:text="Take the AirPods when something starts playing on this phone."
+                android:text="Lowers the volume and lets voices in while you speak."
                 android:textAppearance="@android:style/TextAppearance.Material.Notification.Info"
                 android:textColor="@color/notification_text_secondary" />
         </LinearLayout>
 
         <ImageView
-            android:id="@+id/setting_switch_toggle"
+            android:id="@+id/main_conversation_toggle"
             android:layout_width="32dp"
             android:layout_height="32dp"
             android:layout_marginStart="12dp"
@@ -398,7 +398,7 @@
     </LinearLayout>
 
     <LinearLayout
-        android:id="@+id/setting_connect"
+        android:id="@+id/main_volume"
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
         android:layout_marginTop="10dp"
@@ -414,7 +414,7 @@
             <TextView
                 android:layout_width="wrap_content"
                 android:layout_height="wrap_content"
-                android:text="Automatic connection"
+                android:text="Personalized Volume"
                 android:textAppearance="@android:style/TextAppearance.Material.Notification"
                 android:textColor="@color/notification_text" />
 
@@ -422,13 +422,13 @@
                 android:layout_width="wrap_content"
                 android:layout_height="wrap_content"
                 android:maxLines="2"
-                android:text="Connect when the AirPods come out of the case nearby, even if another device had them last."
+                android:text="Adapts the volume to your surroundings."
                 android:textAppearance="@android:style/TextAppearance.Material.Notification.Info"
                 android:textColor="@color/notification_text_secondary" />
         </LinearLayout>
 
         <ImageView
-            android:id="@+id/setting_connect_toggle"
+            android:id="@+id/main_volume_toggle"
             android:layout_width="32dp"
             android:layout_height="32dp"
             android:layout_marginStart="12dp"

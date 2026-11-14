@@ -138,14 +138,11 @@ mod tests {
             UpdateStatus::Failed(Failure::Refused(Refusal::NotInCase)),
             UpdateStatus::Failed(Failure::Cancelled),
         ];
-        let news = statuses
-            .into_iter()
-            .map(News::Update)
-            .chain([
-                News::Firmware(version),
-                News::Cycle(Cycle::OFFERED),
-                News::Name("ucho soother".into()),
-            ]);
+        let news = statuses.into_iter().map(News::Update).chain([
+            News::Firmware(version),
+            News::Cycle(Cycle::OFFERED),
+            News::Name("ucho soother".into()),
+        ]);
         for news in news {
             assert_eq!(News::decode(&news.encode()), Some(news));
         }

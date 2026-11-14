@@ -1,7 +1,7 @@
 --!nonstrict
 -- The Android notification's controls, laid out for a panel: the batteries,
--- the noise mode as a choice, the two switching settings and the AirPods'
--- main ones with what they do, "More" (the AirPods' other settings and the
+-- the noise mode as a choice, the AirPods' two main settings with what they
+-- do, "More" (this computer's two settings, the AirPods' others and the
 -- rename), and the firmware (or its update).
 
 local format = require("./lib/format.luau")
@@ -233,8 +233,8 @@ local function moreRow(entry, value)
   end)
 end
 
--- "More": the AirPods' other settings, title and value, a click stepping to
--- the next value, and the rename field. Collapsed on every open.
+-- "More": this computer's settings, the AirPods' other ones, and the rename
+-- field. Collapsed on every open.
 local moreOpen = false
 
 -- The width a scroll's scrollbar takes from its content.
@@ -266,14 +266,29 @@ local function more()
   if not moreOpen then
     return ui.column({ gap = 8 }, children)
   end
-  local rows = {}
+  -- This computer's settings first, as the notification's chips.
+  local rows = {
+    hostSetting(
+      "Automatic switching",
+      "Take the AirPods when something starts playing on this computer.",
+      state.auto_switch,
+      "auto-switch"
+    ),
+    hostSetting(
+      "Automatic connection",
+      "Connect when the AirPods come out of the case nearby, even if another device had them last.",
+      state.auto_connect,
+      "auto-connect"
+    ),
+  }
   for _, entry in ipairs(format.POD_SETTINGS) do
     local value = not entry.main and format.podValue(state, entry.name)
     if value then
       table.insert(rows, moreRow(entry, value))
     end
   end
-  table.insert(rows, ui.row({ gap = 8, align = "center" }, {
+  -- Renaming, only while connected (the pods take it).
+  local renameRow = format.connected(state) and ui.row({ gap = 8, align = "center" }, {
     ui.input({
       key = "rename",
       value = state.name or "",
@@ -296,7 +311,10 @@ local function more()
       borderWidth = 1,
       onClick = rename,
     }, { ui.label({ text = "Rename", fontSize = 12, maxLines = 1 }) }),
-  }))
+  })
+  if renameRow then
+    table.insert(rows, renameRow)
+  end
   table.insert(children, ui.column({ gap = 10 }, rows))
   return ui.column({ gap = 8 }, children)
 end
@@ -329,33 +347,18 @@ local function firmware()
 end
 
 render = function()
-  local settings = {
-    hostSetting(
-      "Automatic switching",
-      "Take the AirPods when something starts playing on this computer.",
-      state.auto_switch,
-      "auto-switch"
-    ),
-    hostSetting(
-      "Automatic connection",
-      "Connect when the AirPods come out of the case nearby, even if another device had them last.",
-      state.auto_connect,
-      "auto-connect"
-    ),
-  }
+  local settings = {}
   for _, entry in ipairs(format.POD_SETTINGS) do
     local row = entry.main and podSetting(entry)
     if row then
       table.insert(settings, row)
     end
   end
-  local rows = {
-    header(),
-    batteries(),
-    noiseControl(),
-    ui.column({ gap = 12 }, settings),
-  }
-  if format.connected(state) then
+  local rows = { header(), batteries(), noiseControl() }
+  if #settings > 0 then
+    table.insert(rows, ui.column({ gap = 12 }, settings))
+  end
+  if state.running == true then
     table.insert(rows, more())
   end
   local line = firmware()

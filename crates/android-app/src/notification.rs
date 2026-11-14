@@ -68,22 +68,50 @@ pub(crate) struct Content {
     header: String,
     /// The button under the expanded view, while there's one to offer.
     update_action: Option<UpdateAction>,
-    auto_switch: bool,
-    auto_connect: bool,
-    /// The expanded view's page; always the main one while not connected.
+    /// The main page's rows: Conversation Awareness and Personalized
+    /// Volume, on or off once reported.
+    main: [(PodSetting, Option<bool>); 2],
+    /// The expanded view's page.
     page: Page,
-    /// The pods' settings as reported, title order, with their values' text.
-    /// Reported settings: the value's label, and whether it's a switch
-    /// that's on (its chip filled).
-    pods: Vec<(PodSetting, String, bool)>,
+    /// The More page's chips: this phone's two settings, then the pods'
+    /// other reported ones.
+    chips: Vec<Chip>,
 }
+
+/// A chip on the More page: title, value, filled while a switch is on, and
+/// what a tap asks (with its request code).
+#[derive(Debug, Clone)]
+struct Chip {
+    title: &'static str,
+    value: String,
+    on: bool,
+    request: Request,
+    request_code: i32,
+}
+
+impl PartialEq for Chip {
+    fn eq(&self, other: &Self) -> bool {
+        (self.title, &self.value, self.on, self.request_code)
+            == (other.title, &other.value, other.on, other.request_code)
+            && self.request.action() == other.request.action()
+    }
+}
+
+impl Eq for Chip {}
+
+/// The pods' settings with rows of their own on the main page, as in the
+/// Linux panel.
+const MAIN: [PodSetting; 2] = [
+    PodSetting::ConversationAwareness,
+    PodSetting::PersonalizedVolume,
+];
 
 /// The expanded view's pages, switched by an action under it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum Page {
-    /// Batteries, noise control and this phone's settings.
+    /// Batteries, noise control and the pods' two main settings.
     Main,
-    /// The pods' own settings, and renaming them.
+    /// This phone's settings, the pods' others, and renaming them.
     Pods,
 }
 
@@ -194,18 +222,51 @@ impl Content {
                 newer.is_some(),
                 connected,
             ),
-            auto_switch: settings.auto_switch,
-            auto_connect: settings.auto_connect,
-            page: if connected { page } else { Page::Main },
-            pods: PodSetting::ALL
-                .into_iter()
-                .filter(|_| connected)
-                .filter_map(|setting| {
-                    let raw = state.pods.get(setting)?;
-                    let on = matches!(setting.kind(), Kind::Toggle) && raw == 1;
-                    Some((setting, setting.label(raw)?, on))
-                })
-                .collect(),
+            main: MAIN.map(|setting| {
+                let raw = state.pods.get(setting).filter(|_| connected);
+                (setting, raw.map(|raw| raw == 1))
+            }),
+            page,
+            chips: [
+                (
+                    "Automatic switching",
+                    settings.auto_switch,
+                    Setting::AutoSwitch,
+                    10,
+                ),
+                (
+                    "Automatic connection",
+                    settings.auto_connect,
+                    Setting::AutoConnect,
+                    11,
+                ),
+            ]
+            .into_iter()
+            .map(|(title, on, setting, request_code)| Chip {
+                title,
+                value: (if on { "On" } else { "Off" }).to_owned(),
+                on,
+                request: Request::Toggle(setting),
+                request_code,
+            })
+            .chain(
+                (40..)
+                    .zip(PodSetting::ALL)
+                    .filter_map(|(request_code, setting)| {
+                        let raw = state
+                            .pods
+                            .get(setting)
+                            .filter(|_| connected && !MAIN.contains(&setting))?;
+                        Some(Chip {
+                            title: setting.title(),
+                            value: setting.label(raw)?,
+                            on: matches!(setting.kind(), Kind::Toggle) && raw == 1,
+                            request: Request::Pod(setting),
+                            request_code,
+                        })
+                    }),
+            )
+            .collect(),
         }
     }
 
@@ -219,10 +280,9 @@ impl Content {
             cycle: None,
             header: String::new(),
             update_action: None,
-            auto_switch: true,
-            auto_connect: true,
+            main: MAIN.map(|setting| (setting, None)),
             page: Page::Main,
-            pods: Vec::new(),
+            chips: Vec::new(),
         }
     }
 
@@ -298,17 +358,15 @@ impl Content {
             .build(env)
     }
 
-    /// Under the expanded view, while connected: the way to the other page,
-    /// and on the pods' page renaming them (a remote input).
+    /// Under the expanded view: the way to the other page (More holds this
+    /// phone's settings, so it's there while not connected too), and on it,
+    /// while connected, renaming the pods (a remote input).
     fn page_actions<'local>(
         &self,
         env: &mut jni::Env<'local>,
         context: &Context<impl jni::refs::Reference + AsRef<JObject<'local>>>,
         builder: Builder<JObject<'local>>,
     ) -> anyhow::Result<Builder<JObject<'local>>> {
-        if self.buds.is_none() {
-            return Ok(builder);
-        }
         let (label, other) = match self.page {
             Page::Main => ("More", Page::Pods),
             Page::Pods => ("Back", Page::Main),
@@ -317,13 +375,13 @@ impl Content {
         let action = Action::new(env, label, &pending)?;
         let builder = builder.add_action(env, &action)?;
         match self.page {
-            Page::Main => Ok(builder),
-            Page::Pods => {
+            Page::Pods if self.buds.is_some() => {
                 let pending = Request::Rename.pending_intent(env, context, 51)?;
                 let input = RemoteInput::new(env, RENAME_KEY, "Rename AirPods")?;
                 let action = Action::with_remote_input(env, "Rename", &pending, &input)?;
                 builder.add_action(env, &action)
             }
+            _ => Ok(builder),
         }
     }
 
@@ -339,33 +397,32 @@ impl Content {
         let views = RemoteViews::new(env, &res.package, layout)?;
         let ui = Ui { res, views: &views };
         ui.text(env, "title", &self.title)?;
-        ui.show(env, "pods_empty", self.pods.is_empty())?;
+        ui.show(env, "pods_empty", self.chips.is_empty())?;
         let container = ui.id(env, "pods")?;
         let row_layout = res.get(env, "notification_pod_row", "layout")?;
-        for pair in self.pods.chunks(2) {
+        for pair in self.chips.chunks(2) {
             let row = RemoteViews::new(env, &res.package, row_layout)?;
             let cells = Ui { res, views: &row };
-            for (chip, entry) in ["pod_a", "pod_b"]
+            for (view, chip) in ["pod_a", "pod_b"]
                 .into_iter()
                 .zip(pair.iter().map(Some).chain(std::iter::repeat(None)))
             {
-                let Some((setting, value, on)) = entry else {
+                let Some(chip) = chip else {
                     // Keeps the lone chip half wide.
-                    let id = cells.id(env, chip)?;
+                    let id = cells.id(env, view)?;
                     row.set_view_visibility(env, id, Visibility::Invisible)?;
                     continue;
                 };
-                cells.text(env, &format!("{chip}_title"), setting.title())?;
-                cells.text(env, &format!("{chip}_value"), value)?;
-                let background =
-                    res.get(env, if *on { "tile_selected" } else { "tile" }, "drawable")?;
-                let id = cells.id(env, chip)?;
+                cells.text(env, &format!("{view}_title"), chip.title)?;
+                cells.text(env, &format!("{view}_value"), &chip.value)?;
+                let background = res.get(
+                    env,
+                    if chip.on { "tile_selected" } else { "tile" },
+                    "drawable",
+                )?;
+                let id = cells.id(env, view)?;
                 row.set_int(env, id, "setBackgroundResource", background)?;
-                let request_code = (40..)
-                    .zip(PodSetting::ALL)
-                    .find(|(_, each)| each == setting)
-                    .map_or(40, |(code, _)| code);
-                cells.on_click(env, context, chip, request_code, Request::Pod(*setting))?;
+                cells.on_click(env, context, view, chip.request_code, chip.request)?;
             }
             views.add_view(env, container, &row)?;
         }
@@ -455,16 +512,25 @@ impl Content {
             views.set_int(env, id, "setImageAlpha", alpha)?;
             ui.on_click(env, context, &dot, 30 + request_code, Request::Cycle(mode))?;
         }
-        for (request_code, (row, enabled, setting)) in (10..).zip([
-            ("setting_switch", self.auto_switch, Setting::AutoSwitch),
-            ("setting_connect", self.auto_connect, Setting::AutoConnect),
-        ]) {
-            let toggle = match enabled {
-                true => "ic_toggle_right",
-                false => "ic_toggle_left",
+        // Shown once the pods report them, as in the panel.
+        for (row, (setting, on)) in ["main_conversation", "main_volume"]
+            .into_iter()
+            .zip(self.main)
+        {
+            ui.show(env, row, on.is_some())?;
+            let Some(on) = on else { continue };
+            let toggle = if on {
+                "ic_toggle_right"
+            } else {
+                "ic_toggle_left"
             };
             ui.image(env, &format!("{row}_toggle"), toggle)?;
-            ui.on_click(env, context, row, request_code, Request::Toggle(setting))?;
+            let request_code = 40
+                + PodSetting::ALL
+                    .iter()
+                    .position(|&each| each == setting)
+                    .map_or(0, |at| at as i32);
+            ui.on_click(env, context, row, request_code, Request::Pod(setting))?;
         }
         Ok(views)
     }

@@ -389,7 +389,7 @@ power-on (`LinkChange`). Its length caps at 255, i.e. 15 events.
   Linux panel's batteries, noise tiles and settings rows), filled by view
   id. There's no generated `R` class, so ids come from
   `Resources.getIdentifier`. Tiles and rows fire service intents
-  (`NOISE:<mode>`, `AUTO_SWITCH`, `AUTO_CONNECT`); a tile's cycle dot is
+  (`NOISE:<mode>`, `POD:<setting>`; More's chips also `AUTO_SWITCH`, `AUTO_CONNECT`); a tile's cycle dot is
   its own view over the tile's corner (a `FrameLayout`, adding no height)
   with its own intent, `CYCLE:<mode>`. The header's subtext is one line
   (`header`): this phone's update, a refusal included (`display::update`),
@@ -556,7 +556,6 @@ texts are written twice. A change to one side needs the other:
   (`crates/android-app/res/layout/notification_*.xml`, `src/notification.rs`);
 - the noise modes' labels and Tabler glyphs (`format.MODES`, the tiles in
   `notification_expanded.xml` and `notification.rs` `MODES`);
-- the settings' titles and descriptions ("this computer" / "this phone");
 - the noise heading ("· Off", "· unknown yet");
 - the cycle dots (`format.cycleDot`/`cycleToggles`, `notification.rs`
   `cycle_dot`): Tabler `point-filled` when in, `point` when out, the
@@ -579,19 +578,20 @@ texts are written twice. A change to one side needs the other:
   `notification.rs` `battery_glyph`);
 - the icons: Noctalia names Tabler glyphs, Android has them converted in
   `res/drawable` (SVG paths, stroke 2, round caps and joins).
-- the pods' settings (`PodSetting::title`; values as `PodSetting::label`
-  and the panel's `format.podValueLabel`: `On`, `Automatic`, `50%`): the
-  panel's "More" section (collapsible, closed each time the panel opens;
-  a switch per toggle, segments per choice, the adaptive level as 0, 25,
-  50, 75, 100 %, and a rename field)
-  and the notification's "More" page (`Page::Pods`: chips two to a row,
-  `notification_pods.xml`/`notification_pod_row.xml`, a switch that's on
-  filled like a selected noise tile; buttons More, Back,
-  Rename with a `RemoteInput`). One deliberate difference: the panel shows
-  Conversation Awareness and Personalized Volume as main rows with
-  descriptions under Switch and Connect and leaves them out of More; the
-  notification has no height for them (its expanded content is at
-  Android's ~256 dp cap), so they're its first two chips.
+- the settings: main rows (switch, title, what it does) for Conversation
+  Awareness and Personalized Volume, shown once reported (the panel's
+  `main` entries, the notification's `MAIN`); everything else under
+  "More", which is there while not connected too: this host's Automatic
+  switching and connection first ("this computer" / "this phone"), then
+  the pods' other settings (`PodSetting::title`; values as
+  `PodSetting::label` and the panel's `format.podValueLabel`: `On`,
+  `Automatic`, `50%`), then renaming while connected. The panel's More is
+  a collapsible section (closed each time the panel opens; a switch per
+  toggle, segments per choice, the adaptive level as 0, 25, 50, 75,
+  100 %, a rename field); the notification's is a page (`Page::Pods`:
+  chips two to a row, `notification_pods.xml`/`notification_pod_row.xml`,
+  a switch that's on filled like a selected noise tile, a tap the next
+  value; buttons More, Back, Rename with a `RemoteInput`).
 
 ## Ownership model
 
