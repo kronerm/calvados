@@ -653,3 +653,24 @@ Its strings differ exactly at the trigger: "Tunnel Available" (9A348: "Tunnel av
 an extra "ft tunnel". The pods' 0x1D carries no case version. On 9A348's STFC the last
 unverified gate, FUN_0801d8e0 (coupled), passes for this pair (cross-match of the buds'
 own/partner addresses at record +0/+6, coup_st 0, coupling idle, present and valid).
+
+## 7B21's case MCU: the lid-close tunnel is switched off (Nov 14, static)
+
+STFC 71.8.0.0 (7B21, base 0x08001800). Known unless marked.
+- "Tunnel Available" is logged by the fwup handler FUN_08011d00 on event 0x170006 [log
+  0x08011eec], checking lid closed ([0x200322a4+0xe]), coupled (FUN_08023908) and a role
+  claimant (FUN_08023f70); no lid counter, no radio bit, no retry. It then posts 0x1c0052
+  → 0x08011ad4 → open tid ds 3 (B2P 0x10 {3,1}, the same message the 9A348 bud takes;
+  ds table 0x08069b44).
+- 0x170006 comes only from timer 0x20033120, started on lid close (0x0801223a) or 0x1c0011
+  (0x08011de6), both only if [[0x20032424+0x1c]+8] != 0. That pointer is written once
+  (0x08011b24) with the flash constant 0x080635fc, whose +8 is **0**: a close starts only
+  the 15 s timer for the case's own apply. The same byte gates "Deny offer from BLE"
+  (0x080142c0), so with it 0 the BLE route is open (Inferred: 7B21's update route is the
+  case's own BLE). "bud fwup cond … tunnel:%d" passes a literal 0 [0x08033492].
+- The case still accepts a bud-initiated DS connect (B2P 0x10 cmd 0x0801bf78 → ds-3
+  callback 0x08011989); 9A348 buds never send one. "ft tunnel" is a factory command line
+  test session (0x0804698c). No case-vs-bud version gate. The case answers B2P 0x128 with
+  its versions [0x0801c000]; nothing relays that to a host.
+So a 7B21 case with 9A348 buds never becomes downstream 1: every probe was bound to fail.
+Once the case runs 90.390, the 9A348 trigger above applies.
