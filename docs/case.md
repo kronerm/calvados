@@ -120,7 +120,7 @@ The switch byte was read from each build's data, not its strings.
 BLE flag nor the protocol > 5 tunnel-offer gate; there is no partly-on
 build. 7A294-7B19 predate 7B21 (not checked; assumed off). `bcdDevice`
 is the version word's major.minor (0x00MMmm00) before 9A348 and `major 00`
-from 9A348 on (0x08035308); 0x4708 and 0x5b00 are confirmed on hardware (our case, Nov 14: 7B21, then 9B47 after an iPhone with the AirPods in Find My updated it within ~65 minutes of pairing; the change showed at 13:12). So a case
+from 9A348 on (0x08035308); 0x4708 and 0x5b00 are confirmed on hardware (our case, Nov 14: 7B21, then 9B47 after an iPhone with the AirPods in Find My updated it; the change showed at 13:12, 6 minutes after the case went onto the laptop's USB). So a case
 reporting `bcdDevice` ≥ 0x5a00 (`lsusb -v` with the case on USB) tunnels;
 0x47xx-0x51xx doesn't. The 9A348 case package's STFC is byte-identical to
 `firmware/A3048/parts/STFC`.
