@@ -463,6 +463,14 @@ To hosts:
 
 ## The probes (Nov 13-14) and what they ruled out
 
+**It works with a 9B47 case (Nov 14, 13:39-13:40 local).** Buds and case on 9B47,
+laptop only, probe offering 9B47 as 9.1.48 (`Package::bumped`): acked, held at 10 %
+from 13:40:08; lid closed 13:40:12; at 13:40:14 the primary announced downstream 1
+(0x17 id 1, ~2 s after the close as the 9A348 trigger predicts), and through the relay
+(0x1B) the case sent Sync, its version discovery (6) and the running-version answer
+**9.1.47**; the probe withdrew. The secondary was reset at +4 s as usual and came back as
+downstream 2 at 13:40:43. So a host can reach a case on 9A348+ through the buds.
+
 `calvados firmware try-probe-case` (AGENTS.md) holds the pods across a lid
 close with an offer (at most 10 % of `FTAB` served, never staged, withdrawn
 after 3 minutes) and asks the case's version through downstream 1 if it
