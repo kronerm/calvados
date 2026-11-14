@@ -210,9 +210,14 @@ Cargo's downloads, `target` and cargo-apk2 are cached per job, keyed on
   across a lid close, so the case tunnels through the primary as downstream
   1 and is asked its version; at most 10 % of `FTAB` served, never staged,
   withdrawn once the case answers or after 3 minutes (`Failure::NoCase`).
-  It can only work with a case on 90.x: a case on 7B21 never tunnels
-  (switched off in its flash; docs/case.md, end), and no host but its Find
-  My owner's Apple device can update such a case.
+  It can only work with a case on 9A348 or later: older cases never
+  tunnel (switched off in their flash; docs/case.md), and only their Find
+  My owner's Apple device can update them. When nothing newer than the
+  running firmware exists, the probe offers the latest as the next release
+  (`Package::bumped`: the header's release + 1, and `FTAB`'s own last
+  version word + 1, since the buds compare both against what runs); it
+  can't stage (completion requires the image's `bver` to match the offer)
+  and leaves only the inactive slot invalid, as any partial transfer.
 - `news.rs` — `News`, calvados to calvados: `calvados` + format 1 + `1`
   exact firmware (3 × u32 BE), `2` + update state (two arguments, a
   version), or `3` + the cycle's mask; carried by smart routing

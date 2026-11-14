@@ -1309,7 +1309,7 @@ impl Engine {
         release: Option<Release>,
         goal: Goal,
     ) -> Result<Vec<Effect>, Refusal> {
-        let release = self.may_update(release).inspect_err(|&refusal| {
+        let release = self.may_update(release, goal).inspect_err(|&refusal| {
             // Shown as the update's status on both UIs, like a failure, when
             // there's something to do about it; not over a running update,
             // nor told to peers (it's ours).
@@ -1326,7 +1326,7 @@ impl Engine {
         Ok(self.tell_update(UpdateStatus::Downloading))
     }
 
-    fn may_update(&self, release: Option<Release>) -> Result<Release, Refusal> {
+    fn may_update(&self, release: Option<Release>, goal: Goal) -> Result<Release, Refusal> {
         if !self.is_connected() {
             return Err(Refusal::NotConnected);
         }
@@ -1334,11 +1334,12 @@ impl Engine {
         if self.update_status().is_some_and(UpdateStatus::is_active) {
             return Err(Refusal::Running);
         }
-        self.may_start(&release).map(|()| release)
+        self.may_start(&release, goal).map(|()| release)
     }
 
-    /// What may change while the package downloads.
-    fn may_start(&self, release: &Release) -> Result<(), Refusal> {
+    /// What may change while the package downloads. A case probe takes
+    /// the latest release even when the pods run it ([`Package::bumped`]).
+    fn may_start(&self, release: &Release, goal: Goal) -> Result<(), Refusal> {
         let peer_running = self
             .state
             .peer_update
@@ -1348,7 +1349,10 @@ impl Engine {
         } else if peer_running {
             Err(Refusal::PeerRunning)
         } else {
-            update::check(&self.state, release)
+            match (update::check(&self.state, release), goal) {
+                (Err(Refusal::NotNewer), Goal::ProbeCase) => Ok(()),
+                (checked, _) => checked,
+            }
         }
     }
 
@@ -1369,9 +1373,17 @@ impl Engine {
             })
             .ok_or(Failure::Download)
             .and_then(|package| {
-                self.may_start(&release)
+                self.may_start(&release, goal)
                     .map_err(Failure::Refused)
                     .map(|()| package)
+            })
+            .map(|package| match goal {
+                Goal::ProbeCase if self.state.firmware.older_than(&release) != Some(true) => {
+                    let bumped = package.bumped();
+                    tracing::info!(offered = %bumped.version(), "case probe: nothing newer, offering the latest as the next release");
+                    bumped
+                }
+                _ => package,
             });
         match started {
             Ok(package) => {
@@ -3101,6 +3113,26 @@ mod tests {
             assert_eq!(
                 e.update_status(),
                 Some(UpdateStatus::Failed(Failure::Cancelled))
+            );
+        }
+
+        #[test]
+        fn a_case_probe_offers_the_latest_as_the_next_release() {
+            let mut e = ready();
+            e.state.firmware.exact = "9.0.348".parse().ok();
+            assert_eq!(
+                e.prepare_update(release(), Goal::Install).err(),
+                Some(Refusal::NotNewer)
+            );
+            e.prepare_update(release(), Goal::ProbeCase).unwrap();
+            let offer = uarp(&e.package(Some(package()), later()))
+                .into_iter()
+                .find(|message| message[1] == 0x05)
+                .unwrap();
+            let next = "9.0.349".parse::<ExactVersion>().unwrap().to_be_bytes();
+            assert!(
+                offer.windows(next.len()).any(|window| window == next),
+                "claims 9.0.349"
             );
         }
 

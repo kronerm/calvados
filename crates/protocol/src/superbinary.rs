@@ -31,6 +31,8 @@ pub struct Package {
     payloads: u16,
     /// `FTAB`'s data.
     ftab: Range<u32>,
+    /// Where `FTAB`'s payload header starts.
+    ftab_header: u32,
 }
 
 /// The bytes aren't: 16 MB.
@@ -110,6 +112,7 @@ fn slice<'a>(bytes: &'a [u8], range: &Range<u32>) -> &'a [u8] {
 
 /// One payload header.
 struct Payload {
+    at: u32,
     tag: [u8; 4],
     metadata: Range<u32>,
     data: Range<u32>,
@@ -161,6 +164,7 @@ impl Package {
             .take_while(|at| at + PAYLOAD_HEADER_LEN <= headers.end)
             .map(|at| {
                 Ok(Payload {
+                    at,
                     tag: bytes[at as usize + 4..at as usize + 8]
                         .try_into()
                         .map_err(|_| PackageError::TooShort)?,
@@ -186,8 +190,23 @@ impl Package {
             payloads: u16::try_from(payloads.len())
                 .map_err(|_| PackageError::Range("payload count"))?,
             ftab: ftab.data.clone(),
+            ftab_header: ftab.at,
             bytes,
         })
+    }
+
+    /// The same package claiming the next release, for a case probe when
+    /// nothing newer exists: the pods take only a newer offer, and compare
+    /// `FTAB`'s own version too (docs/case.md). Never stageable: at the
+    /// end they require the image's `bver` to match the offer.
+    pub fn bumped(mut self) -> Self {
+        self.version.release += 1;
+        let release = 12 + 8;
+        self.bytes[release..release + 4].copy_from_slice(&self.version.release.to_be_bytes());
+        let last = self.ftab_header as usize + 8 + 12;
+        let word = be32(&self.bytes, last as u32).expect("a checked payload header");
+        self.bytes[last..last + 4].copy_from_slice(&word.wrapping_add(1).to_be_bytes());
+        self
     }
 
     /// The SuperBinary's version, e.g. `9.0.348`.
@@ -314,6 +333,24 @@ pub(crate) mod tests {
     /// Its binary length: without the trailer.
     pub(crate) fn package_length() -> u32 {
         u32::try_from(package_bytes().len() - TRAILER.len()).unwrap()
+    }
+
+    #[test]
+    fn a_bumped_package_claims_the_next_release() {
+        let bumped = package().bumped();
+        assert_eq!(bumped.version().to_string(), "9.0.349");
+        let Message::Offer { version, .. } = bumped.offer(1) else {
+            panic!("an offer");
+        };
+        assert_eq!(version[..], bumped.bytes()[12..28]);
+        let reparsed = Package::parse(bumped.bytes().to_vec()).unwrap();
+        assert_eq!(reparsed.version(), bumped.version(), "FTAB's digest still holds");
+        let ftab_version = bumped.ftab_header as usize + 8;
+        assert_eq!(
+            be32(bumped.bytes(), ftab_version as u32 + 12),
+            Some(6808),
+            "FTAB's own last version word"
+        );
     }
 
     #[test]
