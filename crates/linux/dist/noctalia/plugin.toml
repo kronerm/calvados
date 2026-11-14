@@ -24,9 +24,8 @@ id = "panel"
 entry = "panel.luau"
 width = 400
 height = "content"
-# With More open the panel is ~1050 px; a scroll inside a content-height
-# panel kept its height after More closed.
-max_height = 1200
+# Scrolls past this (More open is ~1050 px).
+max_height = 700
 placement = "attached"
 position = "auto"
 open_near_click = true

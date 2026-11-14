@@ -392,7 +392,11 @@ render = function()
   if line then
     table.insert(rows, line)
   end
-  panel.render(ui.column({ flexGrow = 1, gap = 18, align = "stretch" }, rows))
+  -- Scrolls past the panel's cap. Not grown to the panel, and built anew
+  -- when More opens or closes, so the panel shrinks back with it.
+  panel.render(ui.scroll({ key = `scroll:{moreOpen}` }, {
+    ui.column({ gap = 18, align = "stretch" }, rows),
+  }))
 end
 
 noctalia.state.watch(format.STATE, function(value)
