@@ -370,7 +370,7 @@ mod tests {
         assert_eq!(Received::parse(&[]), None);
     }
 
-    /// As `uarp_offer.py` built them for 9A348.
+    /// As the GATT tool (since removed) built them for 9A348.
     #[test]
     fn messages_match_the_tool() {
         let version = [0, 0, 0, 9, 0, 0, 0, 0, 0, 0, 1, 0x5c, 0, 0, 0, 0];

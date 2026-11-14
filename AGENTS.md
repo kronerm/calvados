@@ -713,9 +713,9 @@ headers, `FTAB`'s metadata and `FTAB` (~7.8 MB) → "fully staged" → the lid
 closes → the case copies to the other bud and applies (~30 min) → the
 next session's version query shows it (`Done`). Done over AACP on Nov 14
 (9A348 → 9B47, laptop): offer to staged in 5 minutes (8604 requests of
-971 bytes, ~26 KB/s, no drop); with the lid closed the primary let the link go
-30 s in (probes held a first close 77 s and 2m20s; why it varies is open). Before that only over GATT with
-`tools/firmware/uarp_offer.py … full` (Oct 27, ~8 minutes; docs/uarp.md).
+971 bytes, ~26 KB/s, no drop); applied by the case and running 30 minutes later (`Done`); with the
+lid closed the primary let the link go 30 s in (probes held a first close 77 s and 2m20s; why it varies is open). Before that only over GATT with
+a Python tool, since removed (Oct 27, ~8 minutes; docs/uarp.md).
 
 Rules:
 - never an apply (no 0x0A message exists), never a solicitation; only

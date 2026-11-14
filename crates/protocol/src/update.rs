@@ -14,7 +14,7 @@ use crate::state::DeviceState;
 use crate::superbinary::Package;
 use crate::uarp::{MAX_DATA, Message, Processing, Received, Rejection, UNKNOWN_ASSET};
 
-/// Our offer's asset id, as `uarp_offer.py` used.
+/// Our offer's asset id, as the GATT tool (since removed) used.
 const ASSET: u16 = 1;
 
 /// No request for this long (or no transfer starting this long after the

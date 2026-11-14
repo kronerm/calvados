@@ -37,7 +37,7 @@ case: [sibling-and-case.md](sibling-and-case.md), [case.md](case.md).
   message ids from 1. Discover Downstream (0x15) got 0x16 status 0 and no
   0x17, also fresh and charging (why: GATT hosts get no downstream,
   [sibling-and-case.md](sibling-and-case.md)).
-- **GATT offers (7B21)** of 9A348, `tools/firmware/uarp_offer.py` (asset
+- **GATT offers (7B21)** of 9A348, with a Python tool since removed (`uarp_offer.py`; asset
   tag 0, flags 1, version and length from the SuperBinary header, 20
   payloads): acked (0x0d, every field echoed), then nothing for 30 s worn
   and 2 min in the case without power: deferred. With the case charging,
@@ -73,8 +73,9 @@ case: [sibling-and-case.md](sibling-and-case.md), [case.md](case.md).
   Bluetooth off. 9A348 → 9B47 offered 11:34:00, acked (deferred) at once;
   the primary pulled 8604 requests of 971 bytes (~26 KB/s) and reported
   fully staged at 11:38:57, no drop or stall. With the lid closed the
-  primary held the laptop's link for 30 s, then let go (0x13); the case
-  copies and applies from there.
+  primary held the laptop's link for 30 s, then let go (0x13). Lid opened
+  at 12:10: the next session's query read 9.1.47 (0x1D
+  `91.3431046004000000.29`), `Done`.
 
 ## Calvados (controller side)
 

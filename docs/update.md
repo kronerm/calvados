@@ -3,7 +3,7 @@
 AirPods Pro 2 (USB-C), build 9A348 (hashes, tools: [firmware.md](firmware.md)).
 Static analysis, `[image 0xADDR]`; Known = read from code or data, Inferred =
 marked. The protocol, and the updates on real pods (Oct 27 over GATT,
-installed by the case; Nov 14 over AACP, staged): [uarp.md](uarp.md). The host's side: [update-host.md](update-host.md).
+installed by the case; Nov 14 over AACP, installed by the case: 9.1.47 running at 12:10): [uarp.md](uarp.md). The host's side: [update-host.md](update-host.md).
 
 ## Summary
 

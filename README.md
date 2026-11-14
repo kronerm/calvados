@@ -153,18 +153,6 @@ The AirPods talk updates with one device at a time: if they don't answer,
 disconnect your other device and retry. Your other calvados device shows
 the progress meanwhile (not tried yet).
 
-**The old way, without calvados** (may be removed; the daemon stopped;
-needs curl, unzip, b3sum and Python with dbus-python and PyGObject):
-
-```sh
-tools/firmware/fetch.sh A3048                       # the right bud's model
-python3 tools/firmware/uarp_probe.py <address>      # what the AirPods run
-python3 tools/firmware/uarp_offer.py <address> \
-    firmware/A3048/asset/AssetData/Firmware.acsw/firmware.uarp full 2700
-```
-
-The last command is step 2 (about 8 minutes); then steps 3 and 4.
-
 ## Logs
 
 - **Android:** logcat, and daily files in the app's storage (root needed):
