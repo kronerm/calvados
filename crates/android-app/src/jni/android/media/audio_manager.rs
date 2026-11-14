@@ -6,6 +6,9 @@ use jni::{
 
 use crate::jni::android::view::key_event::KeyEvent;
 
+/// `AudioManager.STREAM_MUSIC`.
+const STREAM_MUSIC: i32 = 3;
+
 /// `android.media.AudioManager`.
 pub struct AudioManager<R>(pub(crate) R);
 
@@ -22,6 +25,29 @@ impl<'object_scope, 'env_scope, R: Reference + AsRef<JObject<'object_scope>>> Au
             jni_str!("dispatchMediaKeyEvent"),
             jni_sig!("(Landroid/view/KeyEvent;)V"),
             &[JValue::Object(key_event.as_obj())],
+        )?;
+        Ok(())
+    }
+
+    /// `getStreamVolume(STREAM_MUSIC)`.
+    pub fn get_music_volume(&self, env: &mut Env<'env_scope>) -> anyhow::Result<i32> {
+        Ok(env
+            .call_method(
+                &self.0,
+                jni_str!("getStreamVolume"),
+                jni_sig!("(I)I"),
+                &[JValue::Int(STREAM_MUSIC)],
+            )?
+            .i()?)
+    }
+
+    /// `setStreamVolume(STREAM_MUSIC, index, 0)`: no UI, no sound.
+    pub fn set_music_volume(&self, env: &mut Env<'env_scope>, index: i32) -> anyhow::Result<()> {
+        env.call_method(
+            &self.0,
+            jni_str!("setStreamVolume"),
+            jni_sig!("(III)V"),
+            &[JValue::Int(STREAM_MUSIC), JValue::Int(index), JValue::Int(0)],
         )?;
         Ok(())
     }

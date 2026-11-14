@@ -62,6 +62,8 @@ enum Message {
     Profile(Request),
     /// Suspend the output node whose name starts with this.
     RestartStream(String),
+    /// Lower (`true`) or restore that node's volume.
+    Duck(String, bool),
 }
 
 /// Sends requests to the PipeWire thread.
@@ -96,6 +98,40 @@ impl Audio {
     pub fn restart_stream(&self, pods: Address) {
         let node = format!("bluez_output.{}", pods.to_string().replace(':', "_"));
         let _ = self.0.send(Message::RestartStream(node));
+    }
+
+    /// Lower the pods' output volume to [`DUCKED`] of itself, or restore
+    /// it: Conversation Awareness. The node's volume is the pods' absolute
+    /// volume over AVRCP.
+    pub fn duck(&self, pods: Address, down: bool) {
+        let node = format!("bluez_output.{}", pods.to_string().replace(':', "_"));
+        let _ = self.0.send(Message::Duck(node, down));
+    }
+}
+
+/// How far a duck lowers the volume (LibrePods: ~40 %).
+const DUCKED: f64 = 0.4;
+
+/// `wpctl`'s volume of a node: `Volume: 0.40`, maybe ` [MUTED]`.
+fn volume(id: u32) -> Option<f64> {
+    let output = std::process::Command::new("wpctl")
+        .args(["get-volume", &id.to_string()])
+        .output()
+        .ok()?;
+    String::from_utf8(output.stdout)
+        .ok()?
+        .split_whitespace()
+        .nth(1)?
+        .parse()
+        .ok()
+}
+
+fn set_volume(id: u32, volume: f64) {
+    let set = std::process::Command::new("wpctl")
+        .args(["set-volume", &id.to_string(), &format!("{volume:.3}")])
+        .status();
+    if let Err(e) = set {
+        tracing::warn!("wpctl set-volume: {e}");
     }
 }
 
@@ -135,6 +171,8 @@ struct State {
     cards: HashMap<u32, Card>,
     /// `bluez_output.*` nodes by global id, with their names.
     outputs: HashMap<u32, (String, Node)>,
+    /// A ducked node's volume before.
+    ducked: Option<(u32, f64)>,
 }
 
 impl State {
@@ -211,6 +249,28 @@ fn run(requests: pw::channel::Receiver<Message>) -> Result<(), pw::Error> {
                             node.send_command(&NodeCommand::new(NodeCommandId::SUSPEND));
                         }
                         None => tracing::debug!(prefix, "no output node to restart"),
+                    }
+                }
+                Message::Duck(prefix, down) => {
+                    let id = state
+                        .outputs
+                        .iter()
+                        .find(|(_, (name, _))| name.starts_with(&prefix))
+                        .map(|(&id, _)| id);
+                    match (down, id, state.ducked) {
+                        (true, Some(id), None) => {
+                            if let Some(before) = volume(id) {
+                                tracing::info!(before, "ducking the pods' volume");
+                                set_volume(id, before * DUCKED);
+                                state.ducked = Some((id, before));
+                            }
+                        }
+                        (false, _, Some((id, before))) => {
+                            tracing::info!(before, "restoring the pods' volume");
+                            set_volume(id, before);
+                            state.ducked = None;
+                        }
+                        _ => {}
                     }
                 }
             }

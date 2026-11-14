@@ -474,6 +474,8 @@ fn execute_effect(conn: &Conn, effect: Effect, in_call: bool) -> bool {
         }
         Effect::Pause => log_media("pause", media::pause()),
         Effect::Resume => log_media("resume", media::resume()),
+        Effect::Duck => media::duck(true),
+        Effect::Unduck => media::duck(false),
         Effect::CrashLog { pods, bud, data } => save_crash_log(pods, bud, &data),
     }
     true

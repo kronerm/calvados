@@ -13,6 +13,8 @@ pub use smart_routing::{hijack_sequence, news};
 
 // === Commands ===
 
+/// Sets the pods' name.
+const RENAME: u16 = 0x1A;
 const SET_FEATURE_FLAGS: u16 = 0x4D;
 const REQUEST_NOTIFICATIONS: u16 = 0x0F;
 const ENABLE_EQ: u16 = 0x29;
@@ -52,6 +54,13 @@ pub fn request_notifications() -> Vec<u8> {
 
 pub fn control(id: ControlId, value: [u8; 4]) -> Vec<u8> {
     data_frame(control_command::OPCODE, &[&[id as u8][..], &value].concat())
+}
+
+/// The pods' name, as `0x1A` (LibrePods): `01 [length] 00` + UTF-8.
+pub fn rename(name: &str) -> Vec<u8> {
+    let bytes = name.as_bytes();
+    let length = u8::try_from(bytes.len()).unwrap_or(u8::MAX);
+    data_frame(RENAME, &[&[0x01, length, 0x00][..], bytes].concat())
 }
 
 /// Claim or release the audio link.

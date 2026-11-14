@@ -9,6 +9,7 @@ pub mod engine;
 pub mod firmware;
 mod mac_address;
 pub mod news;
+pub mod pod_settings;
 pub mod protocol;
 pub mod settings;
 pub mod state;

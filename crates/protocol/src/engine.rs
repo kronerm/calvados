@@ -14,6 +14,7 @@ use crate::aacp::{
 };
 use crate::ble;
 use crate::firmware::{ExactVersion, Firmware, Release};
+use crate::pod_settings::PodSetting;
 use crate::news::News;
 use crate::protocol::{
     self, handshake, hijack_sequence, request_notifications, session_setup_frames, set_cycle,
@@ -190,6 +191,11 @@ pub enum Effect {
     Pause,
     /// Resume the playback [`Effect::Pause`] paused.
     Resume,
+    /// Lower this host's media volume: the user started speaking with
+    /// Conversation Awareness on, while we play.
+    Duck,
+    /// Restore the volume [`Effect::Duck`] lowered.
+    Unduck,
     /// One bud's saved crash logs, as sent ([`crash_log::records`]): keep
     /// them, as `pods`' and `bud`'s (1 or 2).
     CrashLog {
@@ -288,6 +294,8 @@ struct Session {
     /// The update status last told the other hosts.
     told: Option<UpdateStatus>,
     crash_logs: CrashLogs,
+    /// Our volume is lowered for Conversation Awareness.
+    ducked: bool,
 }
 
 impl Session {
@@ -308,6 +316,7 @@ impl Session {
             },
             told: None,
             crash_logs: CrashLogs::Quiet,
+            ducked: false,
         }
     }
 }
@@ -679,6 +688,60 @@ impl Engine {
             .collect()
     }
 
+    /// Set one of the pods' settings; shown once they report it.
+    pub fn set_pod(&mut self, setting: PodSetting, raw: u8) -> Vec<Effect> {
+        if !self.is_connected() || setting.text(raw).is_none() {
+            return Vec::new();
+        }
+        tracing::info!(?setting, raw, "setting the pods' setting");
+        let off = setting == PodSetting::ConversationAwareness && raw != 1;
+        std::iter::once(Effect::Send(protocol::control(setting.id(), [raw, 0, 0, 0])))
+            .chain(off.then(|| self.unduck()).flatten())
+            .collect()
+    }
+
+    /// Rename the pods (at most 32 bytes); they report the new name.
+    pub fn rename(&mut self, name: &str) -> Vec<Effect> {
+        let name = name.trim();
+        if !self.is_connected() || name.is_empty() || name.len() > 32 {
+            return Vec::new();
+        }
+        tracing::info!(name, "renaming the pods");
+        vec![Effect::Send(protocol::rename(name))]
+    }
+
+    /// Conversation Awareness' level (0x4B): 1-2 the user started speaking,
+    /// 6, 8, 9 back to normal (LibrePods). Ducks only media playing here.
+    fn conversation(&mut self, level: u8) -> Vec<Effect> {
+        if !self.state.pods.is_on(PodSetting::ConversationAwareness) {
+            return Vec::new();
+        }
+        let playing = self
+            .our_activity()
+            .is_some_and(|activity| activity.contains(Activity::MEDIA));
+        match level {
+            1 | 2 if playing => match self.session_mut() {
+                Some(session) if !session.ducked => {
+                    session.ducked = true;
+                    tracing::info!(level, "speaking: ducking");
+                    vec![Effect::Duck]
+                }
+                _ => Vec::new(),
+            },
+            6 | 8 | 9 => self.unduck().into_iter().collect(),
+            _ => Vec::new(),
+        }
+    }
+
+    /// Restore a ducked volume, once.
+    fn unduck(&mut self) -> Option<Effect> {
+        let session = self.session_mut()?;
+        std::mem::take(&mut session.ducked).then(|| {
+            tracing::info!("restoring the volume");
+            Effect::Unduck
+        })
+    }
+
     pub fn handle(&mut self, packet: Packet, now: Instant) -> Vec<Effect> {
         if let Some(session) = self.session_mut()
             && let Phase::Acked = session.startup.phase
@@ -791,6 +854,7 @@ impl Engine {
             }
             Packet::Uarp(message) => self.uarp_received(&message, now),
             Packet::DeviceInformation(_) => self.identify(),
+            Packet::ConversationAwareness(level) => self.conversation(level),
             Packet::CrashLog(log) => self.crash_log(log),
             Packet::RoutingResponse(RoutingResponse {
                 kind: Routing::News(news),
@@ -1184,7 +1248,10 @@ impl Engine {
             (true, Ownership::Owning(_)) => {
                 tracing::info!(peer = %source.mac, "another device took the audio");
                 self.set_ownership(Ownership::Idle);
-                vec![Effect::ReleaseAudio]
+                self.unduck()
+                    .into_iter()
+                    .chain([Effect::ReleaseAudio])
+                    .collect()
             }
         }
     }
@@ -1213,7 +1280,10 @@ impl Engine {
         }
         tracing::info!("releasing the audio here");
         self.set_ownership(Ownership::Idle);
-        vec![Effect::ReleaseAudio]
+        self.unduck()
+            .into_iter()
+            .chain([Effect::ReleaseAudio])
+            .collect()
     }
 
     /// Infer the local MAC from the session's first host announcement or, on
@@ -2019,6 +2089,40 @@ mod tests {
             "pauses again, no second ownership release"
         );
         assert!(feed(&mut e, &set_ownership(false)).is_empty());
+    }
+
+    #[test]
+    fn conversation_awareness_ducks_our_media_while_speaking() {
+        use crate::aacp::ControlCommand;
+        let mut e = engine();
+        let ca = |on: u8| {
+            Packet::Control(ControlCommand {
+                id: crate::aacp::ControlId::ConversationAwareness,
+                value: [on, 0, 0, 0],
+            })
+        };
+        let speaking = |level| Packet::ConversationAwareness(level);
+        e.handle(source(mac(LOCAL), Activity::MEDIA), now());
+        assert!(e.handle(speaking(1), now()).is_empty(), "off: nothing");
+        e.handle(ca(1), now());
+        assert_eq!(e.handle(speaking(1), now()), vec![Effect::Duck]);
+        assert!(e.handle(speaking(2), now()).is_empty(), "once");
+        assert_eq!(e.handle(speaking(8), now()), vec![Effect::Unduck]);
+        assert!(e.handle(speaking(9), now()).is_empty());
+        // Ducked, then the audio goes elsewhere: restored with the release.
+        e.handle(speaking(1), now());
+        assert_eq!(
+            e.handle(source(mac(PEER), Activity::MEDIA), now()),
+            vec![Effect::Unduck, Effect::ReleaseAudio]
+        );
+        // Not playing here: nothing to duck.
+        assert!(e.handle(speaking(1), now()).is_empty());
+        // Turning it off while ducked restores.
+        e.handle(source(mac(LOCAL), Activity::MEDIA), now());
+        assert_eq!(e.handle(speaking(1), now()), vec![Effect::Duck]);
+        let fx = e.set_pod(PodSetting::ConversationAwareness, 2);
+        assert_eq!(fx.len(), 2);
+        assert!(matches!(fx[1], Effect::Unduck));
     }
 
     #[test]

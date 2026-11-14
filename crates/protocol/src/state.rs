@@ -1,5 +1,6 @@
 //! Device state accumulated from received packets, for display.
 
+use crate::pod_settings::PodSettings;
 use crate::MacAddress;
 use crate::aacp::{
     AudioSource, BatteryComponent, BatteryInfo, Bud, ChargingStatus, ControlCommand, ControlId,
@@ -39,6 +40,8 @@ pub struct DeviceState {
     /// Another calvados host's firmware update, as it last told
     /// ([`News::Update`]); until it leaves.
     pub peer_update: Option<PeerUpdate>,
+    /// The pods' settings as they report them.
+    pub pods: PodSettings,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -90,6 +93,7 @@ impl DeviceState {
             noise_source: NoiseSource::Expected,
             worn_noise_modes: self.worn_noise_modes,
             cycle: self.cycle,
+            pods: self.pods,
             battery: Battery {
                 left: last_known(self.battery.left),
                 right: last_known(self.battery.right),
@@ -184,6 +188,12 @@ impl DeviceState {
                 if let Some(cycle) = Cycle::from_bits(*modes) {
                     self.cycle = Some(cycle);
                 }
+            }
+            Packet::Control(ControlCommand {
+                id,
+                value: [raw, ..],
+            }) => {
+                self.pods.reported(*id, *raw);
             }
             Packet::ConnectedDevices(macs) => {
                 macs.iter().for_each(|mac| self.record_peer(*mac));

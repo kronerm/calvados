@@ -20,6 +20,15 @@ usage: calvados                      run the daemon
        calvados set noise anc|transparency|adaptive|next
        calvados set cycle anc,transparency,adaptive   press and hold's modes (two at least)
        calvados set cycle toggle anc|transparency|adaptive
+       calvados set pod SETTING VALUE|toggle   the AirPods' own settings:
+                                    conversation-awareness, personalized-volume,
+                                    case-sounds, charge-limit, one-bud-anc,
+                                    volume-swipe, sleep-detection  on|off
+                                    adaptive-level  0-100
+                                    mic  auto|right|left
+                                    press-speed, hold-duration  default|slower|slowest
+                                    volume-swipe-length  default|longer|longest
+       calvados rename NAME         rename the AirPods
        calvados firmware status     the firmware, the latest release, an update
        calvados firmware update     update the AirPods to the latest release
        calvados firmware cancel     stop an update
@@ -62,6 +71,10 @@ trait Calvados {
     fn start_update(&self) -> zbus::Result<()>;
     fn cancel_update(&self) -> zbus::Result<()>;
     fn try_probe_case(&self) -> zbus::Result<()>;
+    #[zbus(property)]
+    fn pods(&self) -> zbus::Result<std::collections::HashMap<String, String>>;
+    fn set_pod(&self, name: &str, value: &str) -> zbus::Result<()>;
+    fn rename(&self, name: &str) -> zbus::Result<()>;
     #[zbus(property)]
     fn auto_switch(&self) -> zbus::Result<bool>;
     #[zbus(property)]
@@ -111,6 +124,8 @@ pub async fn run(args: &[String]) -> anyhow::Result<()> {
             let names = names.split(',').map(str::trim).collect::<Vec<_>>();
             proxy.set_cycle(&names).await.map_err(failure)
         }
+        ["set", "pod", name, value] => proxy.set_pod(name, value).await.map_err(failure),
+        ["rename", name] => proxy.rename(name).await.map_err(failure),
         ["firmware", "status"] => firmware_status(&proxy).await,
         ["firmware", "update"] => firmware_update(&bus, &proxy).await,
         ["firmware", "cancel"] => proxy.cancel_update().await.map_err(failure),
@@ -316,7 +331,7 @@ async fn snapshot(proxy: &CalvadosProxy<'_>) -> Value {
             proxy.ownership_phase().await?,
             proxy.buds().await?,
             (proxy.noise_mode().await?, proxy.cycle().await?),
-            proxy.auto_switch().await?,
+            (proxy.auto_switch().await?, proxy.pods().await?),
             proxy.auto_connect().await?,
             (
                 proxy.firmware().await?,
@@ -327,7 +342,7 @@ async fn snapshot(proxy: &CalvadosProxy<'_>) -> Value {
             ),
         ))
     };
-    let Ok((connected, name, phase, buds, (noise, cycle), auto_switch, auto_connect, firmware)) =
+    let Ok((connected, name, phase, buds, (noise, cycle), (auto_switch, pods), auto_connect, firmware)) =
         read.await
     else {
         return json!({ "running": false });
@@ -344,6 +359,7 @@ async fn snapshot(proxy: &CalvadosProxy<'_>) -> Value {
         "cycle": cycle,
         "auto_switch": auto_switch,
         "auto_connect": auto_connect,
+        "pods": pods,
         "firmware": firmware,
         "latest_firmware": latest_firmware,
         "firmware_update": firmware_update,

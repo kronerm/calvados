@@ -23,6 +23,7 @@ use protocol::aacp::{Cycle, NoiseControlMode, Packet};
 use protocol::connection::AIRPODS_PSM;
 use protocol::engine::{Effect, Engine, LocalAudio};
 use protocol::firmware::Release;
+use protocol::pod_settings::PodSetting;
 use protocol::protocol::parse_datagram;
 use protocol::settings::{Setting, Settings};
 use protocol::superbinary::Package;
@@ -75,6 +76,9 @@ enum Input {
     /// Update the pods to the catalog's release; refused with a reason.
     StartUpdate(Goal, oneshot::Sender<Result<(), String>>),
     CancelUpdate,
+    /// One of the pods' settings, as the byte to send.
+    Pod(PodSetting, u8),
+    Rename(String),
     /// The release's package for the update, `None` when it couldn't be had.
     Package(Option<Package>),
 }
@@ -312,6 +316,8 @@ async fn run(daemon: &Daemon, mut engine: Engine, inputs: &mut mpsc::UnboundedRe
                     effects
                 }
                 Input::CancelUpdate => engine.cancel_update(),
+                Input::Pod(setting, raw) => engine.set_pod(setting, raw),
+                Input::Rename(name) => engine.rename(&name),
                 Input::Package(package) => engine.package(package, Instant::now()),
             },
             Some(playing) = playback_change(&mut playback) => {
@@ -391,6 +397,9 @@ async fn perform(daemon: &Daemon, session: Option<&Session>, effect: Effect) -> 
         Effect::Pause => daemon.media.iter().for_each(mpris::Media::pause),
         Effect::Resume => daemon.media.iter().for_each(mpris::Media::resume),
         Effect::CrashLog { pods, bud, data } => state::save_crash_log(pods, bud, &data),
+        Effect::Duck | Effect::Unduck => pods
+            .into_iter()
+            .for_each(|pods| daemon.audio.duck(pods, matches!(effect, Effect::Duck))),
     }
     Ok(())
 }

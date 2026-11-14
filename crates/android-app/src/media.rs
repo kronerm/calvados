@@ -56,6 +56,59 @@ pub(crate) fn toggle_a2dp_output() -> anyhow::Result<()> {
     set("false")
 }
 
+/// How far a duck lowers the media volume (LibrePods: ~40 %).
+const DUCKED: f64 = 0.4;
+/// Steps of a volume change, so it fades.
+const FADE_STEP: Duration = Duration::from_millis(50);
+
+/// The media volume before [`duck`].
+static DUCKED_FROM: std::sync::Mutex<Option<i32>> = std::sync::Mutex::new(None);
+
+/// Lower the media volume to [`DUCKED`] of itself, fading (Conversation
+/// Awareness), or restore it; on its own thread, for the fade.
+pub(crate) fn duck(down: bool) {
+    std::thread::spawn(move || {
+        if let Err(e) = fade(down) {
+            tracing::warn!(down, "ducking the media volume: {e:#}");
+        }
+    });
+}
+
+fn fade(down: bool) -> anyhow::Result<()> {
+    let volume = |set: Option<i32>| {
+        with_env(|env| {
+            let audio = app_context(env)?.audio_manager(env)?;
+            match set {
+                Some(index) => audio.set_music_volume(env, index).map(|()| index),
+                None => audio.get_music_volume(env),
+            }
+        })
+    };
+    let current = volume(None)?;
+    let mut from = DUCKED_FROM.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+    let target = match (down, *from) {
+        (true, None) => {
+            *from = Some(current);
+            (f64::from(current) * DUCKED).round() as i32
+        }
+        (false, Some(before)) => {
+            *from = None;
+            before
+        }
+        _ => return Ok(()),
+    };
+    drop(from);
+    let step = if target > current { 1 } else { -1 };
+    let mut index = current;
+    while index != target {
+        index += step;
+        volume(Some(index))?;
+        std::thread::sleep(FADE_STEP);
+    }
+    tracing::info!(down, current, target, "media volume");
+    Ok(())
+}
+
 /// Dispatch a key down + up to the active media session.
 fn press(code: KeyCode) -> anyhow::Result<()> {
     with_env(|env| {

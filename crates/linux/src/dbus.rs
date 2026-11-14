@@ -8,6 +8,7 @@ use std::time::Duration;
 use protocol::display::{self, Buds, Place, cycle_names, mode_name, parse_cycle, parse_mode};
 use protocol::engine::Engine;
 use protocol::firmware::Release;
+use protocol::pod_settings::PodSetting;
 use protocol::settings::Setting;
 use protocol::update::{Goal, UpdateStatus};
 use tokio::sync::{oneshot, watch};
@@ -80,6 +81,8 @@ pub struct Status {
     peer_update: WirePeerUpdate,
     auto_switch: bool,
     auto_connect: bool,
+    /// The pods' settings as reported: name → value.
+    pods: Vec<(String, String)>,
 }
 
 impl Status {
@@ -114,6 +117,13 @@ impl Status {
                 .map(str::to_owned)
                 .collect(),
             buds: wire_buds(Buds::of(state)),
+            pods: PodSetting::ALL
+                .into_iter()
+                .filter_map(|setting| {
+                    let raw = state.pods.get(setting)?;
+                    Some((setting.name().to_owned(), setting.text(raw)?))
+                })
+                .collect(),
             firmware: display::firmware(&state.firmware).unwrap_or_default(),
             latest_firmware: latest.map(Release::to_string).unwrap_or_default(),
             firmware_update: latest.is_some_and(|latest| latest.is_newer_than(&state.firmware)),
@@ -185,6 +195,61 @@ impl CalvadosService {
     #[zbus(property)]
     fn connected(&self) -> bool {
         self.snapshot().connected
+    }
+
+    /// The pods' own settings as they report them, setting → value
+    /// (`conversation-awareness` → `on`, `mic` → `auto`, …; see
+    /// `protocol::pod_settings`). A setting shows once reported.
+    #[zbus(property)]
+    fn pods(&self) -> std::collections::HashMap<String, String> {
+        self.snapshot().pods.into_iter().collect()
+    }
+
+    /// Set one of `Pods`: `value` as it shows (`on`, `off`, a level 0-100,
+    /// a choice's name), or `toggle` for the next one. Done once the pods
+    /// report it.
+    async fn set_pod(&self, name: String, value: String) -> zbus::fdo::Result<()> {
+        let setting = PodSetting::from_name(&name)
+            .ok_or_else(|| zbus::fdo::Error::InvalidArgs(format!("unknown setting {name:?}")))?;
+        self.ensure_connected()?;
+        let shown = |status: &Status| {
+            status
+                .pods
+                .iter()
+                .find(|(each, _)| *each == name)
+                .map(|(_, value)| value.clone())
+        };
+        let raw = match value.as_str() {
+            "toggle" => {
+                let current = shown(&self.snapshot())
+                    .and_then(|text| setting.parse(&text))
+                    .ok_or_else(|| zbus::fdo::Error::Failed(format!("{name} isn't reported yet")))?;
+                setting.next(current)
+            }
+            text => setting.parse(text).ok_or_else(|| {
+                zbus::fdo::Error::InvalidArgs(format!("{value:?} isn't a value of {name}"))
+            })?,
+        };
+        let wanted = setting.text(raw);
+        tracing::info!(name, value, "D-Bus: set a pods' setting");
+        self.apply(Input::Pod(setting, raw), |status| shown(status) == wanted)
+            .await
+    }
+
+    /// Rename the AirPods (1-32 bytes); `Name` shows it once they report it.
+    async fn rename(&self, name: String) -> zbus::fdo::Result<()> {
+        let name = name.trim().to_owned();
+        if name.is_empty() || name.len() > 32 {
+            return Err(zbus::fdo::Error::InvalidArgs(
+                "a name of 1 to 32 bytes".into(),
+            ));
+        }
+        self.ensure_connected()?;
+        tracing::info!(name, "D-Bus: rename the pods");
+        self.0
+            .inputs
+            .send(Input::Rename(name))
+            .map_err(|_| stopping())
     }
 
     /// `not-owning` | `claiming` | `owning`
