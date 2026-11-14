@@ -241,8 +241,10 @@ Cargo's downloads, `target` and cargo-apk2 are cached per job, keyed on
   0x11 `Routing::News`). Apple's frames start `01 e5`. The pods relay it
   unchanged (Nov 14: the laptop's update states and `Firmware` reached the
   phone, ~2 s each). Untested: whether Apple hosts ignore ours.
-- `connection.rs` — L2CAP PSM and service UUID, and `is_airpods_name`
-  (a paired device named `AirPods…`, any case), both platforms' test.
+- `connection.rs` — L2CAP PSM and service UUID, and `is_airpods`, both
+  platforms' test of a paired device: it offers that UUID (SDP; it
+  survives a rename), or, while its services aren't known, it's named
+  `AirPods…`.
 
 ### UARP and updates in the engine
 

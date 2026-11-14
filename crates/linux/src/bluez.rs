@@ -32,14 +32,15 @@ fn configures_apple_device_id(conf: &str) -> bool {
     })
 }
 
-/// First paired device named `AirPods…`.
+/// First paired AirPods ([`protocol::connection::is_airpods`]).
 pub async fn find_airpods(adapter: &bluer::Adapter) -> anyhow::Result<bluer::Device> {
     for addr in adapter.device_addresses().await? {
         let device = adapter.device(addr)?;
-        let is_airpods = device
-            .name()
-            .await?
-            .is_some_and(|name| protocol::connection::is_airpods_name(&name));
+        let uuids = (device.uuids().await?.into_iter().flatten())
+            .map(|uuid| uuid.to_string())
+            .collect::<Vec<_>>();
+        let name = device.name().await?;
+        let is_airpods = protocol::connection::is_airpods(name.as_deref(), &uuids);
         if is_airpods && device.is_paired().await? {
             return Ok(device);
         }

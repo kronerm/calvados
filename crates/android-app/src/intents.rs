@@ -11,7 +11,6 @@ use crate::jni::android::content::context::Context;
 use crate::jni::android::content::intent::Intent;
 use crate::notification::Page;
 use crate::proto::aacp::NoiseControlMode;
-use crate::proto::connection::is_airpods_name;
 use crate::proto::display;
 use crate::proto::pod_settings::PodSetting;
 use crate::proto::settings::Setting;
@@ -187,9 +186,8 @@ pub(crate) fn parse<'local>(
             let Some(device) = intent.get_parcelable_extra(env, EXTRA_DEVICE)? else {
                 return Ok(None);
             };
-            // `getName` needs BLUETOOTH_CONNECT; treat a failure as not ours.
-            let name = BluetoothDevice(device).get_name(env).ok().flatten();
-            if !name.is_some_and(|name| is_airpods_name(&name)) {
+            // Needs BLUETOOTH_CONNECT; treat a failure as not ours.
+            if !BluetoothDevice(device).is_airpods(env).unwrap_or(false) {
                 env.exception_clear();
                 return Ok(None);
             }
