@@ -733,9 +733,11 @@ impl Engine {
             return Vec::new();
         }
         tracing::info!(name, "renaming the pods");
-        // As with a setting, the other hosts hear of it, not we.
+        // The pods tell no host until their next settings burst.
         self.state.name = Some(name.to_owned());
-        vec![Effect::Send(protocol::rename(name))]
+        std::iter::once(Effect::Send(protocol::rename(name)))
+            .chain(self.tell(News::Name(name.to_owned())))
+            .collect()
     }
 
     /// Conversation Awareness' level (0x4B): 1-2 the user started speaking,
@@ -892,7 +894,7 @@ impl Engine {
                 match news {
                     News::Firmware(exact) => self.running_firmware(exact),
                     // Kept by the state, for display.
-                    News::Update(_) | News::Cycle(_) => Vec::new(),
+                    News::Update(_) | News::Cycle(_) | News::Name(_) => Vec::new(),
                 }
             }
             Packet::RoutingResponse(RoutingResponse {
@@ -1824,7 +1826,7 @@ impl Engine {
         hosts
             .iter()
             .filter(|&&host| host != local)
-            .map(|&host| Effect::Send(protocol::news(host, news)))
+            .map(|&host| Effect::Send(protocol::news(host, &news)))
             .collect()
     }
 }
@@ -3348,6 +3350,15 @@ mod tests {
         }
 
         #[test]
+        fn a_rename_is_told() {
+            let mut e = ready();
+            assert_eq!(told(&e.rename("Pods")), [News::Name("Pods".into())]);
+            let mut other = ready();
+            feed(&mut other, &from_peer(News::Name("Pods".into())));
+            assert_eq!(other.state.name.as_deref(), Some("Pods"));
+        }
+
+        #[test]
         fn the_cycle_set_is_told_and_shared() {
             use crate::aacp::NoiseControlMode;
             let mut e = ready();
@@ -3559,7 +3570,7 @@ mod tests {
 
         /// PEER's news, relayed by the pods.
         fn from_peer(news: News) -> Vec<u8> {
-            let frame = crate::protocol::news(mac(LOCAL), news);
+            let frame = crate::protocol::news(mac(LOCAL), &news);
             routing_frame(&frame[14..])
         }
 

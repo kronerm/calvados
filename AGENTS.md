@@ -236,7 +236,9 @@ Cargo's downloads, `target` and cargo-apk2 are cached per job, keyed on
   and leaves only the inactive slot invalid, as any partial transfer.
 - `news.rs` — `News`, calvados to calvados: `calvados` + format 1 + `1`
   exact firmware (3 × u32 BE), `2` + update state (two arguments, a
-  version), or `3` + the cycle's mask; carried by smart routing
+  version), `3` + the cycle's mask, or `4` + a name set here (UTF-8; the
+  pods tell other hosts a rename only at their next settings burst, ~1.5
+  min later on Nov 14); carried by smart routing
   (`protocol::news`: 0x10 to a host, `[mac] [len 2 LE]` + news, arriving as
   0x11 `Routing::News`). Apple's frames start `01 e5`. The pods relay it
   unchanged (Nov 14: the laptop's update states and `Firmware` reached the

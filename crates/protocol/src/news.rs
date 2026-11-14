@@ -8,7 +8,7 @@ use crate::uarp::Rejection;
 use crate::update::{Failure, Refusal, UpdateStatus};
 
 /// What one host knows and the others don't. Starts with [`News::MAGIC`].
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone)]
 #[cfg_attr(test, derive(PartialEq, Eq))]
 pub enum News {
     /// The pods' exact running firmware.
@@ -17,6 +17,9 @@ pub enum News {
     Update(UpdateStatus),
     /// The press-and-hold cycle, as a host set it.
     Cycle(Cycle),
+    /// The pods' name, as a host set it: the pods tell the other hosts
+    /// only at their next settings burst.
+    Name(String),
 }
 
 impl News {
@@ -25,12 +28,12 @@ impl News {
     const FORMAT: u8 = 1;
 
     /// `MAGIC`, `FORMAT`, then `1` + version (3 × u32 BE), `2` + state +
-    /// two arguments + version (zero unless done), or `3` + the cycle's
-    /// mask.
-    pub fn encode(self) -> Vec<u8> {
+    /// two arguments + version (zero unless done), `3` + the cycle's mask,
+    /// or `4` + the name (UTF-8).
+    pub fn encode(&self) -> Vec<u8> {
         let body = match self {
             Self::Firmware(running) => [&[1][..], &running.to_be_bytes()].concat(),
-            Self::Update(status) => {
+            &Self::Update(status) => {
                 let (state, a, b) = match status {
                     UpdateStatus::Downloading => (1, 0, 0),
                     UpdateStatus::Offered => (2, 0, 0),
@@ -51,6 +54,7 @@ impl News {
                 [&[2, state, a, b][..], &done].concat()
             }
             Self::Cycle(cycle) => vec![3, cycle.modes().bits()],
+            Self::Name(name) => [&[4][..], name.as_bytes()].concat(),
         };
         [&Self::MAGIC[..], &[Self::FORMAT], &body].concat()
     }
@@ -77,6 +81,9 @@ impl News {
                 _ => return None,
             })),
             [3, modes] => Cycle::from_bits(*modes).map(Self::Cycle),
+            [4, name @ ..] if (1..=32).contains(&name.len()) => {
+                String::from_utf8(name.to_vec()).ok().map(Self::Name)
+            }
             _ => None,
         }
     }
@@ -134,7 +141,11 @@ mod tests {
         let news = statuses
             .into_iter()
             .map(News::Update)
-            .chain([News::Firmware(version), News::Cycle(Cycle::OFFERED)]);
+            .chain([
+                News::Firmware(version),
+                News::Cycle(Cycle::OFFERED),
+                News::Name("ucho soother".into()),
+            ]);
         for news in news {
             assert_eq!(News::decode(&news.encode()), Some(news));
         }

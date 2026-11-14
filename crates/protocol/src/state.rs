@@ -241,6 +241,13 @@ impl DeviceState {
                 self.record_peer(*host);
                 self.cycle = Some(*cycle);
             }
+            Packet::RoutingResponse(RoutingResponse {
+                from: Some(host),
+                kind: Routing::News(News::Name(name)),
+            }) => {
+                self.record_peer(*host);
+                self.name = Some(name.clone());
+            }
             Packet::RoutingResponse(response) => response
                 .from
                 .into_iter()

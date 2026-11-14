@@ -12,7 +12,7 @@ pub const RESPONSE_OPCODE: u16 = 0x11;
 /// A peer's routing frame, relayed by the pods. A peer taking the audio
 /// sends three: [`Routing::PeerMedia`], [`Routing::ShowNearbyUi`], then
 /// [`Routing::YieldRequest`] (our own [`hijack_sequence`] mirrors it).
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone)]
 #[cfg_attr(test, derive(PartialEq, Eq))]
 pub enum Routing {
     /// The peer's playback: `HostStreamingState` YES or NO.
@@ -30,7 +30,7 @@ pub enum Routing {
     Other,
 }
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone)]
 pub struct RoutingResponse {
     /// The peer the response is about; lets us learn peer MACs.
     pub from: Option<MacAddress>,
@@ -90,7 +90,7 @@ fn frame(target: MacAddress, len: usize, fields: &[&[u8]]) -> Vec<u8> {
 /// [`News`] for the calvados host `target`: `[mac] [len 2 LE]` and the
 /// news, which starts with its magic where Apple's frames have their
 /// dictionary (`01 e5 …`).
-pub fn news(target: MacAddress, news: News) -> Vec<u8> {
+pub fn news(target: MacAddress, news: &News) -> Vec<u8> {
     let news = news.encode();
     let len = u16::try_from(news.len()).expect("short news");
     frame(target, 8 + news.len(), &[&len.to_le_bytes(), &news])
@@ -243,7 +243,7 @@ mod tests {
 
         let peer = PEER.parse().unwrap();
         let news = News::Update(UpdateStatus::Transferring { percent: 40 });
-        let sent = super::news(peer, news);
+        let sent = super::news(peer, &news);
         assert!(hex::encode(&sent).starts_with("040004001000aa9988776602190063616c7661646f73"));
         // The pods relay it as 0x11, from the sender.
         let relayed = [&[0x04, 0x00, 0x04, 0x00, 0x11, 0x00][..], &sent[6..]].concat();
