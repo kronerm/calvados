@@ -578,7 +578,8 @@ texts are written twice. A change to one side needs the other:
   a switch per toggle, segments per choice, a slider for the adaptive
   level sent in tens while it moves, and a rename field)
   and the notification's "More" page (`Page::Pods`: chips two to a row,
-  `notification_pods.xml`/`notification_pod_row.xml`; buttons More, Back,
+  `notification_pods.xml`/`notification_pod_row.xml`, a switch that's on
+  filled like a selected noise tile; buttons More, Back,
   Rename with a `RemoteInput`). One deliberate difference: the panel shows
   Conversation Awareness and Personalized Volume as main rows with
   descriptions under Switch and Connect and leaves them out of More; the

@@ -18,7 +18,7 @@ use crate::proto::aacp::{Cycle, NoiseControlMode};
 use crate::proto::display::{self, Buds, Component, CycleMark, Place};
 use crate::proto::engine::Engine;
 use crate::proto::firmware::Release;
-use crate::proto::pod_settings::PodSetting;
+use crate::proto::pod_settings::{Kind, PodSetting};
 use crate::proto::settings::Setting;
 use crate::proto::state::PeerUpdate;
 use crate::proto::update::UpdateStatus;
@@ -73,7 +73,9 @@ pub(crate) struct Content {
     /// The expanded view's page; always the main one while not connected.
     page: Page,
     /// The pods' settings as reported, title order, with their values' text.
-    pods: Vec<(PodSetting, String)>,
+    /// Reported settings: the value's label, and whether it's a switch
+    /// that's on (its chip filled).
+    pods: Vec<(PodSetting, String, bool)>,
 }
 
 /// The expanded view's pages, switched by an action under it.
@@ -199,8 +201,9 @@ impl Content {
                 .into_iter()
                 .filter(|_| connected)
                 .filter_map(|setting| {
-                    let text = setting.label(state.pods.get(setting)?)?;
-                    Some((setting, text))
+                    let raw = state.pods.get(setting)?;
+                    let on = matches!(setting.kind(), Kind::Toggle) && raw == 1;
+                    Some((setting, setting.label(raw)?, on))
                 })
                 .collect(),
         }
@@ -346,7 +349,7 @@ impl Content {
                 .into_iter()
                 .zip(pair.iter().map(Some).chain(std::iter::repeat(None)))
             {
-                let Some((setting, value)) = entry else {
+                let Some((setting, value, on)) = entry else {
                     // Keeps the lone chip half wide.
                     let id = cells.id(env, chip)?;
                     row.set_view_visibility(env, id, Visibility::Invisible)?;
@@ -354,6 +357,10 @@ impl Content {
                 };
                 cells.text(env, &format!("{chip}_title"), setting.title())?;
                 cells.text(env, &format!("{chip}_value"), value)?;
+                let background =
+                    res.get(env, if *on { "tile_selected" } else { "tile" }, "drawable")?;
+                let id = cells.id(env, chip)?;
+                row.set_int(env, id, "setBackgroundResource", background)?;
                 let request_code = (40..)
                     .zip(PodSetting::ALL)
                     .find(|(_, each)| each == setting)
