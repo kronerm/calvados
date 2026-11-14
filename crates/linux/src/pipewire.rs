@@ -64,8 +64,6 @@ enum Message {
     RestartStream(String),
     /// Lower (`true`) or restore that node's volume.
     Duck(String, bool),
-    /// Play the chime to that node, once it exists.
-    Chime(String),
 }
 
 /// Sends requests to the PipeWire thread.
@@ -108,79 +106,6 @@ impl Audio {
     pub fn duck(&self, pods: Address, down: bool) {
         let node = format!("bluez_output.{}", pods.to_string().replace(':', "_"));
         let _ = self.0.send(Message::Duck(node, down));
-    }
-}
-
-impl Audio {
-    /// Play [`chime_file`] on the pods' output node, waiting up to
-    /// [`CHIME_WAIT`] for it to appear (the profile was just switched on).
-    pub fn chime(&self, pods: Address) {
-        let node = format!("bluez_output.{}", pods.to_string().replace(':', "_"));
-        let _ = self.0.send(Message::Chime(node));
-    }
-}
-
-/// How long a chime waits for the output node.
-const CHIME_WAIT: Duration = Duration::from_secs(5);
-
-/// The chime: 3 s of two-tone beeps, written once to the runtime dir.
-fn chime_file() -> std::io::Result<std::path::PathBuf> {
-    const RATE: u32 = 48_000;
-    let dir = std::env::var_os("XDG_RUNTIME_DIR").map_or_else(std::env::temp_dir, Into::into);
-    let path = dir.join("calvados-chime.wav");
-    if path.exists() {
-        return Ok(path);
-    }
-    let samples: Vec<i16> = (0..RATE * 3)
-        .map(|n| {
-            let t = f64::from(n) / f64::from(RATE);
-            // 150 ms tones, alternating 2 and 3 kHz (easy to locate), 100 ms apart.
-            let slot = (t / 0.25) as u32;
-            let within = t - f64::from(slot) * 0.25;
-            if within > 0.15 {
-                return 0;
-            }
-            let freq = if slot.is_multiple_of(2) {
-                2000.0
-            } else {
-                3000.0
-            };
-            let fade = (within / 0.01).min((0.15 - within) / 0.01).min(1.0);
-            (f64::from(i16::MAX) * 0.8 * fade * (std::f64::consts::TAU * freq * t).sin()) as i16
-        })
-        .collect();
-    let data_len = u32::try_from(samples.len() * 2).unwrap_or(u32::MAX);
-    let mut wav = Vec::with_capacity(44 + samples.len() * 2);
-    wav.extend_from_slice(b"RIFF");
-    wav.extend_from_slice(&(36 + data_len).to_le_bytes());
-    wav.extend_from_slice(b"WAVEfmt ");
-    wav.extend_from_slice(&16u32.to_le_bytes());
-    wav.extend_from_slice(&1u16.to_le_bytes()); // PCM
-    wav.extend_from_slice(&1u16.to_le_bytes()); // mono
-    wav.extend_from_slice(&RATE.to_le_bytes());
-    wav.extend_from_slice(&(RATE * 2).to_le_bytes());
-    wav.extend_from_slice(&2u16.to_le_bytes());
-    wav.extend_from_slice(&16u16.to_le_bytes());
-    wav.extend_from_slice(b"data");
-    wav.extend_from_slice(&data_len.to_le_bytes());
-    samples
-        .iter()
-        .for_each(|sample| wav.extend_from_slice(&sample.to_le_bytes()));
-    std::fs::write(&path, wav)?;
-    Ok(path)
-}
-
-/// `pw-play` the chime to node `id`, in the background.
-fn play_chime(id: u32) {
-    let played = chime_file().and_then(|path| {
-        std::process::Command::new("pw-play")
-            .args(["--target", &id.to_string(), "--volume", "1.0"])
-            .arg(path)
-            .spawn()
-    });
-    match played {
-        Ok(_) => tracing::info!(id, "chiming on the pods"),
-        Err(e) => tracing::warn!("pw-play: {e}"),
     }
 }
 
@@ -248,8 +173,6 @@ struct State {
     outputs: HashMap<u32, (String, Node)>,
     /// A ducked node's volume before.
     ducked: Option<(u32, f64)>,
-    /// A chime waiting for its node: the name's prefix, until when.
-    chime: Option<(String, Instant)>,
 }
 
 impl State {
@@ -328,17 +251,6 @@ fn run(requests: pw::channel::Receiver<Message>) -> Result<(), pw::Error> {
                         None => tracing::debug!(prefix, "no output node to restart"),
                     }
                 }
-                Message::Chime(prefix) => {
-                    let id = state
-                        .outputs
-                        .iter()
-                        .find(|(_, (name, _))| name.starts_with(&prefix))
-                        .map(|(&id, _)| id);
-                    match id {
-                        Some(id) => play_chime(id),
-                        None => state.chime = Some((prefix, Instant::now() + CHIME_WAIT)),
-                    }
-                }
                 Message::Duck(prefix, down) => {
                     let id = state
                         .outputs
@@ -383,17 +295,6 @@ fn run(requests: pw::channel::Receiver<Message>) -> Result<(), pw::Error> {
                             tracing::debug!(name, id = global.id, "output node");
                             let mut state = state.borrow_mut();
                             state.outputs.insert(global.id, (name.to_owned(), node));
-                            let waiting = state.chime.take();
-                            match waiting {
-                                Some((prefix, until))
-                                    if name.starts_with(&prefix) && Instant::now() < until =>
-                                {
-                                    play_chime(global.id);
-                                }
-                                other => {
-                                    state.chime = other.filter(|(_, until)| Instant::now() < *until)
-                                }
-                            }
                         }
                         Err(e) => tracing::warn!("binding {name}: {e}"),
                     }

@@ -319,9 +319,6 @@ impl Content {
                 let pending = Request::Rename.pending_intent(env, context, 51)?;
                 let input = RemoteInput::new(env, RENAME_KEY, "Rename AirPods")?;
                 let action = Action::with_remote_input(env, "Rename", &pending, &input)?;
-                let builder = builder.add_action(env, &action)?;
-                let pending = Request::Chime.pending_intent(env, context, 52)?;
-                let action = Action::new(env, "Find", &pending)?;
                 builder.add_action(env, &action)
             }
         }

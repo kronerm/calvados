@@ -256,20 +256,6 @@ local function more()
       onClick = rename,
     }, { ui.label({ text = "Rename", fontSize = 12, maxLines = 1 }) }),
   }))
-  -- A loud chime on the AirPods, to find them (refused while one is worn);
-  -- `calvados find` follows their signal.
-  table.insert(rows, ui.row({
-    key = "find",
-    gap = 12,
-    align = "center",
-    paddingV = 3,
-    onClick = function()
-      noctalia.runAsync({ "calvados", "chime" })
-    end,
-  }, {
-    ui.label({ text = "Find AirPods", flexGrow = 1, maxLines = 1 }),
-    ui.label({ text = "Play sound", color = "primary", maxLines = 1 }),
-  }))
   table.insert(children, ui.column({ gap = 6 }, rows))
   return ui.column({ gap = 8 }, children)
 end

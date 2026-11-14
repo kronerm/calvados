@@ -250,21 +250,6 @@ impl CalvadosService {
         self.snapshot().signal
     }
 
-    /// Play a loud chime on the AirPods to find them; not while one is in an
-    /// ear. The audio comes here for it and goes back after.
-    async fn chime(&self) -> zbus::fdo::Result<()> {
-        tracing::info!("D-Bus: chime");
-        let (reply, answer) = oneshot::channel();
-        self.0
-            .inputs
-            .send(Input::Chime(reply))
-            .map_err(|_| stopping())?;
-        answer
-            .await
-            .map_err(|_| stopping())?
-            .map_err(zbus::fdo::Error::Failed)
-    }
-
     /// Rename the AirPods (1-32 bytes); `Name` shows it once they report it.
     async fn rename(&self, name: String) -> zbus::fdo::Result<()> {
         let name = name.trim().to_owned();

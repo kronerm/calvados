@@ -137,8 +137,7 @@ Cargo's downloads, `target` and cargo-apk2 are cached per job, keyed on
   `Engine::rename` (0x1A). Conversation Awareness: the pods' 0x4B level
   1-2 while media plays here emits `Effect::Duck` once; 6, 8, 9, losing
   the audio, or the setting going off `Effect::Unduck`. Encodings and the
-  research: docs/features.md. Finding them: `Engine::chime` (refused while
-  a bud is in an ear, `ChimeRefusal`) emits `Effect::Chime { release }`;
+  research: docs/features.md. Finding them:
   `Engine::signal` is the latest advertisement's RSSI within 10 s
   (`nearby` takes it; Linux only so far: Android's first-match scan gives
   no stream of readings).
@@ -459,7 +458,7 @@ power-on (`LinkChange`). Its length caps at 255, i.e. 15 events.
   (the host first).
 - `cli.rs` — `calvados set pod <setting> <value>|toggle` and `rename
   <name>` (D-Bus `Pods` a{ss}, `SetPod`, `Rename`; `watch` carries `pods`),
-  `chime` (D-Bus `Chime`) and `find [chime]` (polls D-Bus `Signal`, dBm, 0
+  and `find` (polls D-Bus `Signal`, dBm, 0
   when unheard: it sends no `PropertiesChanged`, changing with every
   advertisement),
   `calvados watch` / `set …` / `firmware
@@ -507,12 +506,7 @@ power-on (`LinkChange`). Its length caps at 255, i.e. 15 events.
   full. Channels are tracked from signaling on the link our AACP channel
   opens on (and later links to that address from their start), so channels
   opened before the daemon started (A2DP's) stay unknown until reopened.
-- `pipewire.rs` — `Effect::Chime`: `a2dp-sink` on, then `pw-play` of a
-  generated 3 s two-tone WAV (`$XDG_RUNTIME_DIR/calvados-chime.wav`) to the
-  pods' output node once it exists (5 s at most), and the profile off again
-  10 s later unless we hold the audio (`Input::Chimed`). Android plays
-  `ToneGenerator` beeps on the music stream (`media::chime`).
-  `Effect::Duck`/`Unduck`: the pods' `bluez_output.*`
+- `pipewire.rs` — `Effect::Duck`/`Unduck`: the pods' `bluez_output.*`
   node to 40 % of its volume and back, through `wpctl` (the node's volume
   is the pods' AVRCP absolute volume). Also the pods' card profile, set natively (`pipewire` crate,
   on its own thread and main loop): `off` as soon as BlueZ reports them
@@ -582,8 +576,7 @@ texts are written twice. A change to one side needs the other:
   rows of title and value, a click sets the next value, and a rename field)
   and the notification's "More" page (`Page::Pods`: chips two to a row,
   `notification_pods.xml`/`notification_pod_row.xml`; buttons More, Back,
-  Rename with a `RemoteInput`, and Find; the panel's More ends with a
-  "Find AirPods · Play sound" row). One deliberate difference: the panel shows
+  Rename with a `RemoteInput`). One deliberate difference: the panel shows
   Conversation Awareness and Personalized Volume as main rows with
   descriptions under Switch and Connect and leaves them out of More; the
   notification has no height for them (its expanded content is at

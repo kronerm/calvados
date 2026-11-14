@@ -196,9 +196,6 @@ pub enum Effect {
     Duck,
     /// Restore the volume [`Effect::Duck`] lowered.
     Unduck,
-    /// Play a loud chime on the pods, to find them ([`Engine::chime`]):
-    /// route the audio here for it, then, if `release`, give it up again.
-    Chime { release: bool },
     /// One bud's saved crash logs, as sent ([`crash_log::records`]): keep
     /// them, as `pods`' and `bud`'s (1 or 2).
     CrashLog {
@@ -256,23 +253,6 @@ pub struct Engine {
 /// How long a signal reading stays current: the pods advertise a few times
 /// a second.
 const SIGNAL_FRESH: Duration = Duration::from_secs(10);
-
-/// Why [`Engine::chime`] won't.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum ChimeRefusal {
-    NotConnected,
-    /// Too loud for an ear.
-    InEar,
-}
-
-impl fmt::Display for ChimeRefusal {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.write_str(match self {
-            Self::NotConnected => "the AirPods aren't connected",
-            Self::InEar => "not while an AirPod is in an ear",
-        })
-    }
-}
 
 /// The AACP session.
 #[derive(Debug)]
@@ -735,27 +715,6 @@ impl Engine {
         )))
         .chain(off.then(|| self.unduck()).flatten())
         .collect()
-    }
-
-    /// Play a chime on the pods to find them: not while a bud is in an
-    /// ear. Routes the audio here for it, and gives it back after unless
-    /// we held it.
-    pub fn chime(&mut self) -> Result<Vec<Effect>, ChimeRefusal> {
-        if !self.is_connected() {
-            return Err(ChimeRefusal::NotConnected);
-        }
-        let in_ear = self.state.ears().is_some_and(|(left, right)| {
-            [left, right]
-                .iter()
-                .any(|ear| matches!(ear, crate::aacp::EarStatus::InEar))
-        });
-        if in_ear {
-            return Err(ChimeRefusal::InEar);
-        }
-        tracing::info!("chiming to find the pods");
-        Ok(vec![Effect::Chime {
-            release: !self.ownership().is_held(),
-        }])
     }
 
     /// Our pods' signal strength in dBm, from their latest advertisement
@@ -2170,26 +2129,6 @@ mod tests {
             "pauses again, no second ownership release"
         );
         assert!(feed(&mut e, &set_ownership(false)).is_empty());
-    }
-
-    #[test]
-    fn a_chime_waits_for_the_ears_and_gives_the_audio_back() {
-        let mut e = engine();
-        let ears = |primary, secondary| Packet::EarDetection(EarDetection { primary, secondary });
-        e.handle(
-            Packet::PrimaryBud(crate::aacp::PrimaryBud {
-                bud: Bud::Left,
-                active: true,
-                peer: true,
-            }),
-            now(),
-        );
-        e.handle(ears(EarStatus::InEar, EarStatus::NotInEar), now());
-        assert_eq!(e.chime(), Err(ChimeRefusal::InEar));
-        e.handle(ears(EarStatus::NotInEar, EarStatus::InCase), now());
-        assert_eq!(e.chime(), Ok(vec![Effect::Chime { release: true }]));
-        e.handle(source(mac(LOCAL), Activity::MEDIA), now());
-        assert_eq!(e.chime(), Ok(vec![Effect::Chime { release: false }]));
     }
 
     #[test]

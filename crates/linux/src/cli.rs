@@ -29,9 +29,7 @@ usage: calvados                      run the daemon
                                     press-speed, hold-duration  default|slower|slowest
                                     volume-swipe-length  default|longer|longest
        calvados rename NAME         rename the AirPods
-       calvados chime               a loud chime on the AirPods, to find them
-       calvados find [chime]        their signal as you move (Ctrl-C ends);
-                                    chime: a loud chime on them first
+       calvados find                their signal as you move (Ctrl-C ends)
        calvados firmware status     the firmware, the latest release, an update
        calvados firmware update     update the AirPods to the latest release
        calvados firmware cancel     stop an update
@@ -80,7 +78,6 @@ trait Calvados {
     fn rename(&self, name: &str) -> zbus::Result<()>;
     #[zbus(property)]
     fn signal(&self) -> zbus::Result<i16>;
-    fn chime(&self) -> zbus::Result<()>;
     #[zbus(property)]
     fn auto_switch(&self) -> zbus::Result<bool>;
     #[zbus(property)]
@@ -132,12 +129,7 @@ pub async fn run(args: &[String]) -> anyhow::Result<()> {
         }
         ["set", "pod", name, value] => proxy.set_pod(name, value).await.map_err(failure),
         ["rename", name] => proxy.rename(name).await.map_err(failure),
-        ["chime"] => proxy.chime().await.map_err(failure),
         ["find"] => find(&proxy).await,
-        ["find", "chime"] => {
-            proxy.chime().await.map_err(failure)?;
-            find(&proxy).await
-        }
         ["firmware", "status"] => firmware_status(&proxy).await,
         ["firmware", "update"] => firmware_update(&bus, &proxy).await,
         ["firmware", "cancel"] => proxy.cancel_update().await.map_err(failure),

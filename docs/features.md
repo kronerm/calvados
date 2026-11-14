@@ -65,12 +65,12 @@ volume); Android fades the music stream to 40 % in 50 ms steps.
 
 ## Find My
 
-Built: the chime (`Engine::chime`; Linux `calvados chime`, the panel's
-"Find AirPods", the notification's "Find") and, on Linux, `calvados find`,
-the signal as you move.
+Built: on Linux, `calvados find`, the signal as you move.
 
-- Playing a sound on the buds: as ordinary audio over A2DP; no AACP "play
-  sound" is known (R/C). The case's own speaker and alarm need the Find
+- Playing a sound on the buds: only as ordinary audio over A2DP, at the
+  host's volume; no AACP "play sound" is known (R/C). A chime that way was
+  built and removed (Nov 14): in the case it's too quiet to hear, and the
+  case's own speaker is what finding needs. That speaker and alarm need the Find
   My owner's keys (its BLE chip; docs/case.md); the "non-owner sound"
   (FMNS `01 00 03` to 4F860003, or DULT `00 03` to 8E0C0001) answers only
   while the AirPods are in an Apple ID's Find My and separated from its

@@ -7,7 +7,6 @@ use jni::objects::JObject;
 
 use crate::jni::android::media::audio_attributes::Usage;
 use crate::jni::android::media::audio_playback_configuration::AudioPlaybackConfiguration;
-use crate::jni::android::media::tone_generator::{Tone, ToneGenerator};
 use crate::jni::android::view::key_event::{Action, KeyCode, KeyEvent};
 use crate::jni::java::util::list::List;
 use crate::jni::{app_context, with_env};
@@ -55,29 +54,6 @@ pub(crate) fn toggle_a2dp_output() -> anyhow::Result<()> {
     set("true")?;
     std::thread::sleep(HOLD);
     set("false")
-}
-
-/// The chime: [`CHIMES`] double beeps, [`CHIME_EVERY`] apart, at full volume.
-const CHIMES: u32 = 8;
-const CHIME_EVERY: Duration = Duration::from_millis(400);
-
-/// Play the chime to find the pods, where media goes (the pods follow the
-/// host that streams); on its own thread.
-pub(crate) fn chime() {
-    std::thread::spawn(|| {
-        let played = with_env(|env| {
-            let tones = ToneGenerator::music(env, 100)?;
-            for _ in 0..CHIMES {
-                tones.start_tone(env, Tone::PropBeep2, 300)?;
-                std::thread::sleep(CHIME_EVERY);
-            }
-            tones.release(env)
-        });
-        match played {
-            Ok(()) => tracing::info!("chimed"),
-            Err(e) => tracing::warn!("chiming: {e:#}"),
-        }
-    });
 }
 
 /// How far a duck lowers the media volume (LibrePods: ~40 %).
