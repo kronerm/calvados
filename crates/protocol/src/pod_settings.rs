@@ -182,7 +182,7 @@ impl PodSetting {
     }
 
     /// The next value a tap gives: a toggle flips, a choice steps on, a
-    /// level steps by a third (iOS offers 0, 50, 100).
+    /// level steps by a quarter (the panel's segments: 0, 25, … 100).
     pub fn next(self, raw: u8) -> u8 {
         match self.kind() {
             Kind::Toggle => match raw {
@@ -190,9 +190,8 @@ impl PodSetting {
                 _ => 1,
             },
             Kind::Level => match raw {
-                0..50 => 50,
-                50..100 => 100,
-                _ => 0,
+                100.. => 0,
+                raw => (raw / 25 + 1) * 25,
             },
             Kind::Choice(names) => {
                 let count = u8::try_from(names.len()).unwrap_or(1);
@@ -262,7 +261,10 @@ mod tests {
         assert_eq!(PodSetting::CaseSounds.next(1), 2);
         assert_eq!(PodSetting::CaseSounds.next(2), 1);
         assert_eq!(PodSetting::Mic.next(2), 0);
-        assert_eq!(PodSetting::AdaptiveLevel.next(50), 100);
+        assert_eq!(PodSetting::AdaptiveLevel.next(0), 25);
+        assert_eq!(PodSetting::AdaptiveLevel.next(50), 75);
+        assert_eq!(PodSetting::AdaptiveLevel.next(60), 75);
+        assert_eq!(PodSetting::AdaptiveLevel.next(75), 100);
         assert_eq!(PodSetting::AdaptiveLevel.next(100), 0);
     }
 

@@ -290,7 +290,9 @@ local function more()
   -- Renaming, only while connected (the pods take it).
   local renameRow = format.connected(state) and ui.row({ gap = 8, align = "center" }, {
     ui.input({
-      key = "rename",
+      -- Its value is only the initial text: built anew when the name
+      -- changes (e.g. renamed from the phone).
+      key = `rename:{state.name or ""}`,
       value = state.name or "",
       placeholder = "Name",
       controlSize = "sm",
@@ -378,7 +380,12 @@ render = function()
 end
 
 noctalia.state.watch(format.STATE, function(value)
-  state = value or { running = false }
+  value = value or { running = false }
+  -- A new name rebuilds the rename field, dropping what was typed.
+  if value.name ~= state.name then
+    draftName = nil
+  end
+  state = value
   render()
 end)
 

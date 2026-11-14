@@ -593,7 +593,8 @@ texts are written twice. A change to one side needs the other:
   100 %, a rename field); the notification's is a page (`Page::Pods`:
   chips two to a row, `notification_pods.xml`/`notification_pod_row.xml`,
   a switch that's on filled like a selected noise tile, a tap the next
-  value; buttons More, Back, Rename with a `RemoteInput`).
+  value, the adaptive level in the panel's steps, `PodSetting::next`;
+  buttons More, Back, Rename with a `RemoteInput`).
 
 ## Ownership model
 
