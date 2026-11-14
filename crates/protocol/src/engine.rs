@@ -61,7 +61,7 @@ const CLAIM_WAIT: Duration = Duration::from_secs(1);
 const UARP_SETTLE: Duration = Duration::from_secs(5);
 
 /// Progress is told the other hosts in steps of this many percent.
-const TOLD_STEP: u8 = 5;
+const TOLD_STEP: u8 = 1;
 
 /// Audio ownership.
 #[derive(Debug, Clone, Copy, Default)]

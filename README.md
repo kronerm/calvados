@@ -154,7 +154,7 @@ shows `5a.00` or higher from 9.0 on, `47.xx` to `51.xx` before (7.1 to
 If it fails, the line says why; close and reopen the case and try again.
 The AirPods talk updates with one device at a time: if they don't answer,
 disconnect your other device and retry. Your other calvados device shows
-the progress meanwhile (not tried yet).
+the progress meanwhile.
 
 ## Logs
 

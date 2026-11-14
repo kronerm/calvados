@@ -222,8 +222,9 @@ Cargo's downloads, `target` and cargo-apk2 are cached per job, keyed on
   exact firmware (3 × u32 BE), `2` + update state (two arguments, a
   version), or `3` + the cycle's mask; carried by smart routing
   (`protocol::news`: 0x10 to a host, `[mac] [len 2 LE]` + news, arriving as
-  0x11 `Routing::News`). Apple's frames start `01 e5`. Untested: whether
-  Apple hosts ignore ours, and whether the pods relay it unchanged.
+  0x11 `Routing::News`). Apple's frames start `01 e5`. The pods relay it
+  unchanged (Nov 14: the laptop's update states and `Firmware` reached the
+  phone, ~2 s each). Untested: whether Apple hosts ignore ours.
 - `connection.rs` — L2CAP PSM and service UUID, and `is_airpods_name`
   (a paired device named `AirPods…`, any case), both platforms' test.
 
@@ -265,7 +266,7 @@ Cargo's downloads, `target` and cargo-apk2 are cached per job, keyed on
   takes it down, the next settled session offers it again) and waits out a
   primary change the same way. `cancel_update` rescinds.
 - Peers: every status change goes to the other hosts (`DeviceState::hosts`)
-  as `News::Update`, progress in 5 % steps; the exact firmware from our own
+  as `News::Update`, progress in 1 % steps; the exact firmware from our own
   query as `News::Firmware`, also to hosts that join (a `ConnectedDevices`
   list). Received `News::Firmware` sets the exact version; `News::Update`
   is `DeviceState::peer_update` (cleared when that host leaves).
@@ -746,8 +747,9 @@ Rules:
 - only the buds: the case's payload is never offered. A case on 7B21 is
   updated only by its Find My owner's Apple device (docs/case.md).
 
-Untested: `News` through the pods' relay; `ProbeCase` against a case on
-90.x.
+`ProbeCase` reached a 9B47 case (Nov 14: downstream 1 ~2 s after the
+close, its version 9.1.47 through the relay; docs/case.md). Untested: a
+case update itself (offering the case its package as downstream 1).
 
 ## Debugging a reboot
 
