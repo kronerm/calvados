@@ -111,12 +111,18 @@ was built and removed (Nov 15): too coarse and jumpy to lead anywhere.
     control point (0x3ca5c, Sound Start 0x200) answers unpaired with
     "not paired"; the non-owner one (0x3d040, 0x300) is refused near the
     owner and acted on only paired.
-  - Pairing can't be done from Linux or Android: the pairing crypto runs
-    on the UWB chip (`crypto_set_s3`, `crypto_val_s3_cert`), which checks
-    S3 and a "BAA" certificate chain against Apple roots in its firmware
-    (P-384 key at `R1FW` 0x3fb24). Whether Apple's servers or the owner
-    device's Secure Enclave signs it is open; no open-source project
-    pairs a genuine accessory.
+  - Pairing can't be done from Linux or Android (Nov 15, docs/firmware.md
+    "Find My pairing"): the case takes S3, an ECDSA P-256 signature by
+    Apple's pairing server over the session (its nonce, the seed, C2's
+    hash; key built into `R1FW`), and a chain from a "Basic Attestation
+    System" certificate, which only genuine Apple hardware gets (the
+    chain isn't tied to the session, but has to be Apple's). No offline
+    path; getting S3 would mean posing as an Apple device to Apple.
+  - No host path reaches the case's speaker: AACP case sounds (0x31) is
+    a byte the buds keep, the buds' 4F860005 only relays, and a tone
+    would need the case B2P message we never send. Patched firmware is
+    out too: the buds check every code image against an Img4 manifest
+    signed by Apple (`rkos` 0x4924), the case's payloads are signed.
   - Possible only after a one-time pairing with an Apple device: the
     non-owner sound from Linux once the owner device has been away past
     the separated timeout (no keys needed), or the owner's Sound Start

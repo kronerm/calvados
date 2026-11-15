@@ -373,6 +373,43 @@ switch: [ownership.md](ownership.md).
 What closing the lid does, how several hosts interact, resuming, and the
 case's version: [update-host.md](update-host.md).
 
+## Find My pairing (9B47, the case)
+
+Static only (Nov 15); C unless marked.
+
+- NERF `pairing_control_point.c`, handler 0x3d808: 0x100 initiate, 0x102
+  finalize, 0x104 complete, 0x10b a status of its own. Initiate's result
+  (0x232ca): S1, S2 (≤ 0x500), `ref_key`, `sik_pub`. Finalize (0x23428):
+  seed 32 at +0x59, S3 at +0x79 (length +0xdd, ≤ 100), 60 bytes at +0xde,
+  the BAA leaf at +0x11a (length +0x606, < 0x2c3), the intermediate at
+  +0x3dc (length +0x608, < 0x22b), 8 at +0x60a, 24 at +0x612. NERF passes
+  them to R1 (0x20f40, 0x21620-0x2163c): certificates 0x21, S3 0x1c,
+  check 0x22.
+- R1FW `rkos` (file offset = address; `__DATA` file 0x4c000 = RAM
+  0x20000000): crypto commands at 0x19b34. The S3 check (0x19d12-0x19e8a)
+  hashes 0xaf bytes (the session nonce, a 20-byte field, 8 constant, the
+  seed, SHA-256 of C2, 32 from the check command, `ATTEST_AUTH_TOKEN` or
+  `_NOTKN`) and verifies ECDSA P-256 against `crypto_set_pub_key`'s key
+  (command 0x16) or the built-in one at 0x42e29 (built at 0x1ab8c); the
+  finalize carries no key, so the built-in (G). The chain (0x1b55a): leaf
+  and intermediate plus the embedded Basic Attestation System Root CA
+  (P-384, DER at 0x42bc4, 2017-2032), evaluated CoreTrust-style (0xa66 →
+  0x854, policy at file 0x518f0, OIDs 0x51918); the leaf's key isn't
+  compared with anything (0x3eae0). Errors 0x4017 S3, 0x4018 chain,
+  0x4003 no S3, kept at +0xe8, blocking 0x1aaaa. Also: a P-256 key at
+  0x42de8 (into ctx+0x74 at 0x1b53e, next to `ServerSharedSecret`; the
+  server's encryption key, G), more P-384 anchors (keys 0x3fb24, 0x3fce4,
+  0x3fd70; records 0x519c8-0x51bb0), KDF labels at 0x42e6a.
+- The buds' code is signed: `FTAB` holds an IM4M (at 0x771e90, after
+  `bver`; RSA/SHA-384, `T2016-SDOM1-TssLive-ManifestKey-RevE-DataCenter`
+  under Apple Secure Boot Root CA - G3; BORD 6, CHIP 0x2016, no ECID or
+  nonce) with SHA-384 digests of acib, aopf, bver, lpda, phyb, rkof, rkos,
+  rtpf, sbd1, sbd2 (matching); `rkos` checks them at boot (0x4924,
+  "Digest check failed(%s)"). Not in it: the ls* prompt tones (RIFF WAV),
+  dstn, L*, apmu, btpw.
+- 9A348 rkof: AACP 0x31 lands in `caseTone` (0x885c4), an NVRAM byte
+  synced between the buds (0xc75aa, 0xc7114); it plays nothing.
+
 ## Open
 
 - UARP: see the open list in [uarp.md](uarp.md).
