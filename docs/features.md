@@ -57,12 +57,34 @@ volume); Android fades the music stream to 40 % in 50 ms steps.
 
 ## Not built (yet)
 
-- Loud Sound Reduction (ATT handle 0x1B, 1 byte), transparency
-  customization (ATT 0x18, floats), hearing aid (0x2C/0x33 plus ATT 0x2A,
-  104 bytes): raw ATT on PSM 0x1F (R; Linux through BlueZ's GATT).
-- Head tracking: 0x17 class 0x100000, start/stop frames in LibrePods,
-  orientation at fixed offsets (R). Head gestures are host-side detection
-  on that stream; spatial audio needs a renderer.
+- Raw ATT on PSM 0x1F (R; Linux maybe through BlueZ's GATT, untried). The
+  9B47 GATT table (rkof, 40-byte char entries `[idx 4] [uuid len 4] [uuid
+  16 BE] [props] [ext] [perm 2] [attrs 4] [value 4] [size 4]`; C): handles
+  0x01-0x11 service `9bd708d7…`, 0x12-0x2B `7798082b-b7b7-45a6-9933-
+  563492efe04e`, then FMNS from 0x2C (its 4F860005 at 0x3A). Read and
+  write handlers at 0x67b04 / 0x67904 (table 0x1c09b4).
+  - Loud Sound Reduction: 0x1B, `a48fec08-3921-43db-82aa-afbce8ebb4fb`,
+    read + write without response, 4 bytes stored, byte 0 the toggle (C);
+    LibrePods writes `12 1B 00 [01|00]` (R). No CCCD (0x1C is the next
+    declaration), so other hosts see a change only by reading again.
+    Inferred to persist as NVRAM `hpVar3` (0xc36d4 → 0xa883c).
+  - Transparency customization: 0x18, `d5621cc1-f7ab-45db-9403-
+    9eaf744d5390`, read + write without response, CCCD 0x19 (notifies),
+    104 bytes (C): 26 LE floats, `enabled`, per ear EQ × 8, amplification,
+    tone, conversation boost, ambient noise reduction, then own-voice
+    amplification (R). Written whole. Inferred to persist as NVRAM
+    `pse_var` (0xc3674 → 0xa6094, re-initialised by a factory reset).
+    LibrePods follows a write with AACP 0x53 (accommodation; why is open).
+  - Hearing aid: 0x2A, `a4120005-95c5-4d6f-9098-0f0b41457e0a`, 104 bytes,
+    CCCD 0x2B (C), plus AACP 0x2C/0x33 (R).
+- Head tracking: AACP 0x17 class 0x100000 + protobuf; start `08 A1 02 42
+  0B 08 0E 10 02 1A 05 01 40 9C 00 00`, stop `08 7E 10 02 42 0B 08 4E 10 02
+  1A 05 01 00 00 00 00` (field 8.3: `01` + u32 LE, 40000 or 0, perhaps a
+  period in µs, G); samples ≥ 70 bytes, s16 LE orientation at 43/45/47,
+  acceleration at 51/53 from the frame's start (R; not a quaternion).
+  LibrePods takes the audio before starting (only the owner may get it?)
+  and reads nods and shakes for answering calls. Spatial audio needs a
+  renderer.
 - The hearing test (calibrated tones, undocumented), Live Translation,
   high-quality microphone audio: not feasible.
 
