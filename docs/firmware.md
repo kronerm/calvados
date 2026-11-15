@@ -400,6 +400,25 @@ Static only (Nov 15); C unless marked.
   0x42de8 (into ctx+0x74 at 0x1b53e, next to `ServerSharedSecret`; the
   server's encryption key, G), more P-384 anchors (keys 0x3fb24, 0x3fce4,
   0x3fd70; records 0x519c8-0x51bb0), KDF labels at 0x42e6a.
+- No replay (second pass): the S3 hash's inputs are the host's nonce
+  (initiate +2 → R1 command 5 → `crypto_set_nonce`), the case's serial
+  (20 bytes, NERF 0x3f838), R1's ECID (8, register 0x40346000), 2 bytes
+  from 0x4000c040 (G: a chip id), SeedK1 (32 fresh random bytes from R1's
+  RNG at every `init_pair`, 0x1a37c; the case's S2 attests it), and from
+  the host SHA-256(C2), SeedS and the token string. NERF sends R1 only
+  commands 0x00-0x03, 0x05, 0x09, 0x1b, 0x1c, 0x20-0x22, 0x26 (senders
+  0x1c448, 0x1c690), never `ref_key` 0x15, `pub_key` 0x16 or `rand` 0x17,
+  so S3 is always checked against the key at 0x42e29 (corecrypto, strict
+  DER, r and s range-checked at 0x37100). R1's command names: 0 cfg1, 1
+  cfg2, 2 cfg3, 3 keyroll, 5 init_pair, 9 final_pair, 0x1b C2, 0x1c S3,
+  0x20 erase key seed, 0x21 cert, 0x22 val_s3, 0x26 E1.
+- NERF's Find My state machine: core table 0x503f8 (`[state, table,
+  count]`, entries `[event, next on success, next on failure]` + handler),
+  the extension table 0x481b8 (CONNECTED and the sound and finding
+  states, from findMySmInit 0x37700), dispatcher 0x378b0, state names
+  0x5059c, per-state timeouts 0x505d8. Non-owner sound (0x3d040) is gated
+  on near-owner mode 0x20008040 ≠ 2 (0x37f10), CONNECTED only; the motion
+  sound is event 0x23 (0x3e548), WILD only.
 - The buds' code is signed: `FTAB` holds an IM4M (at 0x771e90, after
   `bver`; RSA/SHA-384, `T2016-SDOM1-TssLive-ManifestKey-RevE-DataCenter`
   under Apple Secure Boot Root CA - G3; BORD 6, CHIP 0x2016, no ECID or
