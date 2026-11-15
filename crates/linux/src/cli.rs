@@ -30,6 +30,7 @@ usage: calvados                      run the daemon
                                     volume-swipe-length  default|longer|longest
        calvados rename NAME         rename the AirPods
        calvados find                their signal as you move (Ctrl-C ends)
+       calvados find start|stop     find them in the background (ends after 5 min)
        calvados firmware status     the firmware, the latest release, an update
        calvados firmware update     update the AirPods to the latest release
        calvados firmware cancel     stop an update
@@ -78,6 +79,10 @@ trait Calvados {
     fn rename(&self, name: &str) -> zbus::Result<()>;
     #[zbus(property)]
     fn signal(&self) -> zbus::Result<i16>;
+    #[zbus(property)]
+    fn finding(&self) -> zbus::Result<bool>;
+    #[zbus(property)]
+    fn set_finding(&self, on: bool) -> zbus::Result<()>;
     #[zbus(property)]
     fn auto_switch(&self) -> zbus::Result<bool>;
     #[zbus(property)]
@@ -130,6 +135,8 @@ pub async fn run(args: &[String]) -> anyhow::Result<()> {
         ["set", "pod", name, value] => proxy.set_pod(name, value).await.map_err(failure),
         ["rename", name] => proxy.rename(name).await.map_err(failure),
         ["find"] => find(&proxy).await,
+        ["find", "start"] => proxy.set_finding(true).await.map_err(failure),
+        ["find", "stop"] => proxy.set_finding(false).await.map_err(failure),
         ["firmware", "status"] => firmware_status(&proxy).await,
         ["firmware", "update"] => firmware_update(&bus, &proxy).await,
         ["firmware", "cancel"] => proxy.cancel_update().await.map_err(failure),
@@ -326,12 +333,25 @@ async fn watch(bus: &zbus::Connection, proxy: &CalvadosProxy<'_>) -> anyhow::Res
     }
 }
 
-/// Their signal, a line per change: a bar and warmer/colder.
+/// Their signal, a line per change: a bar and warmer/colder, until Ctrl-C
+/// or finding ends.
 async fn find(proxy: &CalvadosProxy<'_>) -> anyhow::Result<()> {
-    let mut poll = tokio::time::interval(std::time::Duration::from_millis(500));
+    proxy.set_finding(true).await.map_err(failure)?;
     println!("Move around; stronger is closer. Ctrl-C ends.");
+    tokio::select! {
+        result = follow_signal(proxy) => result,
+        _ = tokio::signal::ctrl_c() => proxy.set_finding(false).await.map_err(failure),
+    }
+}
+
+async fn follow_signal(proxy: &CalvadosProxy<'_>) -> anyhow::Result<()> {
+    let mut poll = tokio::time::interval(std::time::Duration::from_millis(500));
     let mut last: Option<i16> = None;
     loop {
+        if !proxy.finding().await.map_err(failure)? {
+            println!("Finding ended.");
+            return Ok(());
+        }
         let signal = proxy.signal().await.map_err(failure)?;
         if Some(signal) != last {
             match signal {
@@ -364,6 +384,7 @@ async fn snapshot(proxy: &CalvadosProxy<'_>) -> Value {
             (proxy.noise_mode().await?, proxy.cycle().await?),
             (proxy.auto_switch().await?, proxy.pods().await?),
             proxy.auto_connect().await?,
+            (proxy.finding().await?, proxy.signal().await?),
             (
                 proxy.firmware().await?,
                 proxy.latest_firmware().await?,
@@ -381,6 +402,7 @@ async fn snapshot(proxy: &CalvadosProxy<'_>) -> Value {
         (noise, cycle),
         (auto_switch, pods),
         auto_connect,
+        (finding, signal),
         firmware,
     )) = read.await
     else {
@@ -399,6 +421,8 @@ async fn snapshot(proxy: &CalvadosProxy<'_>) -> Value {
         "auto_switch": auto_switch,
         "auto_connect": auto_connect,
         "pods": pods,
+        "finding": finding,
+        "signal": signal,
         "firmware": firmware,
         "latest_firmware": latest_firmware,
         "firmware_update": firmware_update,

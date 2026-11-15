@@ -68,7 +68,9 @@ volume); Android fades the music stream to 40 % in 50 ms steps.
 
 ## Find My
 
-Built: on Linux, `calvados find`, the signal as you move.
+Built: finding by signal, on both: More's Find (and `calvados find`)
+shows how close the buds' advertisement sounds for 5 minutes; Android
+scans at full duty meanwhile.
 
 - Playing a sound on the buds: only as ordinary audio over A2DP, at the
   host's volume; no AACP "play sound" is known (R/C). A chime that way was

@@ -187,6 +187,9 @@ pub enum Effect {
         kind: KeyType,
         key: [u8; 16],
     },
+    /// Scan for the pods' advertisements at full duty, each with its
+    /// signal, or stop ([`Engine::find`]); Linux's monitor always does.
+    FindScan(bool),
     /// Pause local media playback (a bud left an ear).
     Pause,
     /// Resume the playback [`Effect::Pause`] paused.
@@ -248,11 +251,16 @@ pub struct Engine {
     latest: Option<Release>,
     /// Our pods' last advertisement's signal strength (dBm), and when.
     signal: Option<(i16, Instant)>,
+    /// While finding them: until when ([`FIND_FOR`] from the start).
+    finding: Option<Instant>,
 }
 
 /// How long a signal reading stays current: the pods advertise a few times
 /// a second.
 const SIGNAL_FRESH: Duration = Duration::from_secs(10);
+
+/// How long finding lasts unless stopped: its scan runs at full duty.
+const FIND_FOR: Duration = Duration::from_secs(5 * 60);
 
 /// The AACP session.
 #[derive(Debug)]
@@ -616,10 +624,15 @@ impl Engine {
             Some(Update::Running(updater)) => updater.next_wake(),
             _ => None,
         };
+        // While finding, a reading going stale shows.
+        let stale = self
+            .signal
+            .filter(|_| self.finding())
+            .map(|(_, at)| at + SIGNAL_FRESH);
         session
             .into_iter()
             .flatten()
-            .chain([self.redial_at(), update])
+            .chain([self.redial_at(), update, self.finding, stale])
             .flatten()
             .min()
     }
@@ -640,6 +653,13 @@ impl Engine {
         let update = self.with_updater(|updater| updater.tick(now));
         let uarp = self.settle_uarp(now);
         let crash_logs = self.ask_crash_logs(now);
+        if due(self.signal.map(|(_, at)| at + SIGNAL_FRESH)) {
+            self.signal = None;
+        }
+        let find = match due(self.finding) {
+            true => self.stop_finding(),
+            false => Vec::new(),
+        };
         startup
             .into_iter()
             .chain(claim)
@@ -648,6 +668,7 @@ impl Engine {
             .chain(update)
             .chain(uarp)
             .chain(crash_logs)
+            .chain(find)
             .collect()
     }
 
@@ -724,6 +745,32 @@ impl Engine {
         self.signal
             .filter(|&(_, at)| now.saturating_duration_since(at) < SIGNAL_FRESH)
             .map(|(rssi, _)| rssi)
+    }
+
+    /// Start finding the pods, or keep finding for [`FIND_FOR`] more: the
+    /// platforms show [`Self::signal`] while [`Self::finding`].
+    pub fn find(&mut self, now: Instant) -> Vec<Effect> {
+        tracing::info!("finding the pods");
+        let started = self.finding.replace(now + FIND_FOR).is_none();
+        started
+            .then_some(Effect::FindScan(true))
+            .into_iter()
+            .collect()
+    }
+
+    pub fn stop_finding(&mut self) -> Vec<Effect> {
+        self.finding
+            .take()
+            .map(|_| {
+                tracing::info!("finding ended");
+                Effect::FindScan(false)
+            })
+            .into_iter()
+            .collect()
+    }
+
+    pub fn finding(&self) -> bool {
+        self.finding.is_some()
     }
 
     /// Rename the pods (at most 32 bytes); they report the new name.
@@ -2543,6 +2590,36 @@ mod tests {
             e.nearby(address, &[], None, keys(), later + REDIAL_GAP)
                 .is_empty()
         );
+    }
+
+    #[test]
+    fn finding_scans_until_stopped_or_timed_out() {
+        let mut irk = 0xec0234a357c8ad05341010a60a397d9b_u128.to_be_bytes();
+        irk.reverse();
+        let address = [0x70, 0x81, 0x94, 0x0d, 0xfb, 0xaa];
+        let keys = [(
+            mac(PODS),
+            crate::ble::PodsKeys {
+                irk,
+                encryption: None,
+            },
+        )];
+        let mut e = Engine::new(None, Settings::default());
+        assert_eq!(e.find(now()), [Effect::FindScan(true)]);
+        assert!(e.find(now()).is_empty(), "already scanning");
+        e.nearby(address, &[], Some(-60), keys, now());
+        assert_eq!(e.signal(now()), Some(-60));
+        // The reading goes stale first, then finding ends.
+        let stale = now() + SIGNAL_FRESH;
+        assert_eq!(e.next_wake(), Some(stale));
+        assert!(e.tick(stale).is_empty());
+        assert_eq!(e.signal(stale), None);
+        assert_eq!(e.next_wake(), Some(now() + FIND_FOR));
+        assert_eq!(e.tick(now() + FIND_FOR), [Effect::FindScan(false)]);
+        assert!(!e.finding());
+        e.find(now());
+        assert_eq!(e.stop_finding(), [Effect::FindScan(false)]);
+        assert!(e.stop_finding().is_empty());
     }
 
     #[test]

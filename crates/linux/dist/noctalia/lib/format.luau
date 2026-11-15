@@ -166,6 +166,21 @@ function format.update(state)
   return line and `{line} · {peer.host}` or nil
 end
 
+-- While finding the AirPods, by their signal (dBm, 0 unheard), as the
+-- Android notification has it (protocol's `display::finding`); nil
+-- otherwise.
+function format.finding(state)
+  if not state.finding then
+    return nil
+  end
+  local dbm = state.signal or 0
+  if dbm == 0 then
+    return "Finding: not heard yet"
+  end
+  local distance = dbm >= -50 and "very close" or dbm >= -65 and "close" or dbm >= -80 and "nearby" or "far"
+  return `Finding: {distance} ({dbm} dBm)`
+end
+
 -- The AirPods' own settings (protocol's `PodSetting`), in its order: the
 -- name `calvados set pod` takes, the title, and the kind (a switch unless
 -- said). `main` ones are rows of their own in the panel, with what they do;

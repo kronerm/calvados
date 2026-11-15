@@ -177,9 +177,35 @@ pub fn peer_update(peer: PeerUpdate) -> String {
     )
 }
 
+/// The line while finding the pods, by their signal (dBm), as the panel
+/// (`format.finding`) and the notification show it: `Finding: close (-62
+/// dBm)`. Stronger is closer: about -40 next to them, -90 at the edge.
+pub fn finding(signal: Option<i16>) -> String {
+    match signal {
+        None => "Finding: not heard yet".to_owned(),
+        Some(dbm) => {
+            let distance = match dbm {
+                -50.. => "very close",
+                -65.. => "close",
+                -80.. => "nearby",
+                _ => "far",
+            };
+            format!("Finding: {distance} ({dbm} dBm)")
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn finding_reads_the_signal() {
+        assert_eq!(finding(None), "Finding: not heard yet");
+        assert_eq!(finding(Some(-42)), "Finding: very close (-42 dBm)");
+        assert_eq!(finding(Some(-65)), "Finding: close (-65 dBm)");
+        assert_eq!(finding(Some(-81)), "Finding: far (-81 dBm)");
+    }
     use crate::aacp::{BatteryComponent, Bud, EarDetection, Packet, PrimaryBud};
 
     #[test]

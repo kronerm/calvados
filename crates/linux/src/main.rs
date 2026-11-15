@@ -79,6 +79,8 @@ enum Input {
     /// One of the pods' settings, as the byte to send.
     Pod(PodSetting, u8),
     Rename(String),
+    /// Start finding the pods (or extend it), or stop.
+    Find(bool),
     /// The release's package for the update, `None` when it couldn't be had.
     Package(Option<Package>),
 }
@@ -319,6 +321,8 @@ async fn run(daemon: &Daemon, mut engine: Engine, inputs: &mut mpsc::UnboundedRe
                 Input::CancelUpdate => engine.cancel_update(),
                 Input::Pod(setting, raw) => engine.set_pod(setting, raw),
                 Input::Rename(name) => engine.rename(&name),
+                Input::Find(true) => engine.find(Instant::now()),
+                Input::Find(false) => engine.stop_finding(),
                 Input::Package(package) => engine.package(package, Instant::now()),
             },
             Some(playing) = playback_change(&mut playback) => {
@@ -393,7 +397,8 @@ async fn perform(daemon: &Daemon, session: Option<&Session>, effect: Effect) -> 
             .into_iter()
             .for_each(|pods| daemon.audio.restart_stream(pods)),
         // BlueZ always knows our MAC.
-        Effect::LearnedLocalMac(_) => {}
+        // BlueZ's monitor reports every advertisement's signal anyway.
+        Effect::LearnedLocalMac(_) | Effect::FindScan(_) => {}
         Effect::LearnedKey { pods, kind, key } => presence::save_key(pods, kind, key),
         Effect::Pause => daemon.media.iter().for_each(mpris::Media::pause),
         Effect::Resume => daemon.media.iter().for_each(mpris::Media::resume),

@@ -6,6 +6,7 @@ use num_enum::IntoPrimitive;
 #[repr(i32)]
 pub enum ScanMode {
     Balanced = 1,
+    LowLatency = 2,
 }
 
 bitflags::bitflags! {
@@ -15,6 +16,8 @@ bitflags::bitflags! {
         /// One result when a device is first found, filtered in the
         /// controller.
         const FIRST_MATCH = 2;
+        /// Every advertisement.
+        const ALL_MATCHES = 1;
     }
 }
 

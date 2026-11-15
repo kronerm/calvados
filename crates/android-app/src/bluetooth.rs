@@ -30,7 +30,28 @@ const KEY_LOCAL_MAC: &str = "local_bt_mac";
 /// `BluetoothLeScanner.EXTRA_LIST_SCAN_RESULT`.
 const EXTRA_LIST_SCAN_RESULT: &str = "android.bluetooth.le.extra.LIST_SCAN_RESULT";
 
-const NEARBY_REQUEST_CODE: i32 = 0x0B1E;
+/// The BLE scans for the pods' proximity pairing advertisement (`4c 00
+/// 07`), filtered in the controller, delivering [`ACTION_NEARBY`] intents
+/// (see [`nearby_advertisers`]); the system keeps scanning while the app is
+/// gone.
+#[derive(Debug, Clone, Copy)]
+pub(crate) enum Scan {
+    /// Always: one result per newly found device, not from the closed case
+    /// (pods charging in it advertise too).
+    Presence,
+    /// While finding them: every advertisement with its signal, the closed
+    /// case's too.
+    Find,
+}
+
+impl Scan {
+    fn request_code(self) -> i32 {
+        match self {
+            Self::Presence => 0x0B1E,
+            Self::Find => 0x0B1F,
+        }
+    }
+}
 
 /// A remembered setting (preferences), on until first turned off.
 pub(crate) fn load_setting(setting: Setting) -> bool {
@@ -80,12 +101,8 @@ pub(crate) fn stored_keys() -> anyhow::Result<Option<(MacAddress, PodsKeys)>> {
     Ok(Some((pods, PodsKeys { irk, encryption })))
 }
 
-/// Start or stop watching for Apple proximity pairing advertisements
-/// (`4c 00 07`) not from the closed case (pods charging in it advertise
-/// too), filtered in the controller, one result per newly found device.
-/// Results start the service as [`ACTION_NEARBY`] intents (see
-/// [`nearby_advertisers`]); the system keeps scanning while the app is gone.
-pub(crate) fn set_presence_scan(enabled: bool) -> anyhow::Result<()> {
+/// Start or stop `scan`.
+pub(crate) fn set_scan(scan: Scan, enabled: bool) -> anyhow::Result<()> {
     with_env(|env| {
         let context = app_context(env)?;
         let intent = service_intent(env, &context, ACTION_NEARBY)?;
@@ -94,7 +111,7 @@ pub(crate) fn set_presence_scan(enabled: bool) -> anyhow::Result<()> {
         let callback = PendingIntent::get_foreground_service(
             env,
             &context,
-            NEARBY_REQUEST_CODE,
+            scan.request_code(),
             &intent,
             flags,
         )?;
@@ -104,7 +121,18 @@ pub(crate) fn set_presence_scan(enabled: bool) -> anyhow::Result<()> {
         if !enabled {
             return Ok(());
         }
-        let pattern = Pattern::proximity().lid_open();
+        let (pattern, mode, callback_type) = match scan {
+            Scan::Presence => (
+                Pattern::proximity().lid_open(),
+                ScanMode::Balanced,
+                CallbackType::FIRST_MATCH,
+            ),
+            Scan::Find => (
+                Pattern::proximity(),
+                ScanMode::LowLatency,
+                CallbackType::ALL_MATCHES,
+            ),
+        };
         let filter = ScanFilter::builder(env)?
             .set_manufacturer_data(
                 env,
@@ -115,8 +143,8 @@ pub(crate) fn set_presence_scan(enabled: bool) -> anyhow::Result<()> {
             .build(env)?;
         let filters = List::singleton(env, filter.as_obj())?;
         let settings = ScanSettings::builder(env)?
-            .set_scan_mode(env, ScanMode::Balanced)?
-            .set_callback_type(env, CallbackType::FIRST_MATCH)?
+            .set_scan_mode(env, mode)?
+            .set_callback_type(env, callback_type)?
             .build(env)?;
         match scanner.start_scan(env, &filters, &settings, &callback)? {
             0 => Ok(()),
@@ -125,12 +153,12 @@ pub(crate) fn set_presence_scan(enabled: bool) -> anyhow::Result<()> {
     })
 }
 
-/// The advertisers in a [`ACTION_NEARBY`] intent: address, and Apple's
-/// manufacturer data (from the type byte; empty if missing).
+/// The advertisers in a [`ACTION_NEARBY`] intent: address, Apple's
+/// manufacturer data (from the type byte; empty if missing), and signal.
 pub(crate) fn nearby_advertisers<'local>(
     env: &mut Env<'local>,
     intent: &Intent<JObject<'local>>,
-) -> anyhow::Result<Vec<(MacAddress, Vec<u8>)>> {
+) -> anyhow::Result<Vec<(MacAddress, Vec<u8>, i16)>> {
     let Some(results) = intent.get_parcelable_array_list_extra(env, EXTRA_LIST_SCAN_RESULT)? else {
         return Ok(Vec::new());
     };
@@ -142,12 +170,14 @@ pub(crate) fn nearby_advertisers<'local>(
                 .get_scan_record(env)?
                 .get_manufacturer_specific_data(env, i32::from(APPLE_COMPANY_ID))?;
             let data = data.unwrap_or_default();
+            let rssi = result.get_rssi(env)?;
             tracing::debug!(
                 address,
                 data = hex::encode(&data),
+                rssi,
                 "Apple device advertising nearby"
             );
-            Ok(address.parse().ok().map(|address| (address, data)))
+            Ok(address.parse().ok().map(|address| (address, data, rssi)))
         })
         .filter_map(Result::transpose)
         .collect()
