@@ -1,7 +1,5 @@
 //! The persistent notification, the app's only UI.
 
-use std::time::Instant;
-
 use jni::JavaVM;
 use jni::objects::JObject;
 
@@ -64,12 +62,10 @@ pub(crate) struct Content {
     noise: &'static str,
     /// The press-and-hold cycle; `None` until set from here.
     cycle: Option<Cycle>,
-    /// The header's one line: finding the pods, else a refused update's
-    /// reason, else an update's progress (ours, else another host's), else
-    /// `Firmware 7.1.21 · 9.0.348 available` while connected; empty for none.
+    /// The header's one line: a refused update's reason, else an update's
+    /// progress (ours, else another host's), else `Firmware 7.1.21 · 9.0.348
+    /// available` while connected; empty for none.
     header: String,
-    /// While finding the pods: a button to stop on both pages.
-    finding: bool,
     /// The button under the expanded view, while there's one to offer.
     update_action: Option<UpdateAction>,
     /// The main page's rows: Conversation Awareness and Personalized
@@ -191,13 +187,7 @@ fn header(
 impl Content {
     /// `latest`: the catalog's release for the pods, once checked.
     /// `page`: the one asked for, shown while connected.
-    pub(crate) fn of(
-        engine: &Engine,
-        conn: &Conn,
-        latest: Option<&Release>,
-        page: Page,
-        now: Instant,
-    ) -> Self {
+    pub(crate) fn of(engine: &Engine, conn: &Conn, latest: Option<&Release>, page: Page) -> Self {
         let state = engine.state();
         let settings = engine.settings();
         let name = state.name.as_deref().unwrap_or("AirPods");
@@ -220,17 +210,13 @@ impl Content {
             buds: connected.then(|| Buds::of(state)),
             noise: display::mode_name(state.noise_mode),
             cycle: state.cycle,
-            header: match engine.finding() {
-                true => display::finding(engine.signal(now)),
-                false => header(
-                    // Also while the pods are away: an interrupted update waits.
-                    engine.update_status(),
-                    state.peer_update,
-                    display::firmware(&state.firmware).filter(|_| connected),
-                    newer,
-                ),
-            },
-            finding: engine.finding(),
+            header: header(
+                // Also while the pods are away: an interrupted update waits.
+                engine.update_status(),
+                state.peer_update,
+                display::firmware(&state.firmware).filter(|_| connected),
+                newer,
+            ),
             update_action: UpdateAction::of(
                 engine.update_status(),
                 state.peer_update,
@@ -293,7 +279,6 @@ impl Content {
             noise: "",
             cycle: None,
             header: String::new(),
-            finding: false,
             update_action: None,
             main: MAIN.map(|setting| (setting, None)),
             page: Page::Main,
@@ -376,8 +361,7 @@ impl Content {
 
     /// Under the expanded view: the way to the other page (More holds this
     /// phone's settings, so it's there while not connected too), and on it,
-    /// while connected, renaming the pods (a remote input), and finding
-    /// them; while finding, a stop on both pages.
+    /// while connected, renaming the pods (a remote input).
     fn page_actions<'local>(
         &self,
         env: &mut jni::Env<'local>,
@@ -391,27 +375,14 @@ impl Content {
         let pending = Request::Page(other).pending_intent(env, context, 50)?;
         let action = Action::new(env, label, &pending)?;
         let builder = builder.add_action(env, &action)?;
-        let builder = match self.page {
+        match self.page {
             Page::Pods if self.buds.is_some() => {
                 let pending = Request::Rename.pending_intent(env, context, 51)?;
                 let input = RemoteInput::new(env, RENAME_KEY, "Rename AirPods")?;
                 let action = Action::with_remote_input(env, "Rename", &pending, &input)?;
-                builder.add_action(env, &action)?
-            }
-            _ => builder,
-        };
-        let find = match (self.finding, self.page) {
-            (true, _) => Some(("Stop finding", Request::StopFinding)),
-            (false, Page::Pods) => Some(("Find", Request::Find)),
-            (false, Page::Main) => None,
-        };
-        match find {
-            Some((label, request)) => {
-                let pending = request.pending_intent(env, context, 52)?;
-                let action = Action::new(env, label, &pending)?;
                 builder.add_action(env, &action)
             }
-            None => Ok(builder),
+            _ => Ok(builder),
         }
     }
 

@@ -44,19 +44,13 @@ const ACTION_AUTO_SWITCH: &str = "AUTO_SWITCH";
 /// [`Request::Toggle`] of [`Setting::AutoConnect`].
 const ACTION_AUTO_CONNECT: &str = "AUTO_CONNECT";
 
-/// [`Request::Find`].
-const ACTION_FIND: &str = "FIND";
-
-/// [`Request::StopFinding`].
-const ACTION_STOP_FINDING: &str = "STOP_FINDING";
-
 /// [`Request::StartUpdate`].
 const ACTION_UPDATE_FIRMWARE: &str = "UPDATE_FIRMWARE";
 
 /// [`Request::CancelUpdate`].
 const ACTION_CANCEL_UPDATE: &str = "CANCEL_UPDATE";
 
-/// BLE scan results (see [`crate::bluetooth::Scan`]).
+/// BLE scan results (see [`crate::bluetooth::set_presence_scan`]).
 pub(crate) const ACTION_NEARBY: &str = "NEARBY";
 
 const ACL_CONNECTED: &str = "android.bluetooth.device.action.ACL_CONNECTED";
@@ -97,9 +91,6 @@ pub(crate) enum Request {
     Pod(PodSetting),
     /// Show a page of the expanded notification.
     Page(Page),
-    /// Start finding the pods, or keep finding longer.
-    Find,
-    StopFinding,
     /// Rename the pods; the name comes as a remote input, so it arrives as
     /// [`Event::Rename`].
     Rename,
@@ -118,8 +109,6 @@ impl Request {
             Self::Page(Page::Main) => ACTION_PAGE_MAIN.to_owned(),
             Self::Page(Page::Pods) => ACTION_PAGE_PODS.to_owned(),
             Self::Rename => ACTION_RENAME.to_owned(),
-            Self::Find => ACTION_FIND.to_owned(),
-            Self::StopFinding => ACTION_STOP_FINDING.to_owned(),
         }
     }
 
@@ -150,8 +139,6 @@ impl Request {
             ACTION_PAGE_MAIN => Some(Self::Page(Page::Main)),
             ACTION_PAGE_PODS => Some(Self::Page(Page::Pods)),
             ACTION_RENAME => Some(Self::Rename),
-            ACTION_FIND => Some(Self::Find),
-            ACTION_STOP_FINDING => Some(Self::StopFinding),
             _ => (mode(ACTION_NOISE_PREFIX).map(Self::Noise))
                 .or_else(|| mode(ACTION_CYCLE_PREFIX).map(Self::Cycle))
                 .or_else(|| {
@@ -262,8 +249,6 @@ mod tests {
             Request::Page(Page::Main),
             Request::Page(Page::Pods),
             Request::Rename,
-            Request::Find,
-            Request::StopFinding,
         ];
         for request in requests {
             let action = request.action();

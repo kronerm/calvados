@@ -90,9 +90,9 @@ volume); Android fades the music stream to 40 % in 50 ms steps.
 
 ## Find My
 
-Built: finding by signal, on both: More's Find (and `calvados find`)
-shows how close the buds' advertisement sounds for 5 minutes; Android
-scans at full duty meanwhile.
+Nothing built: without the Find My owner's keys there's neither the
+case's sound nor a precise location. Finding by the buds' signal strength
+was built and removed (Nov 15): too coarse and jumpy to lead anywhere.
 
 - Playing a sound on the buds: only as ordinary audio over A2DP, at the
   host's volume; no AACP "play sound" is known (R/C). A chime that way was

@@ -9,10 +9,8 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use firmware_fetch::{Catalog, Client};
 use jni::JavaVM;
 
-use crate::bluetooth::{self, Scan};
 use crate::intents::Request;
 use crate::link::{self, BluetoothEvent};
-use crate::media;
 use crate::notification::{Content, Page};
 use crate::proto::MacAddress;
 use crate::proto::aacp::{NoiseControlMode, crash_log};
@@ -22,6 +20,7 @@ use crate::proto::firmware::Release;
 use crate::proto::protocol::Decoder;
 use crate::proto::settings::{Setting, Settings};
 use crate::proto::superbinary::Package;
+use crate::{bluetooth, media};
 
 /// Android sheds notification updates beyond ~5/s; stay well under that.
 const NOTIFY_MIN_INTERVAL: Duration = Duration::from_millis(300);
@@ -51,7 +50,7 @@ pub(crate) enum Event {
     /// A phone call is off-hook (answered or placed), or ended.
     PhoneCall(bool),
     /// Apple devices advertising nearby: address and manufacturer data.
-    Nearby(Vec<(MacAddress, Vec<u8>, i16)>),
+    Nearby(Vec<(MacAddress, Vec<u8>)>),
     /// A firmware catalog check for these models (a product's): its
     /// current release, `None` when it failed.
     Catalog(Vec<String>, Option<Release>),
@@ -177,11 +176,9 @@ fn service_main(jvm: JavaVM, events: crossbeam_channel::Receiver<Event>) {
         tracing::warn!("checking for connected AirPods failed: {e:#}");
     }
     // The pods page only the host that last had the audio: watch for them.
-    if let Err(e) = bluetooth::set_scan(Scan::Presence, true) {
+    if let Err(e) = bluetooth::set_presence_scan(true) {
         tracing::warn!("no AirPods presence scan: {e:#}");
     }
-    // One a killed run left behind.
-    set_find_scan(false);
 
     loop {
         // Sleep until an event or the next timed job.
@@ -228,16 +225,15 @@ fn service_main(jvm: JavaVM, events: crossbeam_channel::Receiver<Event>) {
                     .inspect_err(|e| tracing::warn!("reading the AirPods' keys: {e:#}"))
                     .ok()
                     .flatten();
-                effects.extend(advertisers.iter().flat_map(|(address, data, rssi)| {
-                    engine.nearby(address.to_array(), data, Some(*rssi), keys, now)
+                effects.extend(advertisers.iter().flat_map(|(address, data)| {
+                    engine.nearby(address.to_array(), data, keys, now)
                 }));
             }
             Some(Event::Stop) => {
                 tracing::info!("Service shutting down");
-                if let Err(e) = bluetooth::set_scan(Scan::Presence, false) {
+                if let Err(e) = bluetooth::set_presence_scan(false) {
                     tracing::warn!("stopping the AirPods presence scan: {e:#}");
                 }
-                set_find_scan(false);
                 if !matches!(conn, Conn::Disconnected { .. }) {
                     link::disconnect();
                 }
@@ -253,12 +249,8 @@ fn service_main(jvm: JavaVM, events: crossbeam_channel::Receiver<Event>) {
             }
             Some(Event::AclDown) => available = false,
             Some(Event::BluetoothOn) => {
-                if let Err(e) = bluetooth::set_scan(Scan::Presence, true) {
+                if let Err(e) = bluetooth::set_presence_scan(true) {
                     tracing::warn!("no AirPods presence scan: {e:#}");
-                }
-                // Turning Bluetooth off ended it.
-                if engine.finding() {
-                    set_find_scan(true);
                 }
             }
             Some(Event::Request(request)) => match request {
@@ -292,8 +284,6 @@ fn service_main(jvm: JavaVM, events: crossbeam_channel::Receiver<Event>) {
                     None => tracing::info!(?setting, "not reported by the pods yet"),
                 },
                 Request::Page(next) => page = next,
-                Request::Find => effects.extend(engine.find(now)),
-                Request::StopFinding => effects.extend(engine.stop_finding()),
                 // Parsed as `Event::Rename`.
                 Request::Rename => {}
             },
@@ -378,7 +368,7 @@ fn service_main(jvm: JavaVM, events: crossbeam_channel::Receiver<Event>) {
         // Post only changes, throttled; a change during the pause is posted
         // when it ends, so the latest state always lands.
         let latest = model.and_then(|model| catalog.latest(model));
-        let content = Content::of(&engine, &conn, latest, page, now);
+        let content = Content::of(&engine, &conn, latest, page);
         match &shown {
             Some((current, _)) if *current == content => notify_at = None,
             Some((_, posted)) if now < *posted + NOTIFY_MIN_INTERVAL => {
@@ -446,12 +436,6 @@ fn fetch_package(client: &Client, release: Release, cache: Option<PathBuf>) {
     });
 }
 
-fn set_find_scan(enabled: bool) {
-    if let Err(e) = bluetooth::set_scan(Scan::Find, enabled) {
-        tracing::warn!(enabled, "the AirPods find scan: {e:#}");
-    }
-}
-
 /// Perform one engine [`Effect`]; `false` if the link is dead.
 fn execute_effect(conn: &Conn, effect: Effect, in_call: bool) -> bool {
     match effect {
@@ -503,7 +487,6 @@ fn execute_effect(conn: &Conn, effect: Effect, in_call: bool) -> bool {
                 tracing::warn!("failed to persist local MAC: {e:#}");
             }
         }
-        Effect::FindScan(enabled) => set_find_scan(enabled),
         Effect::Pause => log_media("pause", media::pause()),
         Effect::Resume => log_media("resume", media::resume()),
         Effect::Duck => media::duck(true),

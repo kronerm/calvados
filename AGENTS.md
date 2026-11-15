@@ -137,12 +137,7 @@ Cargo's downloads, `target` and cargo-apk2 are cached per job, keyed on
   `Engine::rename` (0x1A). Conversation Awareness: the pods' 0x4B level
   1-2 while media plays here emits `Effect::Duck` once; 6, 8, 9, losing
   the audio, or the setting going off `Effect::Unduck`. Encodings and the
-  research: docs/features.md. Finding them:
-  `Engine::signal` is the latest advertisement's RSSI within 10 s
-  (`nearby` takes it); `Engine::find` starts finding for 5 minutes
-  (`stop_finding`, `tick`), emitting `Effect::FindScan`: Android then runs
-  a second scan reporting every advertisement (Linux's monitor always
-  does). The line is `display::finding`.
+  research: docs/features.md.
 - `display.rs` — what both platforms show, so they read the same: `Buds`
   (per component: level, charging, last known, place, primary), the
   ownership label, the noise modes' names (D-Bus `NoiseMode`, the Android
@@ -381,9 +376,6 @@ power-on (`LinkChange`). Its length caps at 255, i.e. 15 events.
   case level from it. Don't add a batched scan of every in-case match: one
   (Oct 8-18) got every worn AirPods nearby and woke the phone every ~5.5 s
   (and a `PendingIntent` scan outlives the app: stop it by request code).
-  Finding runs a second scan (`Scan::Find`: low latency, every match, the
-  closed case too, with each result's RSSI) only while the engine finds,
-  stopped at the service's start and stop.
 - `intents.rs` — action names, intents to the service, and `parse`, which
   turns an incoming one into an `Event`. The notification's buttons are a
   `Request` each (`action`, `pending_intent`, and parsed back), so the
@@ -467,8 +459,6 @@ power-on (`LinkChange`). Its length caps at 255, i.e. 15 events.
   (the host first).
 - `cli.rs` — `calvados set pod <setting> <value>|toggle` and `rename
   <name>` (D-Bus `Pods` a{ss}, `SetPod`, `Rename`; `watch` carries `pods`),
-  and `find` (sets D-Bus `Finding`, polls `Signal`, dBm, 0 when unheard
-  or not finding; `find start|stop` for the panel),
   `calvados watch` / `set …` / `firmware
   status|update|cancel|try-probe-case`: a zbus proxy client of the daemon's
   own D-Bus object (no daemon logic), for shells without D-Bus. `firmware
@@ -600,11 +590,6 @@ texts are written twice. A change to one side needs the other:
   a switch that's on filled like a selected noise tile, a tap the next
   value, the adaptive level in the panel's steps, `PodSetting::next`;
   buttons More, Back, Rename with a `RemoteInput`).
-- finding the pods: a Find button in More (the panel's last row, the
-  notification's More page action), 5 minutes; meanwhile the signal as
-  `display::finding` / `format.finding` ("Finding: close (-62 dBm)") in
-  the firmware line's place (the panel's last line, the notification's
-  header subtext), with a stop ("Stop" / "Stop finding", on both pages).
 
 ## Ownership model
 

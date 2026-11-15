@@ -83,10 +83,6 @@ pub struct Status {
     auto_connect: bool,
     /// The pods' settings as reported: name → value.
     pods: Vec<(String, String)>,
-    finding: bool,
-    /// Their advertisement's signal while finding, dBm; 0 when not heard
-    /// lately.
-    signal: i16,
 }
 
 impl Status {
@@ -101,10 +97,6 @@ impl Status {
             },
         };
         Self {
-            finding: engine.finding(),
-            signal: (engine.signal(std::time::Instant::now()))
-                .filter(|_| engine.finding())
-                .unwrap_or(0),
             // Also while the pods are away: an interrupted update waits.
             update: wire_update(engine.update_status()),
             auto_switch: settings.auto_switch,
@@ -243,28 +235,6 @@ impl CalvadosService {
         let wanted = setting.text(raw);
         tracing::info!(name, value, "D-Bus: set a pods' setting");
         self.apply(Input::Pod(setting, raw), |status| shown(status) == wanted)
-            .await
-    }
-
-    /// Our AirPods' Bluetooth signal in dBm while `Finding`, from their
-    /// advertisement (about -40 right by them, -90 at the edge); 0 when not
-    /// heard for 10 s or not finding.
-    #[zbus(property)]
-    fn signal(&self) -> i16 {
-        self.snapshot().signal
-    }
-
-    /// Finding the AirPods: `Signal` follows them. Setting it on again
-    /// extends it; it ends by itself after 5 minutes.
-    #[zbus(property)]
-    fn finding(&self) -> bool {
-        self.snapshot().finding
-    }
-
-    #[zbus(property)]
-    async fn set_finding(&self, on: bool) -> zbus::fdo::Result<()> {
-        tracing::info!(on, "D-Bus: finding");
-        self.apply(Input::Find(on), |status| status.finding == on)
             .await
     }
 
@@ -507,8 +477,6 @@ async fn signal_changes(iface: InterfaceRef<CalvadosService>, mut status: watch:
             auto_switch: auto_switch_changed,
             auto_connect: auto_connect_changed,
             pods: pods_changed,
-            finding: finding_changed,
-            signal: signal_changed,
         ]);
         if let Err(e) = signalled {
             tracing::warn!("D-Bus PropertiesChanged: {e}");

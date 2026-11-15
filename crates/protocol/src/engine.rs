@@ -187,9 +187,6 @@ pub enum Effect {
         kind: KeyType,
         key: [u8; 16],
     },
-    /// Scan for the pods' advertisements at full duty, each with its
-    /// signal, or stop ([`Engine::find`]); Linux's monitor always does.
-    FindScan(bool),
     /// Pause local media playback (a bud left an ear).
     Pause,
     /// Resume the playback [`Effect::Pause`] paused.
@@ -249,18 +246,7 @@ pub struct Engine {
     /// The catalog's latest release for the pods: their `0x1D` build
     /// matching it tells the exact version without UARP.
     latest: Option<Release>,
-    /// Our pods' last advertisement's signal strength (dBm), and when.
-    signal: Option<(i16, Instant)>,
-    /// While finding them: until when ([`FIND_FOR`] from the start).
-    finding: Option<Instant>,
 }
-
-/// How long a signal reading stays current: the pods advertise a few times
-/// a second.
-const SIGNAL_FRESH: Duration = Duration::from_secs(10);
-
-/// How long finding lasts unless stopped: its scan runs at full duty.
-const FIND_FOR: Duration = Duration::from_secs(5 * 60);
 
 /// The AACP session.
 #[derive(Debug)]
@@ -552,18 +538,12 @@ impl Engine {
         &mut self,
         address: [u8; 6],
         advertisement: &[u8],
-        rssi: Option<i16>,
         keys: impl IntoIterator<Item = (MacAddress, ble::PodsKeys)>,
         now: Instant,
     ) -> Vec<Effect> {
         let Some((pods, keys)) = ble::identify(address, keys) else {
             return Vec::new();
         };
-        if let Some(rssi) = rssi
-            && self.pods().is_none_or(|ours| ours == pods)
-        {
-            self.signal = Some((rssi, now));
-        }
         tracing::debug!(
             %pods,
             hosts = ?ble::Proximity::parse(advertisement).and_then(ble::Proximity::hosts),
@@ -624,15 +604,10 @@ impl Engine {
             Some(Update::Running(updater)) => updater.next_wake(),
             _ => None,
         };
-        // While finding, a reading going stale shows.
-        let stale = self
-            .signal
-            .filter(|_| self.finding())
-            .map(|(_, at)| at + SIGNAL_FRESH);
         session
             .into_iter()
             .flatten()
-            .chain([self.redial_at(), update, self.finding, stale])
+            .chain([self.redial_at(), update])
             .flatten()
             .min()
     }
@@ -653,13 +628,6 @@ impl Engine {
         let update = self.with_updater(|updater| updater.tick(now));
         let uarp = self.settle_uarp(now);
         let crash_logs = self.ask_crash_logs(now);
-        if due(self.signal.map(|(_, at)| at + SIGNAL_FRESH)) {
-            self.signal = None;
-        }
-        let find = match due(self.finding) {
-            true => self.stop_finding(),
-            false => Vec::new(),
-        };
         startup
             .into_iter()
             .chain(claim)
@@ -668,7 +636,6 @@ impl Engine {
             .chain(update)
             .chain(uarp)
             .chain(crash_logs)
-            .chain(find)
             .collect()
     }
 
@@ -736,41 +703,6 @@ impl Engine {
         )))
         .chain(off.then(|| self.unduck()).flatten())
         .collect()
-    }
-
-    /// Our pods' signal strength in dBm, from their latest advertisement
-    /// within [`SIGNAL_FRESH`]: higher is closer (about -40 next to them,
-    /// -90 at the edge).
-    pub fn signal(&self, now: Instant) -> Option<i16> {
-        self.signal
-            .filter(|&(_, at)| now.saturating_duration_since(at) < SIGNAL_FRESH)
-            .map(|(rssi, _)| rssi)
-    }
-
-    /// Start finding the pods, or keep finding for [`FIND_FOR`] more: the
-    /// platforms show [`Self::signal`] while [`Self::finding`].
-    pub fn find(&mut self, now: Instant) -> Vec<Effect> {
-        tracing::info!("finding the pods");
-        let started = self.finding.replace(now + FIND_FOR).is_none();
-        started
-            .then_some(Effect::FindScan(true))
-            .into_iter()
-            .collect()
-    }
-
-    pub fn stop_finding(&mut self) -> Vec<Effect> {
-        self.finding
-            .take()
-            .map(|_| {
-                tracing::info!("finding ended");
-                Effect::FindScan(false)
-            })
-            .into_iter()
-            .collect()
-    }
-
-    pub fn finding(&self) -> bool {
-        self.finding.is_some()
     }
 
     /// Rename the pods (at most 32 bytes); they report the new name.
@@ -2407,8 +2339,7 @@ mod tests {
             now(),
         );
         assert!(
-            e.nearby(address, &advertisement, None, keys(), now())
-                .is_empty(),
+            e.nearby(address, &advertisement, keys(), now()).is_empty(),
             "connected"
         );
         let case = e.state().battery.case.unwrap();
@@ -2561,65 +2492,35 @@ mod tests {
         };
         let mut e = Engine::new(None, Settings::default());
         assert!(
-            e.nearby([0x40, 1, 2, 3, 4, 5], &[], None, keys(), now())
+            e.nearby([0x40, 1, 2, 3, 4, 5], &[], keys(), now())
                 .is_empty(),
             "a stranger"
         );
         assert_eq!(
-            e.nearby(address, &[], None, keys(), now()),
+            e.nearby(address, &[], keys(), now()),
             [Effect::ConnectPods(mac(PODS))]
         );
         assert!(
-            e.nearby(address, &[], None, keys(), now()).is_empty(),
+            e.nearby(address, &[], keys(), now()).is_empty(),
             "the other bud"
         );
         let later = now() + REDIAL_GAP;
         assert_eq!(
-            e.nearby(address, &[], None, keys(), later),
+            e.nearby(address, &[], keys(), later),
             [Effect::ConnectPods(mac(PODS))]
         );
         e.connected(mac(PODS), later);
         assert!(
-            e.nearby(address, &[], None, keys(), later + REDIAL_GAP)
+            e.nearby(address, &[], keys(), later + REDIAL_GAP)
                 .is_empty(),
             "connected"
         );
         e.disconnected(later);
         e.set(Setting::AutoConnect, false);
         assert!(
-            e.nearby(address, &[], None, keys(), later + REDIAL_GAP)
+            e.nearby(address, &[], keys(), later + REDIAL_GAP)
                 .is_empty()
         );
-    }
-
-    #[test]
-    fn finding_scans_until_stopped_or_timed_out() {
-        let mut irk = 0xec0234a357c8ad05341010a60a397d9b_u128.to_be_bytes();
-        irk.reverse();
-        let address = [0x70, 0x81, 0x94, 0x0d, 0xfb, 0xaa];
-        let keys = [(
-            mac(PODS),
-            crate::ble::PodsKeys {
-                irk,
-                encryption: None,
-            },
-        )];
-        let mut e = Engine::new(None, Settings::default());
-        assert_eq!(e.find(now()), [Effect::FindScan(true)]);
-        assert!(e.find(now()).is_empty(), "already scanning");
-        e.nearby(address, &[], Some(-60), keys, now());
-        assert_eq!(e.signal(now()), Some(-60));
-        // The reading goes stale first, then finding ends.
-        let stale = now() + SIGNAL_FRESH;
-        assert_eq!(e.next_wake(), Some(stale));
-        assert!(e.tick(stale).is_empty());
-        assert_eq!(e.signal(stale), None);
-        assert_eq!(e.next_wake(), Some(now() + FIND_FOR));
-        assert_eq!(e.tick(now() + FIND_FOR), [Effect::FindScan(false)]);
-        assert!(!e.finding());
-        e.find(now());
-        assert_eq!(e.stop_finding(), [Effect::FindScan(false)]);
-        assert!(e.stop_finding().is_empty());
     }
 
     #[test]

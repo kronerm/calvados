@@ -1,8 +1,8 @@
 --!nonstrict
 -- The Android notification's controls, laid out for a panel: the batteries,
 -- the noise mode as a choice, the AirPods' two main settings with what they
--- do, "More" (this computer's two settings, the AirPods' others, the rename
--- and finding them), and the firmware (or its update, or finding's signal).
+-- do, "More" (this computer's two settings, the AirPods' others and the
+-- rename), and the firmware (or its update).
 
 local format = require("./lib/format.luau")
 
@@ -12,22 +12,6 @@ local render
 -- The daemon applies it; the next `watch` line re-renders.
 local function set(setting, value)
   noctalia.runAsync({ "calvados", "set", setting, value })
-end
-
-local function button(text, onClick)
-  return ui.row({
-    key = text,
-    paddingH = 10,
-    paddingV = 4,
-    radius = 8,
-    border = "outline",
-    borderWidth = 1,
-    onClick = onClick,
-  }, { ui.label({ text = text, fontSize = 12, maxLines = 1 }) })
-end
-
-local function find(action)
-  noctalia.runAsync({ "calvados", "find", action })
 end
 
 local function heading(text)
@@ -334,57 +318,47 @@ local function more()
         rename()
       end,
     }),
-    button("Rename", rename),
+    ui.row({
+      paddingH = 10,
+      paddingV = 4,
+      radius = 8,
+      border = "outline",
+      borderWidth = 1,
+      onClick = rename,
+    }, { ui.label({ text = "Rename", fontSize = 12, maxLines = 1 }) }),
   })
   if renameRow then
     table.insert(rows, renameRow)
-  end
-  if not state.finding then
-    table.insert(rows, ui.row({ gap = 12, align = "center" }, {
-      ui.label({
-        text = "Find them by their signal, for 5 minutes.",
-        fontSize = 12,
-        color = "on_surface_variant",
-        flexGrow = 1,
-      }),
-      button("Find", function()
-        find("start")
-      end),
-    }))
   end
   table.insert(children, ui.column({ gap = 10 }, rows))
   return ui.column({ gap = 8 }, children)
 end
 
--- One small line: finding the AirPods (with a stop), else a firmware update
--- while there is one, else the firmware (only while connected; the daemon
--- clears it otherwise), with the update's button when there's something to
--- start or cancel.
+-- One small line: a firmware update while there is one, else the firmware
+-- (only while connected; the daemon clears it otherwise), with the update's
+-- button when there's something to start or cancel.
 local function firmware()
-  local finding = format.finding(state)
-  local text = finding or format.update(state) or format.firmware(state)
+  local text = format.update(state) or format.firmware(state)
   if not text then
     return nil
   end
   local line = ui.label({ text = text, fontSize = 12, color = "on_surface_variant", maxLines = 1, flexGrow = 1 })
-  if finding then
-    return ui.row({ gap = 12, align = "center" }, {
-      line,
-      button("Stop", function()
-        find("stop")
-      end),
-    })
-  end
   local action = format.connected(state) and format.updateAction(state)
   if not action then
     return line
   end
-  return ui.row({ gap = 12, align = "center" }, {
-    line,
-    button(action, function()
+  local button = ui.row({
+    key = action,
+    paddingH = 10,
+    paddingV = 4,
+    radius = 8,
+    border = "outline",
+    borderWidth = 1,
+    onClick = function()
       noctalia.runAsync({ "calvados", "firmware", action == "Update" and "update" or "cancel" })
-    end),
-  })
+    end,
+  }, { ui.label({ text = action, fontSize = 12, maxLines = 1 }) })
+  return ui.row({ gap = 12, align = "center" }, { line, button })
 end
 
 render = function()

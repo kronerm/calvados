@@ -69,7 +69,7 @@ enum Input {
     Cycle(Cycle),
     /// An Apple device advertising nearby, with its manufacturer data (from
     /// the type byte).
-    Nearby(bluer::Address, Vec<u8>, Option<i16>),
+    Nearby(bluer::Address, Vec<u8>),
     /// A firmware catalog check for these models (a product's): its
     /// current release, `None` when it failed.
     Catalog(Vec<String>, Option<Release>),
@@ -79,8 +79,6 @@ enum Input {
     /// One of the pods' settings, as the byte to send.
     Pod(PodSetting, u8),
     Rename(String),
-    /// Start finding the pods (or extend it), or stop.
-    Find(bool),
     /// The release's package for the update, `None` when it couldn't be had.
     Package(Option<Package>),
 }
@@ -282,10 +280,9 @@ async fn run(daemon: &Daemon, mut engine: Engine, inputs: &mut mpsc::UnboundedRe
                 }
                 Input::Noise(mode) => engine.set_noise_mode(mode),
                 Input::Cycle(cycle) => engine.set_cycle(cycle),
-                Input::Nearby(address, advertisement, rssi) => engine.nearby(
+                Input::Nearby(address, advertisement) => engine.nearby(
                     address.0,
                     &advertisement,
-                    rssi,
                     presence::stored_keys(),
                     Instant::now(),
                 ),
@@ -321,8 +318,6 @@ async fn run(daemon: &Daemon, mut engine: Engine, inputs: &mut mpsc::UnboundedRe
                 Input::CancelUpdate => engine.cancel_update(),
                 Input::Pod(setting, raw) => engine.set_pod(setting, raw),
                 Input::Rename(name) => engine.rename(&name),
-                Input::Find(true) => engine.find(Instant::now()),
-                Input::Find(false) => engine.stop_finding(),
                 Input::Package(package) => engine.package(package, Instant::now()),
             },
             Some(playing) = playback_change(&mut playback) => {
@@ -397,8 +392,7 @@ async fn perform(daemon: &Daemon, session: Option<&Session>, effect: Effect) -> 
             .into_iter()
             .for_each(|pods| daemon.audio.restart_stream(pods)),
         // BlueZ always knows our MAC.
-        // BlueZ's monitor reports every advertisement's signal anyway.
-        Effect::LearnedLocalMac(_) | Effect::FindScan(_) => {}
+        Effect::LearnedLocalMac(_) => {}
         Effect::LearnedKey { pods, kind, key } => presence::save_key(pods, kind, key),
         Effect::Pause => daemon.media.iter().for_each(mpris::Media::pause),
         Effect::Resume => daemon.media.iter().for_each(mpris::Media::resume),

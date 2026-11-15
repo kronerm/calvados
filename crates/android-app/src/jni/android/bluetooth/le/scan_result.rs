@@ -22,14 +22,6 @@ impl<'object_scope, 'env_scope, R: Reference + AsRef<JObject<'object_scope>>> Sc
         ))
     }
 
-    /// `getRssi()`, dBm.
-    pub fn get_rssi(&self, env: &mut Env<'env_scope>) -> anyhow::Result<i16> {
-        let rssi = env
-            .call_method(&self.0, jni_str!("getRssi"), jni_sig!("()I"), &[])?
-            .i()?;
-        Ok(i16::try_from(rssi)?)
-    }
-
     pub fn get_scan_record(
         &self,
         env: &mut Env<'env_scope>,
