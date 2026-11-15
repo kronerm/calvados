@@ -20,7 +20,7 @@ swipe `01`, its length `00`, press speed and hold `00`, sleep detection
 |---|---|---|---|
 | Conversation Awareness | 0x28 | toggle | R; reported C |
 | Personalized Volume | 0x26 (`AdaptiveVolume`) | toggle | R; reported C |
-| Adaptive level | 0x2E | 0-100 (iOS: 0, 50, 100) | R; reported C |
+| Adaptive level | 0x2E | 0, 50, 100 (25 and 75 are reported to other hosts as 50, 100; C) | R; reported C |
 | Microphone | 0x01 | 00 auto, 01 right, 02 left | R |
 | Optimized charge limit | 0x3B (`DynamicEndOfCharge`) | toggle | R |
 | Case sounds | 0x31 (`InCaseTone`; volume 0x40) | toggle | R |

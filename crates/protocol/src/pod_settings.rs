@@ -15,7 +15,8 @@ pub enum PodSetting {
     ConversationAwareness,
     /// Volume adapting to the surroundings (`AdaptiveVolume`).
     PersonalizedVolume,
-    /// Adaptive mode's balance, 0 (more noise) to 100 (less).
+    /// Adaptive mode's balance, 0 (more noise) to 100 (less); the pods
+    /// round a set value up to [`LEVEL_STEP`]s.
     AdaptiveLevel,
     Mic,
     /// Optimized charge limit (`DynamicEndOfCharge`).
@@ -36,11 +37,15 @@ pub enum PodSetting {
 pub enum Kind {
     /// `01` on, `02` off.
     Toggle,
-    /// 0-100.
+    /// 0-100, set in [`LEVEL_STEP`]s.
     Level,
     /// `00`, `01`, … by these names.
     Choice(&'static [&'static str]),
 }
+
+/// The pods keep a level only as 0, 50 or 100: set to 25 or 75, they
+/// report 50 or 100 to the other hosts.
+pub const LEVEL_STEP: u8 = 50;
 
 const LENGTHS: &[&str] = &["default", "longer", "longest"];
 const SPEEDS: &[&str] = &["default", "slower", "slowest"];
@@ -165,7 +170,8 @@ impl PodSetting {
         })
     }
 
-    /// Text as the byte to send: the inverse of [`Self::text`].
+    /// Text as the byte to send: the inverse of [`Self::text`], a level
+    /// only in steps the pods keep.
     pub fn parse(self, text: &str) -> Option<u8> {
         match self.kind() {
             Kind::Toggle => match text {
@@ -173,7 +179,10 @@ impl PodSetting {
                 "off" => Some(2),
                 _ => None,
             },
-            Kind::Level => text.parse().ok().filter(|&level| level <= 100),
+            Kind::Level => text
+                .parse()
+                .ok()
+                .filter(|&level| level <= 100 && level % LEVEL_STEP == 0),
             Kind::Choice(names) => names
                 .iter()
                 .position(|&name| name == text)
@@ -182,7 +191,7 @@ impl PodSetting {
     }
 
     /// The next value a tap gives: a toggle flips, a choice steps on, a
-    /// level steps by a quarter (the panel's segments: 0, 25, … 100).
+    /// level steps by [`LEVEL_STEP`] (the panel's segments: 0, 50, 100).
     pub fn next(self, raw: u8) -> u8 {
         match self.kind() {
             Kind::Toggle => match raw {
@@ -191,7 +200,7 @@ impl PodSetting {
             },
             Kind::Level => match raw {
                 100.. => 0,
-                raw => (raw / 25 + 1) * 25,
+                raw => (raw / LEVEL_STEP + 1) * LEVEL_STEP,
             },
             Kind::Choice(names) => {
                 let count = u8::try_from(names.len()).unwrap_or(1);
@@ -241,7 +250,8 @@ mod tests {
             assert_eq!(PodSetting::from_name(setting.name()), Some(setting));
             assert_eq!(PodSetting::of(setting.id()), Some(setting));
             for raw in 0..=100 {
-                if let Some(text) = setting.text(raw) {
+                let steps = !matches!(setting.kind(), Kind::Level) || raw % LEVEL_STEP == 0;
+                if let Some(text) = setting.text(raw).filter(|_| steps) {
                     assert_eq!(setting.parse(&text), Some(raw), "{setting:?} {raw}");
                 }
             }
@@ -254,6 +264,8 @@ mod tests {
         assert_eq!(PodSetting::Mic.text(3), None);
         assert_eq!(PodSetting::ConversationAwareness.parse("on"), Some(1));
         assert_eq!(PodSetting::AdaptiveLevel.parse("101"), None);
+        assert_eq!(PodSetting::AdaptiveLevel.parse("25"), None);
+        assert_eq!(PodSetting::AdaptiveLevel.text(25).as_deref(), Some("25"));
     }
 
     #[test]
@@ -261,10 +273,10 @@ mod tests {
         assert_eq!(PodSetting::CaseSounds.next(1), 2);
         assert_eq!(PodSetting::CaseSounds.next(2), 1);
         assert_eq!(PodSetting::Mic.next(2), 0);
-        assert_eq!(PodSetting::AdaptiveLevel.next(0), 25);
-        assert_eq!(PodSetting::AdaptiveLevel.next(50), 75);
-        assert_eq!(PodSetting::AdaptiveLevel.next(60), 75);
-        assert_eq!(PodSetting::AdaptiveLevel.next(75), 100);
+        assert_eq!(PodSetting::AdaptiveLevel.next(0), 50);
+        assert_eq!(PodSetting::AdaptiveLevel.next(25), 50);
+        assert_eq!(PodSetting::AdaptiveLevel.next(50), 100);
+        assert_eq!(PodSetting::AdaptiveLevel.next(60), 100);
         assert_eq!(PodSetting::AdaptiveLevel.next(100), 0);
     }
 

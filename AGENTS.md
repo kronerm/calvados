@@ -590,8 +590,8 @@ texts are written twice. A change to one side needs the other:
   `PodSetting::label` and the panel's `format.podValueLabel`: `On`,
   `Automatic`, `50%`), then renaming while connected. The panel's More is
   a collapsible section (closed each time the panel opens; a switch per
-  toggle, segments per choice, the adaptive level as 0, 25, 50, 75,
-  100 %, a rename field); the notification's is a page (`Page::Pods`:
+  toggle, segments per choice, the adaptive level as 0, 50,
+  100 %, the steps the pods keep, a rename field); the notification's is a page (`Page::Pods`:
   chips two to a row, `notification_pods.xml`/`notification_pod_row.xml`,
   a switch that's on filled like a selected noise tile, a tap the next
   value, the adaptive level in the panel's steps, `PodSetting::next`;

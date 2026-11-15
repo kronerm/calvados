@@ -190,7 +190,7 @@ format.POD_SETTINGS = {
     name = "adaptive-level",
     title = "Adaptive level",
     kind = "choice",
-    options = { "0", "25", "50", "75", "100" },
+    options = { "0", "50", "100" },
   },
   { name = "mic", title = "Microphone", kind = "choice", options = { "auto", "right", "left" } },
   { name = "charge-limit", title = "Optimized charge limit" },
