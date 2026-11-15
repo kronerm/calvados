@@ -915,6 +915,42 @@ README's credits when work from elsewhere is used.
   module is private, so unused wrappers show up as dead-code warnings:
   remove them (git has them if needed again).
 
+## Open work (Nov 15)
+
+- **Remote-control players fight over the pods** (found Nov 15, not
+  fixed). Metrolist 14's Device Connect mirrors one device's playback on
+  the other: the desktop app's MPRIS says `Playing` while the phone plays,
+  with no audio here. So the laptop takes (`auto-take: media started
+  here`), the phone's release sends its pause key, the apps sync the state
+  back, the phone plays and takes, the laptop's release pauses the desktop
+  app over MPRIS (pausing the phone's playback through the app), and so
+  on every 1-4 s (journal and the phone's log, 19:09 UTC). The same would
+  hit any controller-style player (Spotify Connect). Planned fix, Linux:
+  media plays here only when a player is `Playing` *and* that player has
+  a running PipeWire output stream (`Stream/Output/Audio`, state running;
+  match the stream's `pipewire.sec.pid` to the MPRIS owner's PID from
+  `GetConnectionUnixProcessID`: same process, a descendant, or the same
+  app scope cgroup; Metrolist's AppImage runs in niri's cgroup, so the
+  cgroup alone isn't enough), for both the take (`Engine::local_audio`)
+  and what `mpris.rs` pauses on a release (only players audible here).
+  That also stops `playerctld`'s re-export of the active player counting
+  twice. Android: its take is already real audio
+  (`AudioPlaybackCallback`), but the pause key on release should go out
+  only while media plays here, or it pauses the remote session. Unverified:
+  that the desktop app opens no stream while it mirrors (check `pw-dump`
+  while the phone plays).
+- Not built, researched in docs/features.md: Loud Sound Reduction and
+  transparency customization (ATT on PSM 0x1F; both likely persist on the
+  pods as user settings, the user hasn't decided), head tracking (the
+  stream for apps, or call gestures).
+- Find My is closed: no host path to the case's sound, pairing needs
+  Apple (docs/features.md, docs/firmware.md). Finding by signal strength
+  was built and removed.
+- Untested on the devices: the panel at 400 px, More's headings on both
+  UIs (the notification's page height), the adaptive level as 0/50/100,
+  `News::Name`.
+- Unpushed: everything since Nov 12 (a push to main publishes `testing`).
+
 ## Checks
 
 ```sh
