@@ -5,18 +5,25 @@ the audio follows whichever device starts playing, the AirPods connect when
 they come out of the case, and their battery, noise control and settings
 are a tap away.
 
+<p align="center">
+  <img src="docs/screenshots/android-expanded.png" height="360" alt="The Android notification, expanded">
+  <img src="docs/screenshots/noctalia-panel.png" height="360" alt="The Noctalia panel on Linux">
+</p>
+
+## What it does
+
 - **Automatic switching:** starting media or a call on one device takes the
   AirPods from the other, which pauses.
 - **Automatic connection:** the AirPods connect when they come out of the
   case nearby, and again if they drop while you wear them.
 - **Ear detection:** taking a bud out pauses, putting it back resumes.
-  Putting a bud on while something plays takes the AirPods; with both in
+  Putting a bud in while something plays takes the AirPods; with both in
   the case, playing stays on the device's own speakers.
-- **Status and controls:** battery, where each bud is, noise control and
-  the firmware, in the phone's notification and a Linux status bar panel.
-  The dot in a noise tile's corner picks the modes pressing and holding a
-  stem cycles through.
-- **Firmware updates** (experimental), from either device.
+- **Status and controls:** battery, where each bud is and noise control,
+  in the phone's notification and a Linux status bar panel.
+- **The AirPods' settings:** Conversation Awareness, Personalized Volume,
+  the stem's press and swipe behavior, the name and more.
+- **Firmware updates** for the buds, from Apple's own catalog.
 
 ## Requirements
 
@@ -26,7 +33,7 @@ are a tap away.
 | Android | 12, with an Xposed framework on libxposed API 101 ([Vector] 2.1+) | 16 and 17 (Pixel 9) |
 | BlueZ | 5.60 | 5.87 |
 | PipeWire | 0.3 | 1.6.8 |
-| Noctalia (optional) | plugin API 24 | 5.0.1 |
+| Noctalia (optional) | 5.4 | 5.4.1 |
 
 AirPods keep a second device connected only if it identifies as an Apple
 device: on Android the Xposed module does that, on Linux a line in BlueZ's
@@ -34,9 +41,12 @@ config (below). Calvados itself needs no root.
 
 [Vector]: https://github.com/JingMatrix/Vector
 
-Releases on GitHub have the signed Android app (also the Xposed module) and an
-Arch Linux package; "testing" is the latest build from main, newer than
-the last release. Or build them yourself (below).
+## Getting it
+
+The [releases](https://github.com/kronerm/calvados/releases) have the
+signed Android app (also the Xposed module) and an Arch Linux package.
+"testing" is the latest build from main, newer than the last release. Or
+build them yourself (below).
 
 ## Android
 
@@ -48,17 +58,30 @@ the last release. Or build them yourself (below).
 3. Open Calvados once and grant the permissions. It has no window, only a
    notification.
 
-The notification shows the AirPods' status and battery; expanded, the
-noise control and two settings:
+The notification shows the AirPods' status and battery:
+
+<p align="center">
+  <img src="docs/screenshots/android-collapsed.png" width="420" alt="The collapsed notification">
+</p>
+
+Expanded, it has the noise control, Conversation Awareness and
+Personalized Volume. The dot in a noise tile's corner picks the modes that
+pressing and holding a stem cycles through. **More** has the rest:
+
+<p align="center">
+  <img src="docs/screenshots/android-more.png" width="420" alt="The notification's More page">
+</p>
 
 - **Automatic switching:** media or an answered call on the phone takes the
   AirPods (unless the other device is on a call).
 - **Automatic connection:** connect when the AirPods come out of the case
   nearby, even if another device had them last.
+- **AirPods:** the settings the AirPods keep themselves, the same on every
+  device, and **Rename**.
 
-It checks Apple's catalog for new AirPods firmware once a day. On
-LineageOS, allow the app network access (Settings → Apps → Calvados →
-Mobile data & Wi-Fi).
+The app checks Apple's catalog for new AirPods firmware once a day, its
+only use of the network. On LineageOS, allow it network access (Settings →
+Apps → Calvados → Mobile data & Wi-Fi).
 
 **Building the APKs** needs Rust, the Android SDK and NDK (`ANDROID_HOME`,
 and `ANDROID_NDK_ROOT` unless it's at `/opt/android-ndk`), a JDK,
@@ -72,8 +95,8 @@ cargo app-run        # or: build, install and start it
 
 ## Linux
 
-Add to `/etc/bluetooth/main.conf` under `[General]`, then
-`sudo systemctl restart bluetooth`:
+**1. Configure BlueZ.** Add to `/etc/bluetooth/main.conf` under
+`[General]`, then `sudo systemctl restart bluetooth`:
 
 ```ini
 # Required: identify as an Apple device.
@@ -82,11 +105,11 @@ DeviceID = bluetooth:004C:0000:0000
 Experimental = true
 ```
 
-Install (Arch Linux: the release's package with `sudo pacman -U
-calvados-*.pkg.tar.zst`, or from a checkout):
+**2. Install and start the daemon.** On Arch Linux, the release's package
+(`sudo pacman -U calvados-*.pkg.tar.zst`) or a checkout (`makepkg -si`),
+then:
 
 ```sh
-makepkg -si
 systemctl --user enable --now calvados
 ```
 
@@ -103,11 +126,14 @@ systemctl --user daemon-reload && systemctl --user enable --now calvados
 After an update, install again and `systemctl --user restart calvados`.
 
 The laptop stays connected but silent while the phone has the audio, and
-takes it when an MPRIS player starts playing.
+takes it when an MPRIS player starts playing audio on it. A player that
+only remote-controls another device (Spotify Connect and the like) doesn't
+count.
 
-**Noctalia:** a bar widget and a panel with the same controls as the
-phone. Link the plugin, enable it, and add the widget
-`kroner/calvados:bar` to the bar:
+### Noctalia
+
+A bar widget and a panel with the same controls as the phone. Link the
+plugin, enable it, and add the widget `kroner/calvados:bar` to the bar:
 
 ```sh
 mkdir -p ~/.local/share/noctalia/plugins
@@ -115,32 +141,28 @@ ln -s /usr/share/calvados/noctalia ~/.local/share/noctalia/plugins/calvados
 noctalia msg plugins enable kroner/calvados
 ```
 
-**Command line** and D-Bus (`dev.kroner.Calvados`), for scripts and other
-bars:
+<p align="center">
+  <img src="docs/screenshots/noctalia-more.png" width="360" alt="The panel's More section">
+</p>
+
+### Command line
+
+For scripts and other bars; the same is on D-Bus as `dev.kroner.Calvados`.
 
 ```sh
-calvados watch                              # the state as JSON, a line per change
+calvados watch                                 # the state as JSON, a line per change
 calvados set auto-switch|auto-connect on|off|toggle
 calvados set noise anc|transparency|adaptive|next
 calvados set cycle anc,transparency,adaptive   # press and hold's modes
+calvados set pod <setting> <value>|toggle      # e.g. conversation-awareness on
+calvados rename <name>
 calvados firmware status|update|cancel
 ```
 
-## Updating the AirPods' firmware (experimental)
+## Updating the AirPods' firmware
 
 When Apple has newer firmware, the panel and the notification say so and
-offer **Update**. It has worked from the Linux daemon (9.0.348 to 9.1.47,
-Nov 14), and before that with the research tools (7.1.21 to 9.0.348). The
-AirPods only accept Apple-signed, newer firmware, but if something goes
-wrong, only Apple can fix it.
-
-Only the buds are updated. The case's own firmware, in the same package,
-is never offered. Case firmware before 9.0 (9A348) can be updated only by
-an iPhone or Mac that has the AirPods in Find My; from 9.0 on, it can be
-reached through the buds (not yet done by calvados). To see the case's
-version, plug it into a computer: `lsusb -v -d 05ac:139e | grep bcdDevice`
-shows `5a.00` or higher from 9.0 on, `47.xx` to `51.xx` before (7.1 to
-8.1).
+offer **Update**.
 
 1. Put both buds in the case, plug it in, keep the lid open. Your other
    calvados devices can stay connected; turn off Bluetooth on any iPhone
@@ -158,6 +180,19 @@ alone while another device is connected, but an Apple device may not. If
 they don't answer, disconnect it and retry. Your other calvados device
 shows the progress meanwhile.
 
+**How safe is it?** The AirPods only accept Apple-signed firmware newer
+than what they run, and install it themselves, as they do from an iPhone.
+It was done from Linux (9.0.348 to 9.1.47); the phone runs the same code.
+Still, if an update goes wrong, only Apple can fix it.
+
+**The case isn't updated.** Its firmware is in the same package but is
+never offered. A case on firmware before 9.0 can be updated only by an
+iPhone or Mac that has the AirPods in Find My; from 9.0 on it can be
+reached through the buds, which calvados doesn't do yet. To see the
+case's version, plug it into a computer: `lsusb -v -d 05ac:139e | grep
+bcdDevice` shows `5a.00` or higher from 9.0 on, `47.xx` to `51.xx` before
+(7.1 to 8.1).
+
 ## Logs
 
 - **Android:** logcat, and daily files in the app's storage (root needed):
@@ -172,6 +207,8 @@ shows the progress meanwhile.
 - **A switch to the laptop can stall** for a few seconds; the laptop
   restarts its stream.
 - **Putting the primary bud in the case** drops the link for a few seconds.
+- **Linux: a player whose MPRIS interface runs in another program** than
+  its audio (mpd with mpDris2) doesn't take the AirPods when it starts.
 
 ## Credits
 
