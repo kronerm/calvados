@@ -335,7 +335,7 @@ fn service_main(jvm: JavaVM, events: crossbeam_channel::Receiver<Event>) {
 
         effects.extend(engine.tick(now));
         for effect in effects {
-            if !execute_effect(&conn, effect, playing.in_call()) {
+            if !execute_effect(&conn, effect, &playing) {
                 link::disconnect();
                 engine.disconnected(now);
                 conn = Conn::dropped(now);
@@ -437,7 +437,8 @@ fn fetch_package(client: &Client, release: Release, cache: Option<PathBuf>) {
 }
 
 /// Perform one engine [`Effect`]; `false` if the link is dead.
-fn execute_effect(conn: &Conn, effect: Effect, in_call: bool) -> bool {
+fn execute_effect(conn: &Conn, effect: Effect, playing: &Playing) -> bool {
+    let in_call = playing.in_call();
     match effect {
         Effect::Send(bytes) => return link::send(&bytes).is_ok(),
         // Off-thread: the reflection call can stall.
@@ -465,7 +466,12 @@ fn execute_effect(conn: &Conn, effect: Effect, in_call: bool) -> bool {
         // gives up on the stalled output (~10 s).
         // Not followed by an A2DP toggle: its `false` starts the stream again,
         // the pods refuse it, and the HAL blocks further toggles for ~5 s.
-        Effect::ReleaseAudio => log_media("pause on release", media::pause()),
+        // Only while media plays here: the key would otherwise pause what a
+        // remote-control player (Metrolist, Spotify Connect) plays elsewhere.
+        Effect::ReleaseAudio if playing.media => {
+            log_media("pause on release", media::pause());
+        }
+        Effect::ReleaseAudio => tracing::info!("released; no media here to pause"),
         // Reported as a dead link: the loop closes it and attaches again.
         Effect::Reconnect => return false,
         // Through A2DP; the ACL broadcast then attaches. Off-thread, like

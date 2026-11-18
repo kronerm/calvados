@@ -134,7 +134,8 @@ async fn daemon() -> anyhow::Result<()> {
 
     hci::spawn();
 
-    let media = mpris::Media::spawn()
+    let audio = pipewire::Audio::spawn();
+    let media = mpris::Media::spawn(audio.streams())
         .await
         .inspect_err(|e| tracing::warn!("MPRIS unavailable, no automatic pause: {e}"))
         .ok();
@@ -145,7 +146,7 @@ async fn daemon() -> anyhow::Result<()> {
         inputs,
         status: watch::Sender::new(Status::of(&engine, None)),
         media,
-        audio: pipewire::Audio::spawn(),
+        audio,
     });
     // Also the single-instance guard: two daemons would fight over AACP.
     let _dbus = dbus::serve(daemon.clone())
@@ -377,11 +378,13 @@ async fn perform(daemon: &Daemon, session: Option<&Session>, effect: Effect) -> 
                 daemon.audio.set(session.device.address(), Profile::A2dp);
             }
         }
-        // Like macOS: pause rather than fall back to the speakers.
+        // Like macOS: pause rather than fall back to the speakers. The
+        // pause first: it goes by the streams running now, and the profile
+        // change relinks them.
         Effect::ReleaseAudio => {
+            daemon.media.iter().for_each(mpris::Media::pause);
             pods.into_iter()
                 .for_each(|pods| daemon.audio.set(pods, Profile::Off));
-            daemon.media.iter().for_each(mpris::Media::pause);
         }
         Effect::Reconnect => anyhow::bail!("the pods never answered the handshake"),
         Effect::ConnectPods(pods) => match daemon.adapter.device(bluer::Address(pods.to_array())) {

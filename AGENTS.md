@@ -423,7 +423,24 @@ power-on (`LinkChange`). Its length caps at 255, i.e. 15 events.
   peers). Writes go to the loop as `Input`s; a setting's setter (and
   `Cycle`'s) waits until the status shows it, so zbus' own changed signal,
   sent after the setter, is current too.
-- `mpris.rs` — pause/resume of MPRIS players on one ordered worker task.
+- `mpris.rs` — pause/resume of MPRIS players on one ordered worker task,
+  and whether media plays here (`Media::playback`, the engine's
+  `LocalAudio`). A player counts only while it's `Playing` *and* its
+  process has a running PipeWire output stream (`pipewire::Streams`),
+  for the take and for what a release or the ear rule pauses: a
+  remote-control player (Metrolist's Device Connect, Spotify Connect) says
+  `Playing` while another device plays, and the two hosts then took the
+  pods from each other every 1-4 s (Nov 15), each release pausing the
+  other's playback through the app. The stream's process
+  (the node's `application.process.id`, which PulseAudio clients' streams
+  have, their client's `pipewire.sec.pid` being pipewire-pulse's; else that
+  `pipewire.sec.pid`: mpv's node names no process) must be the player's (`GetConnectionUnixProcessID` of
+  the signal's sender), a descendant, or in the same `app-*` cgroup; not
+  any shared cgroup (Metrolist's AppImage runs in niri's). So
+  `playerctld`'s re-export never counts, nor does a bridge in another
+  process and unit (mpDris2 for mpd). Without PipeWire every `Playing`
+  player counts, as before. Players already playing when the daemon
+  starts aren't known until their status changes.
 - `presence.rs` — reports Apple advertisers to the loop (`Input::Nearby`;
   `Engine::nearby` decides), since the pods page out only while no host is
   connected, and then one host (docs/paging.md). BlueZ's advertisement
@@ -525,7 +542,9 @@ power-on (`LinkChange`). Its length caps at 255, i.e. 15 events.
   it becomes available again (a BlueZ-aborted start once left the card on
   `off` for good). On `Effect::RestartStream` (the stream check, below) the
   `bluez_output.*` node gets a `Suspend` command and, streams being linked,
-  starts again at once.
+  starts again at once. It also publishes the PIDs of running
+  `Stream/Output/Audio` nodes (`Streams`, a `watch`; `None` until
+  connected) for `mpris.rs`.
 - `PKGBUILD` (repo root) — Arch package built from the checkout (binary,
   the unit with `ExecStart` rewritten to `/usr/bin`, the Noctalia plugin);
   a debug build unless `CALVADOS_PROFILE` names another profile (CI:
@@ -689,7 +708,8 @@ burst: docs/session-start.md.
   releases it here only (Linux: profile `off`, so the speakers play),
   writing nothing: an `OwnsConnection = 0` made the other host the owner,
   and the pods then paged that host when they came out (Nov 6). Sources:
-  Linux, MPRIS `PlaybackStatus` → `Playing`; Android, the
+  Linux, MPRIS `PlaybackStatus` → `Playing` from a player with a
+  running output stream (`mpris.rs`); Android, the
   `AudioPlaybackCallback` (`USAGE_MEDIA` media,
   `USAGE_VOICE_COMMUNICATION` a VoIP call) and the phone-state broadcast
   (`OFFHOOK`; ringing doesn't take); rising edges only (`service.rs`
@@ -711,7 +731,9 @@ burst: docs/session-start.md.
   declined handoff also emits `ReleaseAudio`. Both platforms then pause,
   like iOS/macOS: Linux turns the profile off and pauses its MPRIS players
   (otherwise playback falls back to the speakers); Android sends a pause
-  key, as the pods do too.
+  key, as the pods do too, but only while media plays on the phone
+  (`Playing::media`): the key would pause what a remote-control player
+  plays elsewhere.
 - **Android after a take.** When another host took over, the pods remotely
   suspended our A2DP stream, and `btif_av` then refuses every start from
   the audio HAL (`kFlagRemoteSuspend`) until a local suspend or the
@@ -917,28 +939,13 @@ README's credits when work from elsewhere is used.
 
 ## Open work (Nov 15)
 
-- **Remote-control players fight over the pods** (found Nov 15, not
-  fixed). Metrolist 14's Device Connect mirrors one device's playback on
-  the other: the desktop app's MPRIS says `Playing` while the phone plays,
-  with no audio here. So the laptop takes (`auto-take: media started
-  here`), the phone's release sends its pause key, the apps sync the state
-  back, the phone plays and takes, the laptop's release pauses the desktop
-  app over MPRIS (pausing the phone's playback through the app), and so
-  on every 1-4 s (journal and the phone's log, 19:09 UTC). The same would
-  hit any controller-style player (Spotify Connect). Planned fix, Linux:
-  media plays here only when a player is `Playing` *and* that player has
-  a running PipeWire output stream (`Stream/Output/Audio`, state running;
-  match the stream's `pipewire.sec.pid` to the MPRIS owner's PID from
-  `GetConnectionUnixProcessID`: same process, a descendant, or the same
-  app scope cgroup; Metrolist's AppImage runs in niri's cgroup, so the
-  cgroup alone isn't enough), for both the take (`Engine::local_audio`)
-  and what `mpris.rs` pauses on a release (only players audible here).
-  That also stops `playerctld`'s re-export of the active player counting
-  twice. Android: its take is already real audio
-  (`AudioPlaybackCallback`), but the pause key on release should go out
-  only while media plays here, or it pauses the remote session. Unverified:
-  that the desktop app opens no stream while it mirrors (check `pw-dump`
-  while the phone plays).
+- The remote-control player fix (`mpris.rs`) held on both devices (Nov
+  15-16: mpv, Metrolist playing here and mirroring, a browser). Left: an
+  output stream drops for a few ms when the card's profile changes, which
+  reads as media stopping and starting (harmless at a take; at a release
+  the pause lands first, a debounce would make sure); and the phone's
+  playback once started again 3 s after its pause key while the desktop
+  app still mirrored it (the user's tap or Device Connect's sync, unknown).
 - Not built, researched in docs/features.md: Loud Sound Reduction and
   transparency customization (ATT on PSM 0x1F; both likely persist on the
   pods as user settings, the user hasn't decided), head tracking (the

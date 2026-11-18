@@ -1,7 +1,8 @@
 //! The pods' audio card profile, set natively through PipeWire. `off` keeps
 //! the Bluetooth link but doesn't stream, so the laptop can't take the audio
 //! from the phone just by connecting. Also restarts the pods' output node
-//! when it doesn't stream after a take (see [`Audio::restart_stream`]).
+//! when it doesn't stream after a take (see [`Audio::restart_stream`]), and
+//! reports which processes play audio (see [`Streams`]).
 
 use std::cell::RefCell;
 use std::collections::HashMap;
@@ -11,7 +12,7 @@ use std::time::{Duration, Instant};
 use bluer::Address;
 use pipewire as pw;
 use pw::device::{Device, DeviceChangeMask, DeviceListener};
-use pw::node::Node;
+use pw::node::{Node, NodeListener, NodeState};
 use pw::spa::node::command::{NodeCommand, NodeCommandId};
 use pw::spa::param::ParamType;
 use pw::spa::pod::serialize::PodSerializer;
@@ -22,6 +23,7 @@ use pw::spa::sys::{
 };
 use pw::spa::utils::{Id, SpaTypes};
 use pw::types::ObjectType;
+use tokio::sync::watch;
 
 /// How long after a request the profile is held against changes: the card
 /// may not exist yet, and WirePlumber restores a remembered profile right
@@ -66,28 +68,44 @@ enum Message {
     Duck(String, bool),
 }
 
+/// The processes with a running audio output stream
+/// (`Stream/Output/Audio`), by PID; `None` while PipeWire isn't connected.
+/// A player that only mirrors another device's playback (Metrolist's Device
+/// Connect, Spotify Connect) says `Playing` over MPRIS but has none.
+pub type Streams = watch::Receiver<Option<Vec<u32>>>;
+
 /// Sends requests to the PipeWire thread.
-pub struct Audio(pw::channel::Sender<Message>);
+pub struct Audio {
+    requests: pw::channel::Sender<Message>,
+    streams: Streams,
+}
 
 impl Audio {
     pub fn spawn() -> Self {
         let (requests, rx) = pw::channel::channel();
+        let (playing, streams) = watch::channel(None);
         let spawned = std::thread::Builder::new()
             .name("pipewire".into())
             .spawn(|| {
-                if let Err(e) = run(rx) {
+                if let Err(e) = run(rx, playing) {
                     tracing::warn!("PipeWire unavailable, audio profile left alone: {e}");
                 }
             });
         if let Err(e) = spawned {
             tracing::warn!("PipeWire thread: {e}");
         }
-        Self(requests)
+        Self { requests, streams }
+    }
+
+    pub fn streams(&self) -> Streams {
+        self.streams.clone()
     }
 
     pub fn set(&self, pods: Address, profile: Profile) {
         let card = format!("bluez_card.{}", pods.to_string().replace(':', "_"));
-        let _ = self.0.send(Message::Profile(Request { card, profile }));
+        let _ = self
+            .requests
+            .send(Message::Profile(Request { card, profile }));
     }
 
     /// Suspend the pods' output node; with streams linked it starts again
@@ -97,7 +115,7 @@ impl Audio {
     /// suspend rebooted the pods (once).
     pub fn restart_stream(&self, pods: Address) {
         let node = format!("bluez_output.{}", pods.to_string().replace(':', "_"));
-        let _ = self.0.send(Message::RestartStream(node));
+        let _ = self.requests.send(Message::RestartStream(node));
     }
 
     /// Lower the pods' output volume to [`DUCKED`] of itself, or restore
@@ -105,7 +123,7 @@ impl Audio {
     /// volume over AVRCP.
     pub fn duck(&self, pods: Address, down: bool) {
         let node = format!("bluez_output.{}", pods.to_string().replace(':', "_"));
-        let _ = self.0.send(Message::Duck(node, down));
+        let _ = self.requests.send(Message::Duck(node, down));
     }
 }
 
@@ -163,7 +181,17 @@ enum Check {
     Revived,
 }
 
-#[derive(Default)]
+/// A bound `Stream/Output/Audio` node.
+struct Stream {
+    _node: Node,
+    _listener: NodeListener,
+    /// The node's `application.process.id` (PulseAudio clients' streams
+    /// have it; their client's `pipewire.sec.pid` is pipewire-pulse's), else
+    /// its client's `pipewire.sec.pid` (native clients: mpv's node has none).
+    pid: Option<u32>,
+    running: bool,
+}
+
 struct State {
     /// Requested profile, enforced until the instant.
     desired: Option<(Request, Instant)>,
@@ -173,9 +201,34 @@ struct State {
     outputs: HashMap<u32, (String, Node)>,
     /// A ducked node's volume before.
     ducked: Option<(u32, f64)>,
+    /// Applications' output streams by global id.
+    streams: HashMap<u32, Stream>,
+    /// Clients' `pipewire.sec.pid` by global id.
+    clients: HashMap<u32, u32>,
+    playing: watch::Sender<Option<Vec<u32>>>,
 }
 
 impl State {
+    /// Tell which processes play now, when that changed.
+    fn publish_streams(&self) {
+        let mut pids: Vec<u32> = self
+            .streams
+            .values()
+            .filter(|stream| stream.running)
+            .filter_map(|stream| stream.pid)
+            .collect();
+        pids.sort_unstable();
+        pids.dedup();
+        self.playing.send_if_modified(|playing| {
+            let changed = playing.as_ref() != Some(&pids);
+            if changed {
+                tracing::debug!(?pids, "processes playing audio");
+                *playing = Some(pids);
+            }
+            changed
+        });
+    }
+
     /// Correct the requested card's profile if it differs: while enforcing,
     /// or when it just became available again.
     fn enforce(&mut self, check: Check) {
@@ -221,13 +274,25 @@ impl State {
     }
 }
 
-fn run(requests: pw::channel::Receiver<Message>) -> Result<(), pw::Error> {
+fn run(
+    requests: pw::channel::Receiver<Message>,
+    playing: watch::Sender<Option<Vec<u32>>>,
+) -> Result<(), pw::Error> {
     pw::init();
     let main_loop = pw::main_loop::MainLoopRc::new(None)?;
     let context = pw::context::ContextRc::new(&main_loop, None)?;
     let core = context.connect_rc(None)?;
     let registry = core.get_registry_rc()?;
-    let state = Rc::new(RefCell::new(State::default()));
+    let state = Rc::new(RefCell::new(State {
+        desired: None,
+        cards: HashMap::new(),
+        outputs: HashMap::new(),
+        ducked: None,
+        streams: HashMap::new(),
+        clients: HashMap::new(),
+        playing,
+    }));
+    state.borrow().publish_streams();
 
     let _requests = requests.attach(main_loop.loop_(), {
         let state = state.clone();
@@ -283,9 +348,25 @@ fn run(requests: pw::channel::Receiver<Message>) -> Result<(), pw::Error> {
             let state = Rc::downgrade(&state);
             let registry = registry.downgrade();
             move |global| {
+                let prop = |key| global.props.and_then(|props| props.get(key));
+                if let (ObjectType::Client, Some(state)) = (&global.type_, state.upgrade()) {
+                    if let Some(pid) = prop("pipewire.sec.pid").and_then(|pid| pid.parse().ok()) {
+                        state.borrow_mut().clients.insert(global.id, pid);
+                    }
+                    return;
+                }
                 if let (ObjectType::Node, Some(state), Some(registry)) =
                     (&global.type_, state.upgrade(), registry.upgrade())
                 {
+                    if prop("media.class") == Some("Stream/Output/Audio") {
+                        let client = prop("client.id").and_then(|id| id.parse::<u32>().ok());
+                        let pid = client.and_then(|id| state.borrow().clients.get(&id).copied());
+                        match registry.bind::<Node, _>(global) {
+                            Ok(node) => watch_stream(&state, global.id, node, pid),
+                            Err(e) => tracing::warn!("binding a stream: {e}"),
+                        }
+                        return;
+                    }
                     let name = global.props.and_then(|props| props.get("node.name"));
                     let Some(name) = name.filter(|name| name.starts_with("bluez_output.")) else {
                         return;
@@ -358,6 +439,10 @@ fn run(requests: pw::channel::Receiver<Message>) -> Result<(), pw::Error> {
                     let mut state = state.borrow_mut();
                     state.cards.remove(&id);
                     state.outputs.remove(&id);
+                    state.clients.remove(&id);
+                    if state.streams.remove(&id).is_some() {
+                        state.publish_streams();
+                    }
                 }
             }
         })
@@ -365,6 +450,40 @@ fn run(requests: pw::channel::Receiver<Message>) -> Result<(), pw::Error> {
 
     main_loop.run();
     Ok(())
+}
+
+/// Follow an output stream's process (its client's, until the node names
+/// one) and whether it runs.
+fn watch_stream(state: &Rc<RefCell<State>>, id: u32, node: Node, client: Option<u32>) {
+    let listener = node
+        .add_listener_local()
+        .info({
+            let state = Rc::downgrade(state);
+            move |info| {
+                let Some(state) = state.upgrade() else {
+                    return;
+                };
+                let mut state = state.borrow_mut();
+                let Some(stream) = state.streams.get_mut(&id) else {
+                    return;
+                };
+                stream.running = matches!(info.state(), NodeState::Running);
+                let pid = info
+                    .props()
+                    .and_then(|props| props.get("application.process.id"))
+                    .and_then(|pid| pid.parse().ok());
+                stream.pid = pid.or(stream.pid);
+                state.publish_streams();
+            }
+        })
+        .register();
+    let stream = Stream {
+        _node: node,
+        _listener: listener,
+        pid: client,
+        running: false,
+    };
+    state.borrow_mut().streams.insert(id, stream);
 }
 
 /// Record an `EnumProfile` entry or the active `Profile`, then re-check.
